@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE aki_hook.cc)

@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE screenshot_adapter.cc)

@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE connection_adapter.cc system_settings_adapter.cc)

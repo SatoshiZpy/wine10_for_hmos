@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE ohos_print_adapter.cc)

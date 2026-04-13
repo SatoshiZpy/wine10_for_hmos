@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE shape_detection_adapter.cc)

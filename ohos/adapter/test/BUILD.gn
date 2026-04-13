@@ -1,0 +1,44 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+import("//testing/test.gni")
+ 
+static_library("run_all_unittests") {
+  testonly = true
+  sources = [ "run_all_unittests.cc" ]
+  deps = [
+      "//testing/gmock",
+      "//testing/gtest",
+  ]
+}
+ 
+static_library("adapter_mock") {
+  testonly = true
+  sources = [
+    "../common/shared_library.cc",
+    "../common/shared_library.h",
+    "../common/trace.cc",
+    "../common/trace.h",
+    "mock_app_window_adapter.cc",
+    "mock_app_window_adapter.h",
+    "mock_browser_adapter.cc",
+    "mock_browser_adapter.h",
+    "mock_cursor_adapter.cc",
+    "mock_cursor_adapter.h",
+    "mock_device_info.cc",
+    "mock_device_info.h",
+    "mock_input_method_ohos_adapter.cc",
+    "mock_input_method_ohos_adapter.h",
+    "mock_utils.h",
+  ]
+  deps = [
+    "//ohos/adapter/aki_hook:aki_hook",
+    "//ohos/adapter/multiprocess:multiprocess",
+    "//ohos/adapter/xcomponent:xcomponent",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//third_party/aki:aki_jsbind",
+  ]
+}

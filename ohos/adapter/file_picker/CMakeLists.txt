@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE file_select_picker.cc)

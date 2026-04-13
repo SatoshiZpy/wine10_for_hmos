@@ -36,7 +36,7 @@ static int (__cdecl *p__wine_dbg_output)( const char *str );
 static unsigned char (__cdecl *p__wine_dbg_get_channel_flags)( struct __wine_debug_channel *channel );
 static int (__cdecl *p__wine_dbg_header)( enum __wine_debug_class cls,
                                           struct __wine_debug_channel *channel,
-                                          const char *function );
+                                          const char *function, const char *file, int line );
 
 static const char * const debug_classes[] = { "fixme", "err", "warn", "trace" };
 
@@ -180,7 +180,7 @@ static int __cdecl fallback__wine_dbg_output( const char *str )
 
 static int __cdecl fallback__wine_dbg_header( enum __wine_debug_class cls,
                                               struct __wine_debug_channel *channel,
-                                              const char *function )
+                                              const char *function, const char *file, int line )
 {
     char buffer[200], *pos = buffer;
 
@@ -195,7 +195,7 @@ static int __cdecl fallback__wine_dbg_header( enum __wine_debug_class cls,
         pos += sprintf( pos, "%3u.%03u:", ticks / 1000, ticks % 1000 );
     }
     if (TRACE_ON(pid)) pos += sprintf( pos, "%04x:", (UINT)GetCurrentProcessId() );
-    pos += sprintf( pos, "%04x:", (UINT)GetCurrentThreadId() );
+    pos += sprintf( pos, "%04x:(%s:%d):", (UINT)GetCurrentThreadId(), file, line );
     if (function && cls < ARRAY_SIZE( debug_classes ))
         snprintf( pos, sizeof(buffer) - (pos - buffer), "%s:%s:%s ",
                   debug_classes[cls], channel->name, function );
@@ -243,10 +243,10 @@ unsigned char __cdecl __wine_dbg_get_channel_flags( struct __wine_debug_channel 
 }
 
 int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_channel *channel,
-                               const char *function )
+                               const char *function, const char *file, int line )
 {
     LOAD_FUNC( __wine_dbg_header );
-    return p__wine_dbg_header( cls, channel, function );
+    return p__wine_dbg_header( cls, channel, function, file, line );
 }
 
 #endif  /* __WINE_PE_BUILD */

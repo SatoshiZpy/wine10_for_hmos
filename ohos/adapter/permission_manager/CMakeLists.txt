@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE permission_manager_adapter.cc)

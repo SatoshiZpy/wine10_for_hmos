@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE main_thread_task_runner.cc)

@@ -1,0 +1,31 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+
+component("isolate_process") {
+  defines = []
+  sources = [
+    "isolate_process_helper.cc",
+    "isolate_process_helper.h",
+    "isolate_process_main.cc",
+    "isolate_process_main.h",
+    "native_childprocess_args_wrapper.cc",
+    "native_childprocess_args_wrapper.h",
+    "native_childprocess_interface.cc",
+    "native_child_process_library.h",
+  ]
+
+  if(isolated_level == 1){
+    defines += [ "SUPPORT_ISOLATED_MODE" ]
+  }
+
+  deps = [ "//ohos/adapter/multiprocess/command_line:command_line" ]
+
+  public_deps = [ "//third_party/aki:aki_jsbind" ]
+
+  cflags = [ "-pthread" ]
+
+  libs = [ "child_process" ]
+}

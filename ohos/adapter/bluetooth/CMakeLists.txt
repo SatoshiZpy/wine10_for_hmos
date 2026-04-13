@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE bluetooth_adapter.cc bluetooth_ble_attribute_adapter.cc bluetooth_low_energy_adapter.cc)

@@ -1,0 +1,36 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Wine"
+    },
+    {
+      "name": "StatelessAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "StatelessAbility_label",
+      "value": "NotificationAbility"
+    },
+    {
+      "name": "TaskManagerAbility_desc",
+      "value": "TaskManagerAbility"
+    },
+    {
+      "name": "TaskManagerAbility_label",
+      "value": "TaskManagerAbility"
+    },
+    {
+      "name": "StatusBarEntryAbility_desc",
+      "value": "Application status bar"
+    }
+  ]
+}

@@ -45,6 +45,10 @@
 #include "wine/rbtree.h"
 #include "wine/debug.h"
 
+#ifdef __OHOS__
+#include "ohos_adapter.h" 
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(font);
 
 static HKEY wine_fonts_key;
@@ -1912,6 +1916,24 @@ static const char system_link_ms_p_mincho[] =
     "MALGUN.TTF,Malgun Gothic\0"
     "SEGUISYM.TTF,Segoe UI Symbol\0";
 
+#ifdef __OHOS__
+/* Use Noto Sans CJK fonts on HarmonyOS */
+static const char system_link_ohos_sc[] =
+    "NotoSansCJK-Regular.ttc,Noto Sans CJK SC\0";
+
+static const char system_link_ohos_tc[] =
+    "NotoSansCJK-Regular.ttc,Noto Sans CJK TC\0";
+
+static const char system_link_ohos_jp[] =
+    "NotoSansCJK-Regular.ttc,Noto Sans CJK JP\0";
+
+static const char system_link_ohos_kr[] =
+    "NotoSansCJK-Regular.ttc,Noto Sans CJK KR\0";
+
+static const char system_link_ohos_non_cjk[] =
+    "NotoSansCJK-Regular.ttc,Noto Sans CJK SC\0";
+#endif
+
 static const struct system_link_reg
 {
     const WCHAR *font_name;
@@ -1929,6 +1951,32 @@ static const struct system_link_reg
 }
 default_system_link[] =
 {
+#ifdef __OHOS__
+    {
+        tahomaW, TRUE,
+        system_link_ohos_non_cjk, sizeof(system_link_ohos_non_cjk),
+        system_link_ohos_sc,      sizeof(system_link_ohos_sc),
+        system_link_ohos_tc,      sizeof(system_link_ohos_tc),
+        system_link_ohos_jp,      sizeof(system_link_ohos_jp),
+        system_link_ohos_kr,      sizeof(system_link_ohos_kr),
+    },
+    {
+        microsoft_sans_serifW, TRUE,
+        system_link_ohos_non_cjk, sizeof(system_link_ohos_non_cjk),
+        system_link_ohos_sc,      sizeof(system_link_ohos_sc),
+        system_link_ohos_tc,      sizeof(system_link_ohos_tc),
+        system_link_ohos_jp,      sizeof(system_link_ohos_jp),
+        system_link_ohos_kr,      sizeof(system_link_ohos_kr),
+    },
+    {
+        lucida_sans_unicodeW, TRUE,
+        system_link_ohos_non_cjk, sizeof(system_link_ohos_non_cjk),
+        system_link_ohos_sc,      sizeof(system_link_ohos_sc),
+        system_link_ohos_tc,      sizeof(system_link_ohos_tc),
+        system_link_ohos_jp,      sizeof(system_link_ohos_jp),
+        system_link_ohos_kr,      sizeof(system_link_ohos_kr),
+    },
+#else
     {
         tahomaW, TRUE,
         system_link_tahoma_non_cjk, sizeof(system_link_tahoma_non_cjk),
@@ -1953,6 +2001,7 @@ default_system_link[] =
         system_link_tahoma_jp,      sizeof(system_link_tahoma_jp),
         system_link_tahoma_kr,      sizeof(system_link_tahoma_kr),
     },
+#endif
     { ms_gothicW,                    FALSE, system_link_ms_gothic,                    sizeof(system_link_ms_gothic) },
     { ms_p_gothicW,                  FALSE, system_link_ms_p_gothic,                  sizeof(system_link_ms_p_gothic) },
     { ms_ui_gothicW,                 FALSE, system_link_ms_ui_gothic,                 sizeof(system_link_ms_ui_gothic) },
@@ -6737,6 +6786,11 @@ UINT font_init(void)
     if (!(hkcu_key = open_hkcu())) return 0;
     wine_fonts_key = reg_create_key( hkcu_key, wine_fonts_keyW, sizeof(wine_fonts_keyW), 0, NULL );
     if (wine_fonts_key) dpi = init_font_options();
+#ifdef __OHOS__
+    int local_dpi = GetSystemDpi();
+    TRACE("set dpi: %d --> %d\n", dpi, local_dpi);
+    dpi = local_dpi;
+#endif
     if (!dpi) return 96;
     update_codepage( dpi );
 

@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE context_adapter.cc)

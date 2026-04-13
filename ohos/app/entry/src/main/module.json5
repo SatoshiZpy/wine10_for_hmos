@@ -1,0 +1,102 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "srcEntry": "./ets/Application/AbilityStage.ets",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": [
+      "2in1",
+      "tablet"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:app_icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "launchType": "specified",
+        "removeMissionAfterTerminate": true,
+        "exported": true,
+        "skills": [
+          {
+            "entities": [
+              "entity.system.home",
+              "entity.system.browsable"
+            ],
+            "actions": [
+              "action.system.home",
+              "ohos.want.action.viewData"
+            ],
+            "uris": [
+              {
+                "type": "application/pdf",
+                "scheme": 'file',
+                "linkFeature": "FileOpen"
+              },
+              {
+                "type": "text/html",
+                "scheme": 'file',
+                "linkFeature": "FileOpen"
+              },
+              {
+                "type": "application/x-mimearchive",
+                "scheme": 'file',
+                "linkFeature": "FileOpen"
+              },
+              {
+                "scheme": "http"
+              },
+              {
+                "scheme": "https"
+              }
+            ]
+          }
+        ],
+      },
+      {
+        "name": "StatelessAbility",
+        "srcEntry": "./ets/entryability/StatelessAbility.ets",
+        "description": "$string:StatelessAbility_desc",
+        "label": "$string:StatelessAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "launchType": "specified",
+        "removeMissionAfterTerminate": true,
+        "exported": true
+      },
+      {
+        "name": "TaskManagerAbility",
+        "srcEntry": "./ets/entryability/TaskManagerAbility.ets",
+        "description": "$string:TaskManagerAbility_desc",
+        "label": "$string:TaskManagerAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "launchType": "specified",
+        "removeMissionAfterTerminate": true,
+        "exported": true,
+      }
+    ],
+    "extensionAbilities": [
+      {
+        "name": "EmbeddedAbility",
+        "srcEntry": "./ets/extensionAbility/EmbeddedAbility.ets",
+        "type": "embeddedUI"
+      },
+      {
+        "name": "StatusBarEntryAbility",
+        "icon": "$media:app_icon",
+        "description": "$string:StatusBarEntryAbility_desc",
+        "type": "statusBarView",
+        "exported": true,
+        "srcEntry": "./ets/extensionAbility/StatusBarEntryAbility.ets"
+      }
+    ]
+  }
+}

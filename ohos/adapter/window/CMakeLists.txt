@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE app_window_adapter.cc sub_window_adapter.cc system_floating_window_adapter.cc window_common.cc)

@@ -38,6 +38,7 @@
 #include "request.h"
 #include "unicode.h"
 #include "file.h"
+#include "logging.h"
 
 /* number of following bytes in sequence based on first byte value (for bytes above 0x7f) */
 static const char utf8_length[128] =
@@ -238,6 +239,24 @@ int dump_strW( const WCHAR *str, data_size_t len, FILE *f, const char escape[2] 
     return count;
 }
 
+#if defined(__OHOS__)
+/* build a path from the specified dir and name */
+static char *build_path( const char *dir, const char *name )
+{
+    size_t len = strlen( dir );
+    char *ret = malloc( len + strlen( name ) + 2 );
+
+    if (len)
+    {
+        memcpy( ret, dir, len );
+        if (ret[len - 1] != '/') ret[len++] = '/';
+        if (name[0] == '/') name++;
+    }
+    strcpy( ret + len, name );
+    return ret;
+}
+#endif
+
 /* build a path with the relative dir from 'from' to 'dest' appended to base */
 static char *build_relative_path( const char *base, const char *from, const char *dest )
 {
@@ -279,7 +298,14 @@ static char *get_nls_dir(void)
 {
     char *p, *dir, *ret;
 
-#if defined(__linux__) || defined(__FreeBSD_kernel__) || defined(__NetBSD__)
+#if defined(__OHOS__)
+    const char *res_dir = getenv("WINERESPATH");
+    if (res_dir) {
+        dir = build_path(res_dir, DATADIR "/wine/nls");
+        return dir;
+    }
+    return NULL;
+#elif defined(__linux__) || defined(__FreeBSD_kernel__) || defined(__NetBSD__)
     dir = realpath( "/proc/self/exe", NULL );
 #elif defined (__FreeBSD__) || defined(__DragonFly__)
     static int pathname[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
@@ -327,7 +353,11 @@ static char *get_nls_dir(void)
 /* load the case mapping table */
 struct fd *load_intl_file(void)
 {
+#ifdef __OHOS__
+    static const char *nls_dirs[] = { NULL, DATADIR "/wine/nls" };
+#else
     static const char *nls_dirs[] = { NULL, DATADIR "/wine/nls", "/usr/local/share/wine/nls", "/usr/share/wine/nls" };
+#endif
     static const WCHAR nt_pathW[] = {'C',':','\\','w','i','n','d','o','w','s','\\',
         's','y','s','t','e','m','3','2','\\','l','_','i','n','t','l','.','n','l','s',0};
     static const struct unicode_str nt_name = { nt_pathW, sizeof(nt_pathW) };

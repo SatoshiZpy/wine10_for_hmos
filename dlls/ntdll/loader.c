@@ -3132,7 +3132,7 @@ static NTSTATUS find_builtin_without_file( const WCHAR *name, UNICODE_STRING *ne
     if (!is_prefix_bootstrap)
     {
         /* 16-bit files can't be loaded from the prefix */
-        if (!name[1] || wcscmp( name + wcslen(name) - 2, L"16" )) return status;
+        if (!name[1] || !wcscmp( name + wcslen(name) - 2, L"16" )) return status;
     }
 
     if (!get_env_var( L"WINEBUILDDIR", 20 + 2 * wcslen(name) + wcslen(pe_dir), new_name ))
@@ -4441,7 +4441,7 @@ void loader_init( CONTEXT *context, void **entry )
 
         if ((status = load_dll( NULL, L"kernel32.dll", 0, &kernel32, FALSE )) != STATUS_SUCCESS)
         {
-            MESSAGE( "wine: could not load kernel32.dll, status %lx\n", status );
+            ERR( "wine: could not load kernel32.dll, status %lx\n", status );
             NtTerminateProcess( GetCurrentProcess(), status );
         }
         node_kernel32 = kernel32->ldr.DdagNode;

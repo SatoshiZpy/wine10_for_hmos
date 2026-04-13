@@ -1942,6 +1942,9 @@ static HWND set_focus_window( HWND hwnd )
         if (ime_hwnd)
             send_message( ime_hwnd, WM_IME_INTERNAL, IME_INTERNAL_DEACTIVATE,
                           HandleToUlong(previous) );
+#ifdef __OHOS__
+        NtUserNotifyIMEStatus( previous, 0 );
+#endif
 
         if (hwnd != get_focus()) return previous;  /* changed by the message */
     }
@@ -1955,6 +1958,9 @@ static HWND set_focus_window( HWND hwnd )
         NtUserNotifyWinEvent( EVENT_OBJECT_FOCUS, hwnd, OBJID_CLIENT, 0 );
 
         send_message( hwnd, WM_SETFOCUS, (WPARAM)previous, 0 );
+#ifdef __OHOS__
+        NtUserNotifyIMEStatus( hwnd, 1 );
+#endif
     }
     return previous;
 }

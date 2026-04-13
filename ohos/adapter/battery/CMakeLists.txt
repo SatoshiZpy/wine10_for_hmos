@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE battery_adapter.cc)

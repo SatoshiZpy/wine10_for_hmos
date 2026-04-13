@@ -37,6 +37,10 @@
 #include "wine/wingdi16.h"
 #include "wine/server.h"
 
+#ifdef __OHOS__
+#include "ohos_adapter.h" 
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(system);
 
 #define WINE_ENUM_PHYSICAL_SETTINGS  ((DWORD) -3)
@@ -5520,6 +5524,12 @@ void sysparams_init(void)
         }
     }
     if (!system_dpi) system_dpi = USER_DEFAULT_SCREEN_DPI;
+
+#ifdef __OHOS__
+    int local_dpi = GetSystemDpi();
+    TRACE("set dpi: %d --> %d\n", system_dpi, local_dpi);
+    system_dpi = local_dpi;
+#endif
 
     /* FIXME: what do the DpiScalingVer flags mean? */
     get_dword_entry( (union sysparam_all_entry *)&entry_DPISCALINGVER, 0, &dpi_scaling, 0 );

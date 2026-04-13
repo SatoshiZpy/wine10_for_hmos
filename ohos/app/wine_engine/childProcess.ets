@@ -1,0 +1,1 @@
+export { WineChildProcess } from './src/main/ets/process/WineChildProcess';

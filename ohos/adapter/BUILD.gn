@@ -1,0 +1,83 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+import("//ohos/adapter/aki_hook.gni")
+
+if (is_ohos) {
+  shared_library("adapter") {
+    sources = [
+      "native_initializer.cc",
+      "native_initializer.h",
+      "common/trace.cc",
+      "common/trace.h",
+      "common/shared_library.cc",
+      "common/shared_library.h",
+    ]
+
+    deps = [
+      "//ohos/adapter/accessibility:accessibility",
+      "//ohos/adapter/aki_hook:aki_hook",
+      "//ohos/adapter/policy:policy",
+      "//ohos/adapter/window:window",
+      "//ohos/adapter/battery:battery",
+      "//ohos/adapter/bluetooth:bluetooth_adapter",
+      "//ohos/adapter/browser:browser_adapter",
+      "//ohos/adapter/cert_manager:cert_manager",
+      "//ohos/adapter/context_path:context_path_adapter",
+      "//ohos/adapter/context:context_adapter",
+      "//ohos/adapter/cursor:cursor",
+      "//ohos/adapter/default_application:default_application",
+      "//ohos/adapter/dev_config:dev_config",
+      "//ohos/adapter/device:device_adapter",
+      "//ohos/adapter/device_info:device_info",
+      "//ohos/adapter/device_user_auth:device_user_auth",
+      "//ohos/adapter/drag_drop:drag_drop_adapter",
+      "//ohos/adapter/external_protocol:external_protocol",
+      "//ohos/adapter/file_manager:file_manager",
+      "//ohos/adapter/file_picker:file_picker",
+      "//ohos/adapter/font:font",
+      "//ohos/adapter/ime_adapter:ime_adapter",
+      "//ohos/adapter/life_cycle:life_cycle",
+      "//ohos/adapter/media_manager:media_manager",
+      "//ohos/adapter/mime_type:mime_type",
+      "//ohos/adapter/multiprocess:multiprocess",
+      "//ohos/adapter/native_theme:native_theme",
+      "//ohos/adapter/net:net",
+      "//ohos/adapter/notification:notification_adapter",
+      "//ohos/adapter/ocr:ocr_adapter",
+      "//ohos/adapter/ohos_i18n:ohos_i18n",
+      "//ohos/adapter/permission_manager:permission_manager",
+      "//ohos/adapter/power_monitor:power_monitor",
+      "//ohos/adapter/print:print",
+      "//ohos/adapter/runninglock:runninglock",
+      "//ohos/adapter/res_sched:res_sched",
+      "//ohos/adapter/screen:screen",
+      "//ohos/adapter/screenlock_monitor:screenlock_monitor",
+      "//ohos/adapter/screenshot:screenshot",
+      "//ohos/adapter/shape_detection:shape_detection_adapter",
+      "//ohos/adapter/speech:speech_adapter",
+      "//ohos/adapter/tracing:tracing",
+      "//ohos/adapter/web_entry:web_entry",
+      "//ohos/adapter/xcomponent:xcomponent",
+    ]
+
+    public_deps = [ "//third_party/aki:aki_jsbind" ]
+
+    ldflags = [
+      "-l:libc++_static.a",
+      "-static-libstdc++",
+    ]
+
+    libs = [
+      "c++_static",
+      "hilog_ndk.z",
+      "hitrace_ndk.z",
+      "native_window",
+      "time_service_ndk",
+      "child_process",
+      "bundle_ndk.z"
+    ]
+  }
+}

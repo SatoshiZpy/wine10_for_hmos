@@ -80,6 +80,9 @@
 #ifdef __ANDROID__
 # include <jni.h>
 #endif
+#ifdef __OHOS__
+# include "ohos_adapter.h"
+#endif
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -168,6 +171,29 @@ const char *user_name = NULL;
 SECTION_IMAGE_INFORMATION main_image_info = { NULL };
 
 /* die on a fatal error; use only during initialization */
+#ifdef __OHOS__
+static void fatal_error(const char* err, ...) {
+    va_list args;
+    
+    va_start(args, err);
+    int length = vsnprintf(NULL, 0, err, args);
+    va_end(args);
+    
+    assert(length > 0);
+    
+    char* buffer = (char*)malloc(length + 1);
+    assert(buffer != NULL);
+    
+    va_start(args, err);
+    vsnprintf(buffer, length + 1, err, args);
+    va_end(args);
+    
+    ERR("fatal_error: %s", buffer);
+    free(buffer);
+
+    exit(1);
+}
+#else
 static void fatal_error( const char *err, ... )
 {
     va_list args;
@@ -178,6 +204,7 @@ static void fatal_error( const char *err, ... )
     va_end( args );
     exit(1);
 }
+#endif
 
 static void set_max_limit( int limit )
 {
@@ -323,10 +350,12 @@ static const char *get_so_dir( WORD machine )
 {
     switch (machine)
     {
+#ifndef __OHOS__
     case IMAGE_FILE_MACHINE_I386:  return "/i386-unix";
     case IMAGE_FILE_MACHINE_AMD64: return "/x86_64-unix";
     case IMAGE_FILE_MACHINE_ARMNT: return "/arm-unix";
     case IMAGE_FILE_MACHINE_ARM64: return "/aarch64-unix";
+#endif
     default: return "";
     }
 }
@@ -370,7 +399,9 @@ static void set_dll_path(void)
     if (path)
     {
         path = strdup(path);
-        for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" )) dll_paths[count++] = strdup( p );
+        for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" )) {
+            dll_paths[count++] = strdup( p );
+        }
         free( path );
     }
 
@@ -392,8 +423,9 @@ static void set_system_dll_path(void)
     if (path && *path)
     {
         char *path_copy = strdup(path);
-        for (p = strtok( path_copy, ":" ); p; p = strtok( NULL, ":" ))
+        for (p = strtok( path_copy, ":" ); p; p = strtok( NULL, ":" )) {
             system_dll_paths[count++] = strdup( p );
+        }
         free( path_copy );
     }
     system_dll_paths[count] = NULL;
@@ -450,6 +482,14 @@ static void init_paths(void)
     if (!dladdr( init_paths, &info ) || !(ntdll_dir = realpath_dirname( info.dli_fname )))
         fatal_error( "cannot get path to ntdll.so\n" );
 
+#ifdef __OHOS__
+    const char *res_dir = getenv("WINERESPATH");
+    if (!res_dir) fatal_error( "invalid directory in WINERESPATH: not an absolute path\n" );
+    bin_dir = build_path(res_dir, BINDIR);
+    data_dir = build_path(res_dir, DATADIR "/wine");
+    dll_dir = build_path(res_dir, LIBDIR "/wine");
+    wineloader = build_path(ntdll_dir, "libwine.so");
+#else
     if ((build_dir = remove_tail( ntdll_dir, "/dlls/ntdll" )))
     {
         wineloader = build_path( build_dir, "loader/wine" );
@@ -462,11 +502,26 @@ static void init_paths(void)
         data_dir = build_relative_path( dll_dir, LIBDIR "/wine", DATADIR "/wine" );
         wineloader = build_path( ntdll_dir, "wine" );
     }
+#endif
 
     set_dll_path();
     set_system_dll_path();
     set_home_dir();
     set_config_dir();
+
+#ifdef __OHOS__
+    TRACE("loaded bin_dir: %s\n", bin_dir);
+    TRACE("loaded dll_dir: %s\n", dll_dir);
+    TRACE("loaded system_dll_paths: %s\n", (system_dll_paths));
+    TRACE("loaded ntdll_dir: %s\n", ntdll_dir);
+    TRACE("loaded alt_build_dir: %s\n", (alt_build_dir));
+    TRACE("loaded home_dir: %s\n", (home_dir));
+    TRACE("loaded data_dir: %s\n", (data_dir));
+    TRACE("loaded build_dir: %s\n", (build_dir));
+    TRACE("loaded config_dir: %s\n", (config_dir));
+    TRACE("loaded wineloader: %s\n", (wineloader));
+    TRACE("loaded user_name: %s\n", (user_name));
+#endif
 }
 
 
@@ -534,6 +589,36 @@ static NTSTATUS loader_exec( char **argv, WORD machine )
  *
  * argv[0] and argv[1] must be reserved for the preloader and loader respectively.
  */
+#ifdef __OHOS__
+NTSTATUS exec_wineloader( char **argv, int socketfd, const struct pe_image_info *pe_info )
+{
+    argv[0] = argv[1] = strdup( "wine" );
+    int argc = 0;
+    while (argv[argc] != NULL) {
+        argc++;
+    }
+
+    struct launch_options *options = calloc( 1, sizeof(*options) );
+    if (!options) fatal_error( "could not exec child process\n" );
+
+    for (int i = 0; i < MAX_SEND_FDS; i++)
+    {
+        options->fds[i] = -1;
+        options->id[i] = -1;
+    }
+    options->type = CHILD_PROCESS;
+    options->fds[0] = socketfd;
+    options->id[0] = SERVER_IPC_CHANNEL;
+
+    pid_t pid = StartNativeProcess(argc - 1, argv + 1, options);
+    if (pid < 0) {
+        fatal_error( "could not exec child process\n" );
+    }
+    TRACE( "spawn_process child process ok, pid: %d\n", pid);
+    free(options);
+    free(argv[0]);
+}
+#else
 NTSTATUS exec_wineloader( char **argv, int socketfd, const struct pe_image_info *pe_info )
 {
     WORD machine = pe_info->machine;
@@ -555,7 +640,7 @@ NTSTATUS exec_wineloader( char **argv, int socketfd, const struct pe_image_info 
 
     return loader_exec( argv, machine );
 }
-
+#endif
 
 /***********************************************************************
  *           exec_wineserver
@@ -583,12 +668,51 @@ static int exec_wineserver( pid_t *pid, char **argv )
     return build_path_and_exec( pid, BINDIR, "wineserver", argv );
 }
 
-
 /***********************************************************************
  *           start_server
  *
  * Start a new wine server.
  */
+#ifdef __OHOS__
+void start_server( BOOL debug )
+{
+    static BOOL started;  /* we only try once */
+    char *argv[4];
+    static char foreground_flag[] = "-f";
+    static char debug_flag[] = "-d2";
+
+    if (!started)
+    {
+        argv[0] = "wineserver";
+        argv[1] = foreground_flag;
+        argv[2] = debug ? debug_flag : NULL;
+        argv[3] = NULL;
+
+        int argc = 0;
+        while (argv[argc] != NULL) {
+            argc++;
+        }
+
+        struct launch_options *options = calloc( 1, sizeof(*options) );
+        if (!options) fatal_error( "could not exec wineserver\n" );
+
+        for (int i = 0; i < MAX_SEND_FDS; i++)
+        {
+            options->fds[i] = -1;
+            options->id[i] = -1;
+        }
+        options->type = SERVER_PROCESS;
+
+        pid_t pid = StartNativeProcess(argc, argv, options);
+        if (pid < 0) {
+            fatal_error( "could not exec wineserver\n" );
+        }
+        TRACE("start_server ok, pid = %d\n", pid);
+        free(options);
+        started = TRUE;
+    }
+}
+#else
 void start_server( BOOL debug )
 {
     static BOOL started;  /* we only try once */
@@ -610,7 +734,7 @@ void start_server( BOOL debug )
         started = TRUE;
     }
 }
-
+#endif
 
 /***********************************************************************
  *           KeAddSystemServiceTable
@@ -1309,9 +1433,13 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, void **module, SIZE_T
         status = open_builtin_pe_file( ptr, &attr, module, size_ptr, image_info, limit_low, limit_high,
                                        load_machine, prefer_native );
         /* use so dir for unix lib */
+#ifdef __OHOS__
+        ptr = file + pos + 1;
+#else
         ptr = file + pos;
         ptr = prepend( ptr, so_dir, strlen(so_dir) );
         ptr = prepend( ptr, dll_paths[i], strlen(dll_paths[i]) );
+#endif
         if (status != STATUS_DLL_NOT_FOUND) goto done;
         status = open_builtin_so_file( ptr, &attr, module, image_info,
                                        search_machine, load_machine, prefer_native );
@@ -2267,8 +2395,26 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
     main_argc = argc;
     main_argv = argv;
 
+#ifdef __OHOS__
+    TRACE("argc: %d\n", main_argc);
+    for (int i = 0; i < argc; i++) {
+       TRACE("args: %s\n", main_argv[i]); 
+    }
+
+    int socketfd = GetGlobalDescriptor(SERVER_IPC_CHANNEL);
+    if (socketfd > 0) {
+        char socket_env[64];
+        snprintf( socket_env, sizeof(socket_env), "WINESERVERSOCKET=%u", socketfd );
+
+        TRACE("socket_env = %s\n", socket_env);
+        putenv( socket_env );
+    }
+#endif
+
     init_paths();
+#ifndef __OHOS__
     if (!getenv( "WINELOADERNOEXEC" ) || argc <= 1) check_command_line( argc, argv );
+#endif
 
 #ifdef RLIMIT_NOFILE
     set_max_limit( RLIMIT_NOFILE );

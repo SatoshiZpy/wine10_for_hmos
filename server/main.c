@@ -29,6 +29,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "logging.h"
 #include "object.h"
 #include "file.h"
 #include "thread.h"
@@ -209,6 +210,7 @@ error:
 
 static void sigterm_handler( int signum )
 {
+    LOGE("wineserver: sigterm_handler signum=%{public}d", signum);
     exit(1);  /* make sure atexit functions get called */
 }
 
@@ -238,4 +240,9 @@ int main( int argc, char *argv[] )
     init_registry();
     main_loop();
     return 0;
+}
+
+__attribute((visibility("default"))) int wine_main(int argc, char *argv[])
+{
+    return main(argc, argv);
 }

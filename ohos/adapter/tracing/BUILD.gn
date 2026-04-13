@@ -1,0 +1,18 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+
+component("tracing") {
+  sources = [
+    "tracing_adapter.cc",
+    "tracing_adapter.h",
+    "common_event/common_event_wrapper.cc",
+    "common_event/common_event_wrapper.h",
+  ]
+
+  public_deps = [ "//third_party/aki:aki_jsbind" ]
+
+  libs = [ "ohcommonevent" ]
+}

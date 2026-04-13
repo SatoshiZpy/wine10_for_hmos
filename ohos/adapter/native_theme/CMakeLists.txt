@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE native_theme_adapter.cc)

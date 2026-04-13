@@ -70,6 +70,9 @@
 #define _POSIX_SPAWN_DISABLE_ASLR 0x0100
 #endif
 #endif
+#ifdef __OHOS__
+# include "ohos_adapter.h"
+#endif
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -125,6 +128,29 @@ static void server_connect_error( const char *serverdir ) __attribute__((noretur
 #endif
 
 /* die on a fatal error; use only during initialization */
+#ifdef __OHOS__
+static void fatal_error(const char* err, ...) {
+    va_list args;
+    
+    va_start(args, err);
+    int length = vsnprintf(NULL, 0, err, args);
+    va_end(args);
+    
+    assert(length > 0);
+    
+    char* buffer = (char*)malloc(length + 1);
+    assert(buffer != NULL);
+    
+    va_start(args, err);
+    vsnprintf(buffer, length + 1, err, args);
+    va_end(args);
+    
+    ERR("wine fatal_error: %s", buffer);
+    free(buffer);
+
+    exit(1);
+}
+#else
 static void fatal_error( const char *err, ... )
 {
     va_list args;
@@ -135,8 +161,33 @@ static void fatal_error( const char *err, ... )
     va_end( args );
     exit(1);
 }
+#endif
 
 /* die on a fatal error; use only during initialization */
+#ifdef __OHOS__
+static void fatal_perror( const char *err, ... )
+{
+    va_list args;
+    
+    va_start(args, err);
+    int length = vsnprintf(NULL, 0, err, args);
+    va_end(args);
+    
+    assert(length > 0);
+    
+    char* buffer = (char*)malloc(length + 1);
+    assert(buffer != NULL);
+    
+    va_start(args, err);
+    vsnprintf(buffer, length + 1, err, args);
+    va_end(args);
+    
+    ERR("wine fatal_perror: %s", buffer);
+    free(buffer);
+
+    exit(1);
+}
+#else
 static void fatal_perror( const char *err, ... )
 {
     va_list args;
@@ -148,10 +199,35 @@ static void fatal_perror( const char *err, ... )
     va_end( args );
     exit(1);
 }
+#endif
 
 /***********************************************************************
  *           server_protocol_error
  */
+#ifdef __OHOS__
+static DECLSPEC_NORETURN void server_protocol_error( const char *err, ... )
+{
+    va_list args;
+    
+    va_start(args, err);
+    int length = vsnprintf(NULL, 0, err, args);
+    va_end(args);
+    
+    assert(length > 0);
+    
+    char* buffer = (char*)malloc(length + 1);
+    assert(buffer != NULL);
+    
+    va_start(args, err);
+    vsnprintf(buffer, length + 1, err, args);
+    va_end(args);
+    
+    ERR("wine client error:%x: %s", GetCurrentThreadId(), buffer);
+    free(buffer);
+
+    abort_thread(1);
+}
+#else
 static DECLSPEC_NORETURN void server_protocol_error( const char *err, ... )
 {
     va_list args;
@@ -162,7 +238,7 @@ static DECLSPEC_NORETURN void server_protocol_error( const char *err, ... )
     va_end( args );
     abort_thread(1);
 }
-
+#endif
 
 /***********************************************************************
  *           server_protocol_perror
@@ -173,7 +249,6 @@ static DECLSPEC_NORETURN void server_protocol_perror( const char *err )
     perror( err );
     abort_thread(1);
 }
-
 
 /***********************************************************************
  *           send_request
@@ -1283,6 +1358,8 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
 
 #ifdef __ANDROID__  /* there's no /tmp dir on Android */
     asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
+#elif defined (__OHOS__) /* there's no /tmp dir on Openharmony */
+    asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
 #else
     asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
 #endif
@@ -1326,8 +1403,10 @@ static int setup_config_dir(void)
     if (!mkdir( "dosdevices", 0777 ))
     {
         mkdir( "drive_c", 0777 );
-        symlink( "../drive_c", "dosdevices/c:" );
-        symlink( "/", "dosdevices/z:" );
+        if (symlink( "../drive_c", "dosdevices/c:" ) != 0)
+            ERR( "symlink error:%d, %s\n", errno, strerror(errno));
+        if (symlink( "/", "dosdevices/z:" ) != 0)
+            ERR( "symlink error:%d, %s\n", errno, strerror(errno));
     }
     else if (errno != EEXIST) fatal_perror( "cannot create %s/dosdevices", config_dir );
 
@@ -1557,7 +1636,11 @@ static int init_thread_pipe(void)
 void process_exit_wrapper( int status )
 {
     close( fd_socket );
+#ifdef __OHOS__
+    KillNativeProcess(status, 0);
+#else
     exit( status );
+#endif
 }
 
 

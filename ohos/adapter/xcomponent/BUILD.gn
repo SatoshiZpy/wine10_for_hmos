@@ -1,0 +1,45 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+
+component("xcomponent") {
+    sources = [
+      "adapter/window_adapter.cc",
+      "adapter/window_adapter.h",
+      "adapter/input_event_callback_adapter.cc",
+      "adapter/input_event_callback_adapter.h",
+      "event/gesture_event_receiver.cc",
+      "event/gesture_event_common.h",
+      "event/input_event_common.h",
+      "event/window_event_receiver.cc",
+      "event/window_event_common.cc",
+      "event/window_event_common.h",
+      "event/window_event_filter_adapter.cc",
+      "event/window_event_filter_adapter.h",
+      "renderer/xcomponent_impl.cc",
+      "renderer/xcomponent_impl.h",
+      "xcomponent_manager.cc",
+      "xcomponent_manager.h",
+      "xcomponent_utils.cc",
+      "xcomponent_utils.h",
+      "xcomponent_delegate.h"
+    ]
+
+    cflags = [
+      "-Wno-error=delete-incomplete",
+      "-Wno-error=writable-strings",
+      "-Wno-error=parentheses-equality"
+    ]
+
+    deps = [ "//third_party/aki:aki_jsbind" ]
+
+    libs = [
+      "hilog_ndk.z",
+      "ace_ndk.z",
+      "ace_napi.z",
+      "native_window_manager",
+      "ohinput",
+    ]
+}

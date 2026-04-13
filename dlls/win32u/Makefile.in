@@ -4,7 +4,8 @@ UNIXLIB   = win32u.so
 IMPORTLIB = win32u
 IMPORTS   = ntdll
 UNIX_CFLAGS  = $(FREETYPE_CFLAGS) $(FONTCONFIG_CFLAGS)
-UNIX_LIBS    = $(CARBON_LIBS) $(APPKIT_LIBS) $(PTHREAD_LIBS) -lm
+UNIX_LIBS    = $(CARBON_LIBS) $(APPKIT_LIBS) $(PTHREAD_LIBS) -lm $(ADAPTER_LIBS)
+EXTRAINCL = -I$(top_srcdir)/ohos/adapter/include
 
 EXTRADLLFLAGS = -nodefaultlibs
 

@@ -141,6 +141,7 @@ static char **build_argv( const UNICODE_STRING *cmdline, int reserved )
     *dst = 0;
     argv[argc++] = arg;
     argv[argc] = NULL;
+    free(src);
     return argv;
 }
 
@@ -434,6 +435,10 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
         isatty(1) && is_unix_console_handle( params->hStdOutput ))
         stdout_fd = 1;
 
+#ifdef __OHOS__
+    argv = build_argv( &params->CommandLine, 2 );
+    exec_wineloader( argv, socketfd, pe_info );
+#else
     if (!(pid = fork()))  /* child */
     {
         if (!(pid = fork()))  /* grandchild */
@@ -462,7 +467,6 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
             exec_wineloader( argv, socketfd, pe_info );
             _exit(1);
         }
-
         _exit(pid == -1);
     }
 
@@ -475,6 +479,7 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
         } while (wret < 0 && errno == EINTR);
     }
     else status = STATUS_NO_MEMORY;
+#endif
 
     if (stdin_fd != -1 && stdin_fd != 0) close( stdin_fd );
     if (stdout_fd != -1 && stdout_fd != 1) close( stdout_fd );

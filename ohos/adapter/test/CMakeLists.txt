@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE drag_drop_ohos_adapter.cc)

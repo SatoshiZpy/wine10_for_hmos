@@ -1,0 +1,1378 @@
+#if 0
+#pragma makedep unix
+#endif
+
+#include "config.h"
+
+#include <assert.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <errno.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#define OEMRESOURCE
+#include "windef.h"
+#include "winbase.h"
+#include "wingdi.h"
+#include "winuser.h"
+
+#include "ohos.h"
+#include "wine/server.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(ohos);
+
+#define SWP_AGG_NOPOSCHANGE (SWP_NOSIZE | SWP_NOMOVE | SWP_NOCLIENTSIZE | SWP_NOCLIENTMOVE | SWP_NOZORDER)
+
+pthread_mutex_t win_data_mutex;
+
+static struct ohos_win_data *win_data_context[32768];
+
+static inline int context_idx( HWND hwnd )
+{
+    return LOWORD( hwnd ) >> 1;
+}
+
+static inline int get_dib_stride( int width, int bpp )
+{
+    return ((width * bpp + 31) >> 3) & ~3;
+}
+
+static inline int get_dib_image_size( const BITMAPINFO *info )
+{
+    return get_dib_stride( info->bmiHeader.biWidth, info->bmiHeader.biBitCount )
+        * abs( info->bmiHeader.biHeight );
+}
+
+static BOOL intersect_rect( RECT *dst, const RECT *src1, const RECT *src2 )
+{
+    dst->left   = max(src1->left, src2->left);
+    dst->top    = max(src1->top, src2->top);
+    dst->right  = min(src1->right, src2->right);
+    dst->bottom = min(src1->bottom, src2->bottom);
+    return !IsRectEmpty( dst );
+}
+
+/***********************************************************************
+ *           alloc_win_data
+ */
+struct ohos_win_data *alloc_win_data( HWND hwnd )
+{
+    struct ohos_win_data *data;
+
+    if ((data = calloc( 1, sizeof(*data) )))
+    {
+        data->hwnd = hwnd;
+        pthread_mutex_lock( &win_data_mutex );
+        win_data_context[context_idx(hwnd)] = data;
+    }
+    return data;
+}
+
+
+/***********************************************************************
+ *           free_win_data
+ */
+void free_win_data( struct ohos_win_data *data )
+{
+    win_data_context[context_idx( data->hwnd )] = NULL;
+    pthread_mutex_unlock( &win_data_mutex );
+    if (data->window) destroy_native_window( data->hwnd );
+    data->window = NULL;
+    data->on_screen = FALSE;
+    free( data );
+}
+
+
+/***********************************************************************
+ *           get_win_data
+ *
+ * Lock and return the data structure associated with a window.
+ */
+struct ohos_win_data *get_win_data( HWND hwnd )
+{
+    struct ohos_win_data *data;
+
+    if (!hwnd) return NULL;
+    pthread_mutex_lock( &win_data_mutex );
+    if ((data = win_data_context[context_idx(hwnd)]) && data->hwnd == hwnd) return data;
+    pthread_mutex_unlock( &win_data_mutex );
+    return NULL;
+}
+
+
+/***********************************************************************
+ *           release_win_data
+ *
+ * Release the data returned by get_win_data.
+ */
+void release_win_data( struct ohos_win_data *data )
+{
+    if (data) pthread_mutex_unlock( &win_data_mutex );
+}
+
+
+/***********************************************************************
+ *           get_window
+ */
+static ohos_window get_window( HWND hwnd )
+{
+    struct ohos_win_data *data = get_win_data( hwnd );
+
+    if (!data || !data->window) return NULL;
+    release_win_data( data );
+    return data->window;
+}
+
+static inline BOOL can_window_become_foreground(HWND hwnd)
+{
+    LONG style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+
+    if (!(style & WS_VISIBLE)) return FALSE;
+    if ((style & (WS_POPUP | WS_CHILD)) == WS_CHILD) return FALSE;
+    if (hwnd == NtUserGetDesktopWindow()) return FALSE;
+    return !(style & WS_DISABLED);
+}
+
+static void get_window_state(struct ohos_win_data *data,
+                             DWORD style, DWORD ex_style,
+                             struct window_state* state)
+{
+    memset(state, 0, sizeof(*state));
+    state->disabled = (style & WS_DISABLED) != 0;
+    state->no_foreground = !can_window_become_foreground(data->hwnd);
+    state->top_most = (ex_style & WS_EX_TOPMOST) != 0;
+    state->excluded_by_control = (!(ex_style & WS_EX_APPWINDOW) &&
+                                     (NtUserGetWindowRelative(data->hwnd, GW_OWNER) ||
+                                     (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))));
+    state->minimized = (style & WS_MINIMIZE) != 0;
+    state->minimized_valid = state->minimized != data->minimized;
+    state->maximized = (style & WS_MAXIMIZE) != 0;
+}
+
+static void set_window_properties(struct ohos_win_data *data)
+{
+    int widget_id;
+    DWORD style, ex_style;
+    HWND owner;
+    struct ohos_win_data *owner_data;
+    struct window_features wf;
+    struct window_state state;
+
+    widget_id = get_widget_id(data->hwnd);
+    style = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
+    ex_style = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
+
+    owner = NtUserGetWindowRelative(data->hwnd, GW_OWNER);
+    if (owner)
+        owner = NtUserGetAncestor(owner, GA_ROOT);
+    owner_data = get_win_data( owner );
+    if (owner_data) SetParentWindow(widget_id, get_widget_id(owner_data->hwnd));
+
+    wf = get_window_features_for_style(style, ex_style);
+    SetWindowFeatures(widget_id, &wf);
+
+    get_window_state(data, style, ex_style, &state);
+    SetWindowState(widget_id, &state);
+    if (state.minimized_valid)
+        data->minimized = state.minimized;
+}
+
+static void sync_window_opacity(struct ohos_win_data *data, BYTE alpha,
+                                BOOL per_pixel_alpha, DWORD flags)
+{
+    float opacity = 1.0;
+
+    if (flags & LWA_ALPHA) opacity = alpha / 255.0;
+
+    TRACE("setting window %p/%p alpha to %g\n", data->hwnd, data->window, opacity);
+    SetWindowAlpha(get_widget_id(data->hwnd), opacity);
+}
+
+static BOOL ohos_window_size_change_notify( HWND hwnd, const RECT *rect )
+{
+    struct ohos_win_data *data;
+
+    if (!hwnd) return FALSE;
+    if (!(data = get_win_data( hwnd ))) return FALSE;
+
+    TRACE( "ConfigureNotify hwnd %p rect %s\n", hwnd, wine_dbgstr_rect(rect) );
+
+    release_win_data( data );
+
+    /* Send internal message to notify Wine message queue.
+     * This will trigger WM_WINE_WINDOW_STATE_CHANGED handling in handle_internal_message. */
+    NtUserSetRawWindowPos(hwnd, *rect, 0, 0);
+    return NtUserPostMessage( hwnd, WM_WINE_WINDOW_STATE_CHANGED, 0, 0 );
+}
+
+/* Handling of events coming from the Java side */
+
+struct java_event
+{
+    struct list      entry;
+    union event_data data;
+};
+
+static struct list event_queue = LIST_INIT( event_queue );
+static struct java_event *current_event;
+static int event_pipe[2];
+static DWORD desktop_tid;
+
+/***********************************************************************
+ *           send_event
+ */
+int send_event( const union event_data *data )
+{
+    int res;
+
+    if ((res = write( event_pipe[1], data, sizeof(*data) )) != sizeof(*data))
+    {
+        return -1;
+    }
+    return 0;
+}
+
+/***********************************************************************
+ *           init_event_queue
+ */
+static void init_event_queue(void)
+{
+    HANDLE handle;
+    int ret;
+
+    if (pipe2( event_pipe, O_CLOEXEC | O_NONBLOCK ) == -1)
+    {
+        ERR( "could not create data\n" );
+        NtTerminateProcess( 0, 1 );
+    }
+    if (wine_server_fd_to_handle( event_pipe[0], GENERIC_READ | SYNCHRONIZE, 0, &handle ))
+    {
+        ERR( "Can't allocate handle for event fd\n" );
+        NtTerminateProcess( 0, 1 );
+    }
+    SERVER_START_REQ( set_queue_fd )
+    {
+        req->handle = wine_server_obj_handle( handle );
+        ret = wine_server_call( req );
+    }
+    SERVER_END_REQ;
+    if (ret)
+    {
+        ERR( "Can't store handle for event fd %x\n", ret );
+        NtTerminateProcess( 0, 1 );
+    }
+    NtClose( handle );
+    desktop_tid = GetCurrentThreadId();
+}
+
+
+/***********************************************************************
+ *           pull_events
+ *
+ * Pull events from the event pipe and add them to the queue
+ */
+static void pull_events(void)
+{
+    struct java_event *event;
+    int res;
+
+    for (;;)
+    {
+        if (!(event = malloc( sizeof(*event) ))) break;
+
+        res = read( event_pipe[0], &event->data, sizeof(event->data) );
+        if (res != sizeof(event->data)) break;
+        list_add_tail( &event_queue, &event->entry );
+    }
+    free( event );
+}
+
+
+/***********************************************************************
+ *           process_events
+ */
+static int process_events( DWORD mask )
+{
+    struct java_event *event, *next, *previous;
+    unsigned int count = 0;
+
+    assert( GetCurrentThreadId() == desktop_tid );
+
+    pull_events();
+
+    previous = current_event;
+
+    LIST_FOR_EACH_ENTRY_SAFE( event, next, &event_queue, struct java_event, entry )
+    {
+        switch (event->data.type)
+        {
+        case SURFACE_CHANGED:
+            break;  /* always process it to unblock other threads */
+        case MOTION_EVENT:
+            if (event->data.motion.input.mi.dwFlags & (MOUSEEVENTF_LEFTDOWN|MOUSEEVENTF_RIGHTDOWN|
+                                                       MOUSEEVENTF_MIDDLEDOWN|MOUSEEVENTF_LEFTUP|
+                                                       MOUSEEVENTF_RIGHTUP|MOUSEEVENTF_MIDDLEUP))
+            {
+                if (mask & QS_MOUSEBUTTON) break;
+            }
+            else if (mask & QS_MOUSEMOVE) break;
+            continue;  /* skip it */
+        case KEYBOARD_EVENT:
+            if (mask & QS_KEY) break;
+            continue;  /* skip it */
+        case IME_EVENT:
+            break;
+        default:
+            if (mask & QS_SENDMESSAGE) break;
+            continue;  /* skip it */
+        }
+
+        /* remove it first, in case we process events recursively */
+        list_remove( &event->entry );
+        current_event = event;
+
+        switch (event->data.type)
+        {
+        case DESKTOP_CHANGED:
+            TRACE( "DESKTOP_CHANGED %ux%u\n", event->data.desktop.width, event->data.desktop.height );
+            screen_width = event->data.desktop.width;
+            screen_height = event->data.desktop.height;
+            init_monitors( screen_width, screen_height );
+            break;
+
+        case CONFIG_CHANGED:
+            TRACE( "CONFIG_CHANGED dpi %u\n", event->data.cfg.dpi );
+            set_screen_dpi( event->data.cfg.dpi );
+            break;
+
+        case SURFACE_CHANGED: {
+            RECT rect;
+            TRACE("SURFACE_CHANGED %p %p %s size %ux%u\n", event->data.surface.hwnd, event->data.surface.window,
+                  event->data.surface.client ? "client" : "whole", event->data.surface.width,
+                  event->data.surface.height);
+
+            SetRect(&rect, 0, 0, event->data.surface.width, event->data.surface.height);
+            ohos_window_size_change_notify(event->data.surface.hwnd, &rect);
+            break;
+        }
+        case MOTION_EVENT: {
+            HWND capture = get_capture_window();
+
+            if (event->data.motion.input.mi.dwFlags &
+                (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_RIGHTDOWN | MOUSEEVENTF_MIDDLEDOWN))
+                TRACE("BUTTONDOWN pos %d,%d hwnd %p flags %x\n", event->data.motion.input.mi.dx,
+                      event->data.motion.input.mi.dy, event->data.motion.hwnd, event->data.motion.input.mi.dwFlags);
+            else if (event->data.motion.input.mi.dwFlags &
+                     (MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP))
+                TRACE("BUTTONUP pos %d,%d hwnd %p flags %x\n", event->data.motion.input.mi.dx,
+                      event->data.motion.input.mi.dy, event->data.motion.hwnd, event->data.motion.input.mi.dwFlags);
+            else
+                TRACE("MOUSEMOVE pos %d,%d hwnd %p flags %x\n", event->data.motion.input.mi.dx,
+                      event->data.motion.input.mi.dy, event->data.motion.hwnd, event->data.motion.input.mi.dwFlags);
+            if (!capture && (event->data.motion.input.mi.dwFlags & MOUSEEVENTF_ABSOLUTE)) {
+                RECT rect;
+                SetRect(&rect, event->data.motion.input.mi.dx, event->data.motion.input.mi.dy,
+                        event->data.motion.input.mi.dx + 1, event->data.motion.input.mi.dy + 1);
+
+                SERVER_START_REQ(update_window_zorder)
+                {
+                    req->window = wine_server_user_handle(event->data.motion.hwnd);
+                    req->rect = wine_server_rectangle(rect);
+                    wine_server_call(req);
+                }
+                SERVER_END_REQ;
+            }
+            NtUserSendHardwareInput(capture ? capture : event->data.motion.hwnd, 0, &event->data.motion.input, 0);
+        } break;
+        case KEYBOARD_EVENT:
+            if (event->data.kbd.input.ki.dwFlags & KEYEVENTF_KEYUP)
+                TRACE("KEYUP hwnd %p vkey %x '%c' scancode %x\n", event->data.kbd.hwnd, event->data.kbd.input.ki.wVk,
+                      event->data.kbd.input.ki.wVk, event->data.kbd.input.ki.wScan);
+            else
+                TRACE("KEYDOWN hwnd %p vkey %x '%c' scancode %x\n", event->data.kbd.hwnd, event->data.kbd.input.ki.wVk,
+                      event->data.kbd.input.ki.wVk, event->data.kbd.input.ki.wScan);
+            update_keyboard_lock_state(event->data.kbd.input.ki.wVk, event->data.kbd.lock_state);
+            NtUserSendHardwareInput(0, 0, &event->data.kbd.input, 0);
+            break;
+        case IME_EVENT:
+            distribute_ime_callback(&(event->data.ime.data));
+            break;
+        default:
+            FIXME("got event %u\n", event->data.type);
+        }
+        free( event );
+        count++;
+        /* next may have been removed by a recursive call, so reset it to the beginning of the list */
+        next = LIST_ENTRY( event_queue.next, struct java_event, entry );
+    }
+    current_event = previous;
+    return count;
+}
+
+
+/***********************************************************************
+ *           wait_events
+ */
+static int wait_events( int timeout )
+{
+    assert( GetCurrentThreadId() == desktop_tid );
+
+    for (;;)
+    {
+        struct pollfd pollfd;
+        int ret;
+
+        pollfd.fd = event_pipe[0];
+        pollfd.events = POLLIN | POLLHUP;
+        ret = poll( &pollfd, 1, timeout );
+        if (ret == -1 && errno == EINTR) continue;
+        if (ret && (pollfd.revents & (POLLHUP | POLLERR))) ret = -1;
+        return ret;
+    }
+}
+
+
+/* Window surface support */
+
+struct ohos_window_surface
+{
+    struct window_surface header;
+    ohos_window           window;
+    UINT                  clip_count;
+    RECT                  *clip_rects;
+};
+
+static struct ohos_window_surface *get_ohos_surface( struct window_surface *surface )
+{
+    return (struct ohos_window_surface *)surface;
+}
+
+/* apply the window region to a single line of the destination image. */
+static void apply_line_region( DWORD *dst, int width, int x, int y, const RECT *rect, const RECT *end )
+{
+    while (rect < end && rect->top <= y && width > 0)
+    {
+        if (rect->left > x)
+        {
+            memset( dst, 0, min( rect->left - x, width ) * sizeof(*dst) );
+            dst += rect->left - x;
+            width -= rect->left - x;
+            x = rect->left;
+        }
+        if (rect->right > x)
+        {
+            dst += rect->right - x;
+            width -= rect->right - x;
+            x = rect->right;
+        }
+        rect++;
+    }
+    if (width > 0) memset( dst, 0, width * sizeof(*dst) );
+}
+
+/***********************************************************************
+ *           ohos_surface_set_clip
+ */
+static void ohos_surface_set_clip( struct window_surface *window_surface, const RECT *rects, UINT count )
+{
+    struct ohos_window_surface *surface = get_ohos_surface( window_surface );
+
+    TRACE( "surface %p, rects %p, count %u\n", surface, rects, count );
+
+    free( surface->clip_rects );
+    surface->clip_rects = NULL;
+
+    if (!count || !(surface->clip_rects = malloc( count * sizeof(*rects) ))) return;
+    memcpy( surface->clip_rects, rects, count * sizeof(*rects) );
+    surface->clip_count = count;
+}
+
+/***********************************************************************
+ *           ohos_surface_flush
+ */
+static BOOL ohos_surface_flush( struct window_surface *window_surface, const RECT *rect, const RECT *dirty,
+                                   const BITMAPINFO *color_info, const void *color_bits, BOOL shape_changed,
+                                   const BITMAPINFO *shape_info, const void *shape_bits )
+{
+    struct ohos_window_surface *surface = get_ohos_surface(window_surface);
+    struct native_buffer buffer;
+    RECT rc;
+
+    if (!perform(window_surface->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc))
+    {
+        const RECT *rgn_rect = surface->clip_rects, *end = surface->clip_rects + surface->clip_count;
+        UINT alpha_mask = window_surface->alpha_mask, alpha_bits = window_surface->alpha_bits;
+        COLORREF color_key = window_surface->color_key;
+        BYTE alpha = alpha_bits >> 24;
+        DWORD *src, *dst;
+        int x, y, width;
+        RECT locked;
+
+        locked.left = rc.left;
+        locked.top = rc.top;
+        locked.right = rc.right;
+        locked.bottom = rc.bottom;
+        intersect_rect(&locked, &locked, rect);
+
+        TRACE("hwnd %p, surface_rect %s, dirty %s, surface %p\n", window_surface->hwnd, wine_dbgstr_rect(&rc),
+              wine_dbgstr_rect(dirty), surface);
+
+        BufferHandle *buffer_handle = buffer.buffer_handle;
+        if (!buffer_handle) {
+            ERR("failed to get buffer handle\n");
+            return FALSE;
+        }
+        void *mapped_addr = mmap(buffer_handle->virAddr, buffer_handle->size,
+            PROT_READ | PROT_WRITE, MAP_SHARED, buffer_handle->fd, 0);
+        if (mapped_addr == MAP_FAILED) {
+            ERR("failed to mmap buffer handle\n");
+            return FALSE;
+        }
+
+        src = (DWORD *)color_bits + (locked.top - rect->top) * color_info->bmiHeader.biWidth + (locked.left - rect->left);
+        dst = (DWORD *)mapped_addr + locked.top * buffer.stride + locked.left;
+        width = min(locked.right - locked.left, buffer.width);
+
+        for (y = locked.top; y < min(buffer.height, locked.bottom); y++) {
+            if (alpha_mask)
+                memcpy( dst, src, width * sizeof(*dst) );
+            else if (alpha == 255)
+                for (x = 0; x < width; x++) dst[x] = src[x] | 0xff000000;
+            else
+                for (x = 0; x < width; x++)
+                    dst[x] = ((alpha << 24) |
+                              (((BYTE)(src[x] >> 16) * alpha / 255) << 16) |
+                              (((BYTE)(src[x] >> 8) * alpha / 255) <<  8) |
+                              (((BYTE)src[x] * alpha / 255)));
+
+            if (color_key != CLR_INVALID)
+                for (x = 0; x < width; x++)
+                    if ((src[x] & 0xffffff) == color_key)
+                        dst[x] = 0;
+
+            if (rgn_rect) {
+                while (rgn_rect < end && rgn_rect->bottom <= y)
+                    rgn_rect++;
+                apply_line_region(dst, width, locked.left, y, rgn_rect, end);
+            }
+
+            src += color_info->bmiHeader.biWidth;
+            dst += buffer.stride;
+        }
+
+        perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST);
+
+        int result = munmap(mapped_addr, buffer_handle->size);
+        if (result == -1) {
+            ERR("failed to munmap buffer handle\n");
+            return FALSE;
+        }
+    } else {
+        TRACE("Unable to lock surface %p window %p buffer %p\n", surface, window_surface->hwnd, surface->window);
+    }
+
+    return TRUE;
+}
+
+/***********************************************************************
+ *           ohos_surface_destroy
+ */
+static void ohos_surface_destroy( struct window_surface *window_surface )
+{
+    struct ohos_window_surface *surface = get_ohos_surface( window_surface );
+
+    TRACE( "freeing %p\n", surface );
+
+    free( surface->clip_rects );
+}
+
+static const struct window_surface_funcs ohos_surface_funcs =
+{
+    ohos_surface_set_clip,
+    ohos_surface_flush,
+    ohos_surface_destroy
+};
+
+
+/***********************************************************************
+ *           create_surface
+ */
+static struct window_surface *create_surface( HWND hwnd, const RECT *rect )
+{
+    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    BITMAPINFO *info = (BITMAPINFO *)buffer;
+    struct ohos_window_surface *surface;
+    int width = rect->right - rect->left;
+    int height = rect->bottom - rect->top;
+    struct window_surface *window_surface;
+
+    TRACE("hwnd %p rect %s\n", hwnd, wine_dbgstr_rect(rect));
+
+    memset( info, 0, sizeof(*info) );
+    info->bmiHeader.biSize        = sizeof(info->bmiHeader);
+    info->bmiHeader.biWidth       = width;
+    info->bmiHeader.biHeight      = -height; /* top-down */
+    info->bmiHeader.biPlanes      = 1;
+    info->bmiHeader.biBitCount    = 32;
+    info->bmiHeader.biSizeImage   = get_dib_image_size(info);
+    info->bmiHeader.biCompression = BI_RGB;
+
+    if ((window_surface = window_surface_create( sizeof(*surface), &ohos_surface_funcs, hwnd, rect, info, 0 )))
+    {
+        surface = get_ohos_surface( window_surface );
+        surface->window = get_window( hwnd );
+    }
+
+    return window_surface;
+}
+
+/***********************************************************************
+ *           get_mono_icon_argb
+ *
+ * Return a monochrome icon/cursor bitmap bits in ARGB format.
+ */
+static unsigned int *get_mono_icon_argb( HDC hdc, HBITMAP bmp, unsigned int *width, unsigned int *height )
+{
+    BITMAP bm;
+    char *mask;
+    unsigned int i, j, stride, mask_size, bits_size, *bits = NULL, *ptr;
+
+    if (!NtGdiExtGetObjectW( bmp, sizeof(bm), &bm )) return NULL;
+    stride = ((bm.bmWidth + 15) >> 3) & ~1;
+    mask_size = stride * bm.bmHeight;
+    if (!(mask = malloc( mask_size ))) return NULL;
+    if (!NtGdiGetBitmapBits( bmp, mask_size, mask )) goto done;
+
+    bm.bmHeight /= 2;
+    bits_size = bm.bmWidth * bm.bmHeight * sizeof(*bits);
+    if (!(bits = malloc( bits_size ))) goto done;
+
+    ptr = bits;
+    for (i = 0; i < bm.bmHeight; i++)
+        for (j = 0; j < bm.bmWidth; j++, ptr++)
+        {
+            int and = ((mask[i * stride + j / 8] << (j % 8)) & 0x80);
+            int xor = ((mask[(i + bm.bmHeight) * stride + j / 8] << (j % 8)) & 0x80);
+            if (!xor && and)
+                *ptr = 0;
+            else if (xor && !and)
+                *ptr = 0xffffffff;
+            else
+                /* we can't draw "invert" pixels, so render them as black instead */
+                *ptr = 0xff000000;
+        }
+
+    *width = bm.bmWidth;
+    *height = bm.bmHeight;
+
+done:
+    free( mask );
+    return bits;
+}
+
+/***********************************************************************
+ *           get_bitmap_argb
+ *
+ * Return the bitmap bits in ARGB format. Helper for setting icons and cursors.
+ */
+static unsigned int *get_bitmap_argb( HDC hdc, HBITMAP color, HBITMAP mask, unsigned int *width,
+                                      unsigned int *height )
+{
+    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    BITMAPINFO *info = (BITMAPINFO *)buffer;
+    BITMAP bm;
+    unsigned int *ptr, *bits = NULL;
+    unsigned char *mask_bits = NULL;
+    int i, j;
+    BOOL has_alpha = FALSE;
+
+    if (!color) return get_mono_icon_argb( hdc, mask, width, height );
+
+    if (!NtGdiExtGetObjectW( color, sizeof(bm), &bm )) return NULL;
+    info->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info->bmiHeader.biWidth = bm.bmWidth;
+    info->bmiHeader.biHeight = -bm.bmHeight;
+    info->bmiHeader.biPlanes = 1;
+    info->bmiHeader.biBitCount = 32;
+    info->bmiHeader.biCompression = BI_RGB;
+    info->bmiHeader.biSizeImage = bm.bmWidth * bm.bmHeight * 4;
+    info->bmiHeader.biXPelsPerMeter = 0;
+    info->bmiHeader.biYPelsPerMeter = 0;
+    info->bmiHeader.biClrUsed = 0;
+    info->bmiHeader.biClrImportant = 0;
+    if (!(bits = malloc( bm.bmWidth * bm.bmHeight * sizeof(unsigned int) )))
+        goto failed;
+    if (!NtGdiGetDIBitsInternal( hdc, color, 0, bm.bmHeight, bits, info, DIB_RGB_COLORS, 0, 0 ))
+        goto failed;
+
+    *width = bm.bmWidth;
+    *height = bm.bmHeight;
+
+    for (i = 0; i < bm.bmWidth * bm.bmHeight; i++)
+        if ((has_alpha = (bits[i] & 0xff000000) != 0)) break;
+
+    if (!has_alpha)
+    {
+        unsigned int width_bytes = (bm.bmWidth + 31) / 32 * 4;
+        /* generate alpha channel from the mask */
+        info->bmiHeader.biBitCount = 1;
+        info->bmiHeader.biSizeImage = width_bytes * bm.bmHeight;
+        if (!(mask_bits = malloc( info->bmiHeader.biSizeImage ))) goto failed;
+        if (!NtGdiGetDIBitsInternal( hdc, mask, 0, bm.bmHeight, mask_bits, info, DIB_RGB_COLORS, 0, 0 ))
+            goto failed;
+        ptr = bits;
+        for (i = 0; i < bm.bmHeight; i++)
+            for (j = 0; j < bm.bmWidth; j++, ptr++)
+                if (!((mask_bits[i * width_bytes + j / 8] << (j % 8)) & 0x80)) *ptr |= 0xff000000;
+        free( mask_bits );
+    }
+
+    return bits;
+
+failed:
+    free( bits );
+    free( mask_bits );
+    *width = *height = 0;
+    return NULL;
+}
+
+
+enum ohos_system_cursors
+{
+    TYPE_ARROW = 1000,
+    TYPE_CONTEXT_MENU = 1001,
+    TYPE_HAND = 1002,
+    TYPE_HELP = 1003,
+    TYPE_WAIT = 1004,
+    TYPE_CELL = 1006,
+    TYPE_CROSSHAIR = 1007,
+    TYPE_TEXT = 1008,
+    TYPE_VERTICAL_TEXT = 1009,
+    TYPE_ALIAS = 1010,
+    TYPE_COPY = 1011,
+    TYPE_NO_DROP = 1012,
+    TYPE_ALL_SCROLL = 1013,
+    TYPE_HORIZONTAL_DOUBLE_ARROW = 1014,
+    TYPE_VERTICAL_DOUBLE_ARROW = 1015,
+    TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW = 1016,
+    TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW = 1017,
+    TYPE_ZOOM_IN = 1018,
+    TYPE_ZOOM_OUT = 1019,
+    TYPE_GRAB = 1020,
+    TYPE_GRABBING = 1021,
+};
+
+struct system_cursors
+{
+    WORD id;
+    enum ohos_system_cursors ohos_id;
+};
+
+static const struct system_cursors user32_cursors[] =
+{
+    { OCR_NORMAL,      TYPE_ARROW },
+    { OCR_IBEAM,       TYPE_TEXT },
+    { OCR_WAIT,        TYPE_WAIT },
+    { OCR_CROSS,       TYPE_CROSSHAIR },
+    { OCR_SIZE,        TYPE_ALL_SCROLL },
+    { OCR_SIZEALL,     TYPE_ALL_SCROLL },
+    { OCR_SIZENWSE,    TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW },
+    { OCR_SIZENESW,    TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW },
+    { OCR_SIZEWE,      TYPE_HORIZONTAL_DOUBLE_ARROW },
+    { OCR_SIZENS,      TYPE_VERTICAL_DOUBLE_ARROW },
+    { OCR_NO,          TYPE_NO_DROP },
+    { OCR_HAND,        TYPE_HAND },
+    { OCR_HELP,        TYPE_HELP },
+    { 0 }
+};
+
+static const struct system_cursors comctl32_cursors[] =
+{
+    /* 102 TYPE_MOVE doesn't exist */
+    { 104, TYPE_COPY },
+    { 105, TYPE_ARROW },
+    { 106, TYPE_HORIZONTAL_DOUBLE_ARROW },
+    { 107, TYPE_HORIZONTAL_DOUBLE_ARROW },
+    { 108, TYPE_GRABBING },
+    { 135, TYPE_VERTICAL_DOUBLE_ARROW },
+    { 0 }
+};
+
+static const struct system_cursors ole32_cursors[] =
+{
+    { 1, TYPE_NO_DROP },
+    /* 2 TYPE_MOVE doesn't exist */
+    { 3, TYPE_COPY },
+    { 4, TYPE_ALIAS },
+    { 0 }
+};
+
+static const struct system_cursors riched20_cursors[] =
+{
+    { 105, TYPE_GRABBING },
+    { 109, TYPE_COPY },
+    /* 110 TYPE_MOVE doesn't exist */
+    { 111, TYPE_NO_DROP },
+    { 0 }
+};
+
+static const struct
+{
+    const struct system_cursors *cursors;
+    WCHAR name[16];
+} module_cursors[] =
+{
+    { user32_cursors, {'u','s','e','r','3','2','.','d','l','l',0} },
+    { comctl32_cursors, {'c','o','m','c','t','l','3','2','.','d','l','l',0} },
+    { ole32_cursors, {'o','l','e','3','2','.','d','l','l',0} },
+    { riched20_cursors, {'r','i','c','h','e','d','2','0','.','d','l','l',0} }
+};
+
+static int get_cursor_system_id( const ICONINFOEXW *info )
+{
+    const struct system_cursors *cursors;
+    const WCHAR *module;
+    unsigned int i;
+
+    if (info->szResName[0]) return 0;  /* only integer resources are supported here */
+
+    if ((module = wcsrchr( info->szModName, '\\' ))) module++;
+    else module = info->szModName;
+    for (i = 0; i < ARRAY_SIZE( module_cursors ); i++)
+        if (!wcsicmp( module, module_cursors[i].name )) break;
+    if (i == ARRAY_SIZE( module_cursors )) return 0;
+
+    cursors = module_cursors[i].cursors;
+    for (i = 0; cursors[i].id; i++)
+        if (cursors[i].id == info->wResID) return cursors[i].ohos_id;
+
+    return 0;
+}
+
+RECT get_desktop_rect(void)
+{
+    RECT desktop_rect;
+    struct window_bounds bounds = GetDisplayAvailArea();
+    desktop_rect.left = bounds.left;
+    desktop_rect.top = bounds.top;
+    desktop_rect.right = bounds.left + bounds.width;
+    desktop_rect.bottom = bounds.top + bounds.height;
+
+    TRACE("%s\n", wine_dbgstr_rect(&desktop_rect));
+    return desktop_rect;
+}
+
+void OHOS_SetDesktopWindow(HWND hwnd)
+{
+    unsigned int width, height;
+
+    TRACE("%p\n", hwnd);
+
+    /* retrieve the real size of the desktop */
+    SERVER_START_REQ(get_window_rectangles)
+    {
+        req->handle = wine_server_user_handle(hwnd);
+        req->relative = COORDS_CLIENT;
+        wine_server_call(req);
+        width  = reply->window.right;
+        height = reply->window.bottom;
+    }
+    SERVER_END_REQ;
+
+    TRACE("%d, %d\n", width, height);
+
+    if ( !width || !height)  /* not initialized yet */
+    {
+        RECT desktop_rect = get_desktop_rect();
+        width = desktop_rect.right - desktop_rect.left;
+        height = desktop_rect.bottom - desktop_rect.top;
+        SERVER_START_REQ(set_window_pos)
+        {
+            req->handle        = wine_server_user_handle(hwnd);
+            req->previous      = 0;
+            req->swp_flags     = SWP_NOZORDER;
+            req->window.left   = desktop_rect.left;
+            req->window.top    = desktop_rect.top;
+            req->window.right  = desktop_rect.right;
+            req->window.bottom = desktop_rect.bottom;
+            req->client        = req->window;
+            wine_server_call(req);
+        }
+        SERVER_END_REQ;
+    }
+}
+
+LRESULT OHOS_DesktopWindowProc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
+{
+    TRACE( "%p msg:%x, wp: %lx, lp: %lx\n", hwnd, msg, wp, lp );
+
+    switch (msg)
+    {
+    case WM_PARENTNOTIFY:
+        if (LOWORD(wp) == WM_DESTROY) destroy_native_window( (HWND)lp );
+        break;
+    }
+    return NtUserMessageCall( hwnd, msg, wp, lp, 0, NtUserDefWindowProc, FALSE );
+}
+
+
+/***********************************************************************
+ *           OHOS_ProcessEvents
+ */
+BOOL OHOS_ProcessEvents( DWORD mask )
+{
+    if (GetCurrentThreadId() == desktop_tid)
+    {
+        /* don't process nested events */
+        if (current_event) mask = 0;
+        return process_events( mask );
+    }
+    return FALSE;
+}
+
+/**********************************************************************
+ *           OHOS_CreateWindow
+ */
+BOOL OHOS_CreateWindow( HWND hwnd )
+{
+    TRACE( "%p\n", hwnd );
+
+    if (hwnd == NtUserGetDesktopWindow())
+    {
+        struct ohos_win_data *data;
+
+        init_event_queue();
+        if (!(data = alloc_win_data( hwnd ))) return FALSE;
+        release_win_data( data );
+    }
+
+    if ((event_pipe[0] == 0 || event_pipe[1] == 0) && IsMainProcess()) {
+        init_event_queue();
+    }
+    return TRUE;
+}
+
+
+/***********************************************************************
+ *           OHOS_DestroyWindow
+ */
+void OHOS_DestroyWindow( HWND hwnd )
+{
+    struct ohos_win_data *data;
+
+    TRACE("%p\n", hwnd);
+
+    if (!(data = get_win_data( hwnd ))) return;
+    free_win_data( data );
+}
+
+/***********************************************************************
+ *           create_win_data
+ *
+ * Create a data window structure for an existing window.
+ */
+static struct ohos_win_data *create_win_data( HWND hwnd, const struct window_rects *rects )
+{
+    struct ohos_win_data *data;
+    HWND parent;
+
+    /* Don't create win data for desktop or HWND_MESSAGE windows. */
+    if (!(parent = NtUserGetAncestor(hwnd, GA_PARENT))) return NULL;
+    if (parent != NtUserGetDesktopWindow() && !NtUserGetAncestor(parent, GA_PARENT))
+        return NULL;
+    if (NtUserGetWindowThread(hwnd, NULL) != GetCurrentThreadId()) return NULL;
+
+    if (!(data = alloc_win_data( hwnd ))) return NULL;
+
+    data->parent = (parent == NtUserGetDesktopWindow()) ? 0 : parent;
+    data->rects = *rects;
+
+    if (parent == NtUserGetDesktopWindow())
+    {
+        create_native_window( data );
+        TRACE("win %p/%p %p window %s whole %s client %s\n",
+               hwnd, parent, data->window, wine_dbgstr_rect( &data->rects.window ),
+               wine_dbgstr_rect( &data->rects.visible ), wine_dbgstr_rect( &data->rects.client));
+    }
+    else
+    {
+        data->window = NULL;
+        FIXME("win %p/%p window %s whole %s client %s\n",
+               hwnd, parent, wine_dbgstr_rect(&data->rects.window),
+               wine_dbgstr_rect(&data->rects.visible), wine_dbgstr_rect(&data->rects.client));
+    }
+    return data;
+}
+
+static void show_window(struct ohos_win_data *data)
+{
+    if (data->window)
+    {
+        HWND prev = NULL;
+        HWND next = NULL;
+        ohos_window prev_window = NULL;
+        ohos_window next_window = NULL;
+
+        /* find window that this one must be after */
+        prev = NtUserGetWindowRelative(data->hwnd, GW_HWNDPREV);
+        while (prev && !((NtUserGetWindowLongW(prev, GWL_STYLE) & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE &&
+                         (prev_window = get_window(prev))))
+            prev = NtUserGetWindowRelative(prev, GW_HWNDPREV);
+        if (!prev_window)
+        {
+            /* find window that this one must be before */
+            next = NtUserGetWindowRelative(data->hwnd, GW_HWNDNEXT);
+            while (next && !((NtUserGetWindowLongW(next, GWL_STYLE) & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE &&
+                             (next_window = get_window(next))))
+                next = NtUserGetWindowRelative(next, GW_HWNDNEXT);
+        }
+
+        TRACE("win %p/%p below %p/%p above %p/%p\n",
+              data->hwnd, data->window, prev, prev_window, next, next_window);
+
+        set_window_visible(data->hwnd, TRUE);
+        data->on_screen = TRUE;
+    }
+}
+
+static void hide_window(struct ohos_win_data *data)
+{
+    TRACE("win %p/%p\n", data->hwnd, data->window);
+
+    if (data->window)
+        set_window_visible(data->hwnd, FALSE);
+    data->on_screen = FALSE;
+}
+
+static struct ohos_client_surface *impl_from_client_surface( struct client_surface *client )
+{
+    return CONTAINING_RECORD( client, struct ohos_client_surface, client );
+}
+
+static void ohos_client_surface_destroy( struct client_surface *client )
+{
+    struct ohos_client_surface *surface = impl_from_client_surface(client);
+
+    TRACE( "%s\n", debugstr_client_surface( client ) );
+
+    if (surface->window) 
+        destroy_native_window( surface->hwnd );
+}
+
+static void ohos_client_surface_detach( struct client_surface *client )
+{
+    TRACE( "%s\n", debugstr_client_surface( client ) );
+}
+
+static void ohos_client_surface_update( struct client_surface *client )
+{
+    TRACE( "%s\n", debugstr_client_surface( client ) );
+}
+
+static void ohos_client_surface_present( struct client_surface *client, HDC hdc )
+{
+    TRACE( "%s\n", debugstr_client_surface( client ) );
+}
+
+static const struct client_surface_funcs ohos_client_surface_funcs =
+{
+    .destroy = ohos_client_surface_destroy,
+    .detach = ohos_client_surface_detach,
+    .update = ohos_client_surface_update,
+    .present = ohos_client_surface_present,
+};
+
+struct ohos_client_surface *ohos_client_surface_create( HWND hwnd, BOOL force )
+{
+    struct ohos_client_surface *surface;
+
+    if (!(surface = client_surface_create( sizeof(*surface), &ohos_client_surface_funcs, hwnd ))) return NULL;
+
+    NtUserGetClientRect( hwnd, &surface->rect, NtUserGetDpiForWindow( hwnd ) );
+    if (!force) return surface;
+
+    // TODO: Implement the nesting of window surface into client surface.
+    if (!(surface->window = create_client_window( hwnd )))
+    {
+        ERR("Failed to create client surface\n");
+        client_surface_release(&surface->client);
+        return NULL;
+    }
+
+    return surface;
+}
+
+/***********************************************************************
+ *           OHOS_WindowPosChanging
+ */
+BOOL OHOS_WindowPosChanging( HWND hwnd, UINT swp_flags, BOOL shaped, const struct window_rects *rects )
+{
+    struct ohos_win_data *data = get_win_data( hwnd );
+    BOOL ret = FALSE;
+
+    TRACE( "hwnd %p, swp_flags %#x, shaped %u, rects %s\n", hwnd, swp_flags, shaped, debugstr_window_rects( rects ) );
+
+    if (!data && !(data = create_win_data( hwnd, rects ))) return FALSE; /* use default surface */
+
+    if (!IsRectEmpty(&rects->window) && data->lazy_created && !data->window) {
+        data->rects = *rects;
+        data->lazy_created = FALSE;
+        create_native_window( data );
+        TRACE("lazy create win %p %p window_rects %s\n", hwnd, data->window, debugstr_window_rects( &data->rects ));
+    }
+
+    ret = !!data->window;
+    release_win_data(data);
+
+    TRACE( "hwnd %p, ret %d\n", hwnd, ret );
+    return ret;
+}
+
+
+/***********************************************************************
+ *           OHOS_CreateWindowSurface
+ */
+BOOL OHOS_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_rect, struct window_surface **surface )
+{
+    struct window_surface *previous;
+    struct ohos_win_data *data;
+
+    TRACE( "hwnd %p, layered %u, surface_rect %s, surface %p\n", hwnd, layered, wine_dbgstr_rect( surface_rect ), surface );
+
+    if ((previous = *surface) && previous->funcs == &ohos_surface_funcs) return TRUE;
+    if (!(data = get_win_data( hwnd ))) return TRUE; /* use default surface */
+    if (previous) window_surface_release( previous );
+
+    *surface = create_surface( data->hwnd, surface_rect );
+
+    TRACE( "hwnd %p, surface %p ok\n", hwnd, *surface );
+
+    release_win_data( data );
+    return TRUE;
+}
+
+
+/***********************************************************************
+ *           OHOS_WindowPosChanged
+ */
+void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags, BOOL fullscreen,
+                               const struct window_rects *new_rects, struct window_surface *surface )
+{
+    struct ohos_win_data *data;
+    UINT new_style = NtUserGetWindowLongW( hwnd, GWL_STYLE );
+    struct window_rects old_rects;
+
+    if (!(data = get_win_data( hwnd ))) return;
+
+    old_rects = data->rects;
+    data->rects = *new_rects;
+
+    TRACE("win %p/%p new_rects %s style %08x flags %08x surface %p\n", hwnd, data->window,
+          debugstr_window_rects(new_rects), new_style, swp_flags, surface);
+
+    if (!data->window) goto done;
+
+    if (data->on_screen)
+    {
+        if ((swp_flags & SWP_HIDEWINDOW) && !(new_style & WS_VISIBLE))
+            hide_window(data);
+    }
+
+    window_pos_changed( hwnd, new_rects, &old_rects, new_style, swp_flags );
+
+    if (new_style & WS_VISIBLE)
+    {
+        if (data->window)
+        {
+            if (!data->on_screen || (swp_flags & (SWP_FRAMECHANGED | SWP_STATECHANGED)))
+                set_window_properties(data);
+
+            if (!data->on_screen &&
+                (!(NtUserGetWindowLongW( hwnd, GWL_EXSTYLE ) & WS_EX_LAYERED)))
+                show_window(data);
+        }
+        else if (!data->on_screen)
+            show_window(data);
+    }
+
+done:
+    release_win_data(data);
+}
+
+/***********************************************************************
+ *              SetWindowStyle
+ *
+ */
+void OHOS_SetWindowStyle(HWND hwnd, INT offset, STYLESTRUCT *style)
+{
+    struct ohos_win_data *data;
+
+    TRACE("hwnd %p offset %d styleOld 0x%08x styleNew 0x%08x\n", hwnd, offset, style->styleOld, style->styleNew);
+
+    if (hwnd == NtUserGetDesktopWindow()) return;
+    if (!(data = get_win_data(hwnd))) return;
+
+    if (data->window)
+    {
+        DWORD changed = style->styleNew ^ style->styleOld;
+
+        set_window_properties(data);
+
+        if (offset == GWL_EXSTYLE && (changed & WS_EX_LAYERED)) /* changing WS_EX_LAYERED resets attributes */
+        {
+            data->layered = FALSE;
+            sync_window_opacity(data, 0, FALSE, 0);
+        }
+    }
+
+    release_win_data(data);
+}
+
+/*****************************************************************
+ *              SetWindowText
+ */
+void OHOS_SetWindowText(HWND hwnd, LPCWSTR text)
+{
+    struct ohos_win_data *data = get_win_data(hwnd);
+    DWORD text_len;
+    DWORD utf8_count;
+    char *utf8 = NULL;
+
+    TRACE("%p, %s\n", hwnd, debugstr_w(text));
+
+    if (!data || !data->window) goto done;
+
+    text_len = (lstrlenW(text) + 1) * sizeof(WCHAR);
+
+    if (!RtlUnicodeToUTF8N(NULL, 0, &utf8_count, text, text_len) &&
+        (utf8 = malloc(utf8_count)))
+    {
+        RtlUnicodeToUTF8N(utf8, utf8_count, &utf8_count, text, text_len);
+        SetWindowTitle(get_widget_id(hwnd), utf8);
+    }
+
+done:
+    if (utf8) free(utf8);
+    release_win_data(data);
+}
+
+/***********************************************************************
+ *           OHOS_ShowWindow
+ */
+UINT OHOS_ShowWindow( HWND hwnd, INT cmd, RECT *rect, UINT swp )
+{
+    struct ohos_win_data *data = get_win_data(hwnd);
+
+    TRACE("win %p/%p cmd %d at %s flags %08x\n",
+          hwnd, data ? data->window : NULL, cmd, wine_dbgstr_rect(rect), swp);
+
+    if (!data || !data->window) goto done;
+    if (!(NtUserGetWindowLongW( hwnd, GWL_STYLE ) & WS_MINIMIZE)) goto done;
+    /* always hide icons off-screen */
+    if (rect->left != -32000 || rect->top != -32000)
+    {
+        OffsetRect( rect, -32000 - rect->left, -32000 - rect->top );
+        swp &= ~(SWP_NOMOVE | SWP_NOCLIENTMOVE);
+    }
+
+done:
+    release_win_data(data);
+    return swp;
+}
+
+
+/*****************************************************************
+ *	     OHOS_SetParent
+ */
+void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
+{
+    FIXME( "win %p parent %p -> %p\n", hwnd, old_parent, parent );
+}
+
+
+/***********************************************************************
+ *           OHOS_SetCapture
+ */
+void OHOS_SetCapture( HWND hwnd, UINT flags )
+{
+    if (!(flags & (GUI_INMOVESIZE | GUI_INMENUMODE))) return;
+    set_capture( hwnd );
+}
+
+
+static BOOL get_icon_info( HICON handle, ICONINFOEXW *ret )
+{
+    UNICODE_STRING module, res_name;
+    ICONINFO info;
+
+    module.Buffer = ret->szModName;
+    module.MaximumLength = sizeof(ret->szModName) - sizeof(WCHAR);
+    res_name.Buffer = ret->szResName;
+    res_name.MaximumLength = sizeof(ret->szResName) - sizeof(WCHAR);
+    if (!NtUserGetIconInfo( handle, &info, &module, &res_name, NULL, 0 )) return FALSE;
+    ret->fIcon    = info.fIcon;
+    ret->xHotspot = info.xHotspot;
+    ret->yHotspot = info.yHotspot;
+    ret->hbmColor = info.hbmColor;
+    ret->hbmMask  = info.hbmMask;
+    ret->wResID   = res_name.Length ? 0 : LOWORD(res_name.Buffer);
+    ret->szModName[module.Length] = 0;
+    ret->szResName[res_name.Length] = 0;
+    return TRUE;
+}
+
+
+/***********************************************************************
+ *           OHOS_SetCursor
+ */
+void OHOS_SetCursor( HWND hwnd, HCURSOR handle )
+{
+    if (handle)
+    {
+        unsigned int width = 0, height = 0, *bits = NULL;
+        ICONINFOEXW info;
+        int id;
+
+        if (!get_icon_info( handle, &info )) return;
+
+        if (!(id = get_cursor_system_id( &info )))
+        {
+            HDC hdc = NtGdiCreateCompatibleDC( 0 );
+            bits = get_bitmap_argb( hdc, info.hbmColor, info.hbmMask, &width, &height );
+            NtGdiDeleteObjectApp( hdc );
+
+            /* make sure hotspot is valid */
+            if (info.xHotspot >= width || info.yHotspot >= height)
+            {
+                info.xHotspot = width / 2;
+                info.yHotspot = height / 2;
+            }
+        }
+        set_cursor( hwnd, id, width, height, info.xHotspot, info.yHotspot, bits );
+        free( bits );
+        NtGdiDeleteObjectApp( info.hbmColor );
+        NtGdiDeleteObjectApp( info.hbmMask );
+    }
+    else set_cursor( 0, 0, 0, 0, 0, 0, NULL );
+}
+
+/**********************************************************************
+ *           OHOS_WindowMessage
+ */
+LRESULT OHOS_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
+{
+    switch (msg)
+    {
+    case WM_OHOS_REFRESH:
+        NtUserExposeWindowSurface( hwnd, 0, NULL, 0 );
+        return 0;
+    default:
+        FIXME( "got window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, (long)wp, lp );
+        return 0;
+    }
+}

@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE browser_policy_adapter.cc)

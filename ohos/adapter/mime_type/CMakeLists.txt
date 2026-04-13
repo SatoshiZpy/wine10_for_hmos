@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE mime_type_adapter.cc)

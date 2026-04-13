@@ -1404,7 +1404,7 @@ static INT freetype_add_mem_font( void *ptr, SIZE_T size, UINT flags )
     return AddFontToList( NULL, NULL, ptr, size, flags );
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__OHOS__)
 static BOOL ReadFontDir(const char *dirname, BOOL external_fonts)
 {
     DIR *dir;
@@ -1859,7 +1859,7 @@ static void freetype_load_fonts(void)
     load_fontconfig_fonts();
 #elif defined(__APPLE__)
     load_mac_fonts();
-#elif defined(__ANDROID__)
+#elif defined(__ANDROID__) || defined(__OHOS__)
     ReadFontDir("/system/fonts", TRUE);
 #endif
 }

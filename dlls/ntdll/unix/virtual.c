@@ -590,8 +590,9 @@ static size_t unmap_area_above_user_limit( void *addr, size_t size )
 static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
 {
     void *ptr;
-
-#ifdef MAP_FIXED_NOREPLACE
+#ifdef __OHOS__
+    ptr = mmap( start, size, prot, MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
+#elif defined(MAP_FIXED_NOREPLACE)
     ptr = mmap( start, size, prot, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
 #elif defined(MAP_TRYFIXED)
     ptr = mmap( start, size, prot, MAP_TRYFIXED | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
@@ -2781,8 +2782,10 @@ static void *get_host_addr_space_limit(void)
     unsigned int flags = MAP_PRIVATE | MAP_ANON;
     UINT_PTR addr = (UINT_PTR)1 << 63;
 
+#ifndef __OHOS__
 #ifdef MAP_FIXED_NOREPLACE
     flags |= MAP_FIXED_NOREPLACE;
+#endif
 #endif
 
     while (addr >> 32)

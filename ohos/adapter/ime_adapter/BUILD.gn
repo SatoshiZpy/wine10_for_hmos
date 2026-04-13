@@ -1,0 +1,16 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+
+component("ime_adapter") {
+  sources = [
+    "input_method_ohos_adapter.h",
+    "input_method_ohos_adapter.cc",
+    "wine_ime_delegate.h",
+    "wine_ime_delegate.cc"
+  ]
+
+  deps = [ "//third_party/aki:aki_jsbind" ]
+}

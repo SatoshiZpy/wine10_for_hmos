@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE screenlock_monitor_adapter.cc)

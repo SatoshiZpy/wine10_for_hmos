@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE media_adapter.cc media_init.cc)

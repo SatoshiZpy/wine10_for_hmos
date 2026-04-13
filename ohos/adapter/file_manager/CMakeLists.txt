@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE file_manager_adapter.cc)

@@ -61,6 +61,7 @@
 #include "security.h"
 #include "handle.h"
 #include "request_handlers.h"
+#include "logging.h"
 
 /* Some versions of glibc don't define this */
 #ifndef SCM_RIGHTS
@@ -142,6 +143,29 @@ void fatal_protocol_error( struct thread *thread, const char *err, ... )
 }
 
 /* die on a fatal error */
+#ifdef __OHOS__
+void fatal_error(const char* err, ...) {
+    va_list args;
+    
+    va_start(args, err);
+    int length = vsnprintf(NULL, 0, err, args);
+    va_end(args);
+    
+    assert(length > 0);
+    
+    char* buffer = (char*)malloc(length + 1);
+    assert(buffer != NULL);
+    
+    va_start(args, err);
+    vsnprintf(buffer, length + 1, err, args);
+    va_end(args);
+    
+    LOGE("wineserver: %{public}s", buffer);
+    free(buffer);
+
+    exit(1);
+}
+#else
 void fatal_error( const char *err, ... )
 {
     va_list args;
@@ -152,6 +176,7 @@ void fatal_error( const char *err, ... )
     va_end( args );
     exit(1);
 }
+#endif
 
 /* allocate the reply data */
 void *set_reply_data_size( data_size_t size )
@@ -643,6 +668,9 @@ static char *create_server_dir( int force )
 #ifdef __ANDROID__  /* there's no /tmp dir on Android */
     if (asprintf( &base_dir, "%s/.wineserver", config_dir ) == -1)
         fatal_error( "out of memory\n" );
+#elif defined (__OHOS__) /* there's no /tmp dir on Openharmony */
+    if (asprintf( &base_dir, "%s/.wineserver", config_dir ) == -1)
+        fatal_error( "out of memory\n" );
 #else
     if (asprintf( &base_dir, "/tmp/.wine-%u", getuid() ) == -1)
         fatal_error( "out of memory\n" );
@@ -884,7 +912,11 @@ void open_master_socket(void)
             close( sync_pipe[1] );
 
             /* wait for child to signal us and then exit */
+#ifdef __OHOS__
+            if (read( sync_pipe[0], &dummy, 1 ) != 1) fatal_error( "fork error dummy: %d\n", dummy);
+#else
             if (read( sync_pipe[0], &dummy, 1 ) == 1) _exit(0);
+#endif
 
             /* child terminated, propagate exit status */
             waitpid( pid, &status, 0 );

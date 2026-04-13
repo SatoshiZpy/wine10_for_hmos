@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE cert_manager_adapter.cc)

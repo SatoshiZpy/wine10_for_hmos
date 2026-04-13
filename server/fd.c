@@ -94,6 +94,7 @@
 #include "handle.h"
 #include "process.h"
 #include "request.h"
+#include "logging.h"
 
 #include "winternl.h"
 #include "winioctl.h"

@@ -3450,7 +3450,11 @@ typedef struct tagCHANGEFILTERSTRUCT
 #define  MSGFLT_ALLOW    1
 #define  MSGFLT_DISALLOW 2
 
+#ifdef __OHOS__
+#define USER_DEFAULT_SCREEN_DPI 192
+#else
 #define USER_DEFAULT_SCREEN_DPI 96
+#endif
 
 typedef enum tagAR_STATE {
     AR_ENABLED       = 0x0,

@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE default_application_adapter.cc)

@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE text_to_speech_adapter.cc)

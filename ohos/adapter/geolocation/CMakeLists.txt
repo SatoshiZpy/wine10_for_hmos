@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE location_info.cc location_proxy_adapter_impl.cpp)

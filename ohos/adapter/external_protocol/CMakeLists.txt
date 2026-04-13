@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE external_protocol_adapter.cc)

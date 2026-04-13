@@ -33,6 +33,10 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 
+#ifdef __OHOS__
+#include "ohos_adapter.h" 
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 
 #define USER_HANDLE_TO_INDEX(hwnd) ((LOWORD(hwnd) - FIRST_USER_HANDLE) >> 1)
@@ -5506,6 +5510,22 @@ static void fix_cs_coordinates( CREATESTRUCTW *cs, INT *sw )
     }
 }
 
+#ifdef __OHOS__
+static void adjust_cs_coordinates( CREATESTRUCTW *cs )
+{
+    RECT rect;
+    struct window_bounds bounds = GetInitialBounds();
+    SetRect(&rect, bounds.left, bounds.top, bounds.width + bounds.left, bounds.height + bounds.top);
+    if (!IsRectEmpty(&rect)) {
+        cs->x = rect.left;
+        cs->y = rect.top;
+        cs->cx = rect.right - rect.left;
+        cs->cy = rect.bottom - rect.top;
+    }
+    TRACE("rect: %s\n", wine_dbgstr_rect( &rect ));
+}
+#endif
+
 /***********************************************************************
  *           map_dpi_create_struct
  */
@@ -5601,6 +5621,9 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     }
 
     fix_cs_coordinates( &cs, &sw );
+#ifdef __OHOS__
+    adjust_cs_coordinates(&cs);
+#endif
     cs.dwExStyle = fix_exstyle( cs.style, cs.dwExStyle );
 
     /* Create the window structure */

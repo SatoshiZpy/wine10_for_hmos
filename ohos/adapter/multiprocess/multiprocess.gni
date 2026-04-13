@@ -1,0 +1,10 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+declare_args() {
+  # The enable_isolate_process is set to false because the new interface has not
+  # been released.
+  # set to true to debug with the trunk sdk 5.0.0.41
+  enable_isolate_process = true
+}

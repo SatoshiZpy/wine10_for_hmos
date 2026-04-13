@@ -41,6 +41,7 @@
 #include "winternl.h"
 #include "unix_private.h"
 #include "wine/debug.h"
+#include "wine/logging.h"
 
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(timestamp);
@@ -223,6 +224,22 @@ static void init_options(void)
     parse_options( wine_debug, app_name );
 }
 
+#ifdef __OHOS__
+static enum __wine_debug_class get_debug_class(const char *str) {
+    if (str == NULL) {
+        return __WINE_DBCL_TRACE;
+    }
+    
+    for (int i = 0; i < ARRAY_SIZE(debug_classes); i++) {
+        if (strstr(str, debug_classes[i]) != NULL) {
+            return (enum __wine_debug_class)i;
+        }
+    }
+    
+    return __WINE_DBCL_TRACE;
+}
+#endif
+
 /***********************************************************************
  *		__wine_dbg_get_channel_flags  (NTDLL.@)
  *
@@ -279,6 +296,33 @@ NTSTATUS unixcall_wine_dbg_write( void *args )
 {
     struct wine_dbg_write_params *params = args;
 
+#ifdef __OHOS__
+        char *buffer = malloc(params->len + 1);
+        if (buffer) {
+            memcpy(buffer, params->str, params->len);
+            buffer[params->len] = '\0';
+
+            enum __wine_debug_class cls = get_debug_class(buffer);
+            switch (cls)
+            {
+                case __WINE_DBCL_FIXME:
+                case __WINE_DBCL_WARN:
+                    LOGW("wine-dll: %{public}s", buffer);
+                    break;
+                case __WINE_DBCL_ERR:
+                    LOGE("wine-dll: %{public}s", buffer);
+                    break;
+                case __WINE_DBCL_TRACE:
+                    LOGI("wine-dll: %{public}s", buffer);
+                    break;
+                default:
+                    LOGD("wine-dll: %{public}s", buffer);
+                    break;
+            }
+
+            free(buffer);
+        }
+#endif
     return write( 2, params->str, params->len );
 }
 
@@ -294,6 +338,33 @@ NTSTATUS wow64_wine_dbg_write( void *args )
         unsigned int len;
     } const *params32 = args;
 
+#ifdef __OHOS__
+        char *buffer = malloc(params32->len + 1);
+        if (buffer) {
+            memcpy(buffer, ULongToPtr(params32->str), params32->len);
+            buffer[params32->len] = '\0';
+
+            enum __wine_debug_class cls = get_debug_class(buffer);
+            switch (cls)
+            {
+                case __WINE_DBCL_FIXME:
+                case __WINE_DBCL_WARN:
+                    LOGW("wine-dll: %{public}s", buffer);
+                    break;
+                case __WINE_DBCL_ERR:
+                    LOGE("wine-dll: %{public}s", buffer);
+                    break;
+                case __WINE_DBCL_TRACE:
+                    LOGI("wine-dll: %{public}s", buffer);
+                    break;
+                default:
+                    LOGD("wine-dll: %{public}s", buffer);
+                    break;
+            }
+
+            free(buffer);
+        }
+#endif
     return write( 2, ULongToPtr(params32->str), params32->len );
 }
 #endif
@@ -310,6 +381,33 @@ int __cdecl __wine_dbg_output( const char *str )
     if (end)
     {
         ret += append_output( info, str, end + 1 - str );
+#ifdef __OHOS__
+        char *buffer = malloc(info->out_pos + 1);
+        if (buffer) {
+            memcpy(buffer, info->output, info->out_pos);
+            buffer[info->out_pos] = '\0';
+
+            enum __wine_debug_class cls = get_debug_class(buffer);
+            switch (cls)
+            {
+                case __WINE_DBCL_FIXME:
+                case __WINE_DBCL_WARN:
+                    LOGW("wine: %{public}s", buffer);
+                    break;
+                case __WINE_DBCL_ERR:
+                    LOGE("wine: %{public}s", buffer);
+                    break;
+                case __WINE_DBCL_TRACE:
+                    LOGI("wine: %{public}s", buffer);
+                    break;
+                default:
+                    LOGD("wine: %{public}s", buffer);
+                    break;
+            }
+
+            free(buffer);
+        }
+#endif
         write( 2, info->output, info->out_pos );
         info->out_pos = 0;
         str = end + 1;
@@ -322,7 +420,7 @@ int __cdecl __wine_dbg_output( const char *str )
  *		__wine_dbg_header  (NTDLL.@)
  */
 int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_channel *channel,
-                               const char *function )
+                               const char *function, const char *file, int line )
 {
     static const char * const classes[] = { "fixme", "err", "warn", "trace" };
     struct debug_info *info = get_info();
@@ -341,7 +439,7 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
             pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%3u.%03u:", ticks / 1000, ticks % 1000 );
         }
         if (TRACE_ON(pid)) pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", GetCurrentProcessId() );
-        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", GetCurrentThreadId() );
+        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:(%s:%d):", GetCurrentThreadId(), file, line );
     }
     if (function && cls < ARRAY_SIZE( classes ))
         pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",

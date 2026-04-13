@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE node_handle_impl.cc)

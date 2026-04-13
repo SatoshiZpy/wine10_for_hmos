@@ -1,0 +1,14 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+
+component("screenlock_monitor") {
+  sources = [
+    "screenlock_monitor_adapter.cc",
+    "screenlock_monitor_adapter.h",
+  ]
+
+  deps = [ "//third_party/aki:aki_jsbind" ]
+}

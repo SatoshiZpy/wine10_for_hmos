@@ -69,12 +69,17 @@
 #include <sys/thr.h>
 #endif
 
+#ifdef __OHOS__
+# include "ohos_adapter.h"
+#endif
+
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "winternl.h"
 #include "ddk/wdm.h"
 #include "wine/server.h"
 #include "wine/debug.h"
+#include "wine/logging.h"
 #include "unix_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(thread);
@@ -1446,6 +1451,7 @@ done:
  */
 void abort_thread( int status )
 {
+    ERR("abort_thread code=%d, nb_threads=%d\n", get_unix_exit_code( status ), nb_threads);
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
     if (InterlockedDecrement( &nb_threads ) <= 0) abort_process( status );
     pthread_exit_wrapper( status );
@@ -1457,7 +1463,12 @@ void abort_thread( int status )
  */
 void abort_process( int status )
 {
+    ERR("abort_process code=%d\n", get_unix_exit_code( status ));
+#ifdef __OHOS__
+    KillNativeProcess(get_unix_exit_code( status ), 1);
+#else
     _exit( get_unix_exit_code( status ));
+#endif
 }
 
 
@@ -1468,6 +1479,8 @@ static DECLSPEC_NORETURN void exit_thread( int status )
 {
     static void *prev_teb;
     TEB *teb;
+
+    ERR("exit_thread code=%d\n, nb_threads=%d", get_unix_exit_code( status ), nb_threads);
 
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
 
@@ -1492,6 +1505,7 @@ static DECLSPEC_NORETURN void exit_thread( int status )
  */
 void exit_process( int status )
 {
+    ERR("exit_process code=%d\n", get_unix_exit_code( status ));
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
     process_exit_wrapper( get_unix_exit_code( status ));
 }

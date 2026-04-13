@@ -1,0 +1,47 @@
+# Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/ohos/config.gni")
+import("//build/config/chrome_build.gni")
+
+component("web_entry") {
+    sources = [
+      "chrome/chrome_loader.cc",
+      "chrome/chrome_loader.h",
+      "shell/content_shell_loader.cc",
+      "shell/content_shell_loader.h",
+      "wine/wine_loader.cc",
+      "wine/wine_loader.h",
+      "web_entry_init.cc",
+      "web_entry_init.h",
+      "web_entry.cc",
+      "web_entry.h",
+      "web_loader_factory.cc",
+      "web_loader.cc",
+      "web_loader.h",
+    ]
+
+    if (ohos_build_target == "content_shell") {
+      defines = [ "USE_LOADER_TARGET=0" ]
+    } else if (ohos_build_target == "chromium") {
+      defines = [ "USE_LOADER_TARGET=1" ]
+    } else if (ohos_build_target == "wine") {
+      defines = [ "USE_LOADER_TARGET=2" ]
+    } else {
+      assert(true, "$ohos_build_target target builds are not supported on ohos")
+    }
+
+    cflags = [
+      "-Wno-error=delete-incomplete",
+      "-Wno-error=writable-strings",
+      "-Wno-error=parentheses-equality"
+    ]
+
+    deps = [
+      "//ohos/adapter/life_cycle:life_cycle",
+      "//ohos/adapter/dev_config:dev_config",
+    ]
+
+    libs = [ "hilog_ndk.z" ]
+}

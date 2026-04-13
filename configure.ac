@@ -1012,6 +1012,35 @@ case $host_os in
     fi
     ;;
 
+  linux-ohos*)
+    LIBEXT="so"
+    AC_DEFINE(_GNU_SOURCE,1,[Define to 1 to enable GNU extensions on Linux])
+    AC_DEFINE(__OHOS__,1,[Define for openharmong systems])
+    DLLFLAGS="$DLLFLAGS -fPIC"
+    LDDLLFLAGS="-fPIC"
+    LDEXECFLAGS="-Wl,-pie"
+    enable_wineohos_drv=${enable_wineohos_drv:-yes}
+    dnl declare needed libs
+    AC_SUBST(OHOS_LIBS,"-lhilog_ndk.z -lnative_window -ludmf -lpasteboard -lace_ndk.z")
+    AC_SUBST(ADAPTER_LIBS,"-ladapter")
+    WINE_TRY_CFLAGS([-Wl,-z,defs],[UNIXLDFLAGS="$UNIXLDFLAGS -Wl,-z,defs"])
+    WINE_TRY_CFLAGS([-fPIC -Wl,--export-dynamic],[WINELOADER_LDFLAGS="-Wl,--export-dynamic"])
+    WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
+
+    WINE_CHECK_SONAME(GLESv2,glFlush)
+    WINE_CHECK_SONAME(GLESv3,glFlush)
+
+    if test "x$exec_prefix" = xNONE
+    then
+      case $HOST_ARCH in
+        i386)    exec_prefix='${prefix}/x86' ;;
+        x86_64)  exec_prefix='${prefix}/x86_64' ;;
+        arm)     exec_prefix='${prefix}/armeabi-v7a' ;;
+        aarch64) exec_prefix='${prefix}/arm64-v8a' ;;
+      esac
+    fi
+    ;;
+
   *)
     AC_DEFINE(_GNU_SOURCE,1,[Define to 1 to enable GNU extensions on Linux])
     if test $HOST_ARCH = i386
@@ -1069,6 +1098,7 @@ esac
 enable_winecoreaudio_drv=${enable_winecoreaudio_drv:-no}
 enable_wineandroid_drv=${enable_wineandroid_drv:-no}
 enable_winemac_drv=${enable_winemac_drv:-no}
+enable_wineohos_drv=${enable_wineohos_drv:-no}
 
 dnl **** External libraries ****
 
@@ -1436,7 +1466,7 @@ WINE_NOTICE_WITH(wayland, [test -z "$WAYLAND_CLIENT_LIBS" -o -z "$WAYLAND_SCANNE
                  [Wayland ${notice_platform}development files not found, the Wayland driver won't be supported.],
                  [enable_winewayland_drv])
 
-if test "$enable_wineandroid_drv$enable_winemac_drv$enable_winewayland_drv" = "nonono"
+if test "$enable_wineandroid_drv$enable_winemac_drv$enable_winewayland_drv$enable_wineohos_drv" = "nononono"
 then
     WINE_ERROR_WITH(x,[test "x$X_LIBS" = "x"],
 [X ${notice_platform}development files not found. Wine will be built
@@ -1936,7 +1966,7 @@ then
   WINE_TRY_CFLAGS([-Werror=unused-command-line-argument],[CFLAGS="$CFLAGS -Werror=unused-command-line-argument"])
   WINE_TRY_CFLAGS([-Werror=ignored-optimization-argument],[CFLAGS="$CFLAGS -Werror=ignored-optimization-argument"])
   WINE_TRY_CFLAGS([-fcf-protection=none])
-  WINE_TRY_CFLAGS([-fvisibility=hidden])
+  WINE_TRY_CFLAGS([-fvisibility=default])
   WINE_TRY_CFLAGS([-fno-stack-protector])
   WINE_TRY_CFLAGS([-fno-strict-aliasing])
   WINE_TRY_CFLAGS([-Wdeclaration-after-statement])
@@ -2070,13 +2100,29 @@ fi
 
 dnl **** Platform-specific checks ****
 
-AC_SUBST(WINELOADER_PROGRAMS,"wine")
+case $host_os in
+  linux-ohos*)
+    AC_SUBST(WINELOADER_PROGRAMS,"libwine.so")
+    AC_SUBST(WINESERVER_PROGRAMS,"libwineserver.so")
+  ;;
+  *)
+    AC_SUBST(WINELOADER_PROGRAMS,"wine")
+    AC_SUBST(WINESERVER_PROGRAMS,"wineserver")
+  ;;
+esac
 
 case $host_os in
+  linux-ohos*)
+    if test $HOST_ARCH != unknown
+    then
+      wine_use_preloader=no
+    fi
+    ;; 
   linux*)
     if test $HOST_ARCH != unknown
     then
       wine_use_preloader=yes
+      
     fi
     ;;
 esac
@@ -3331,6 +3377,7 @@ WINE_CONFIG_MAKEFILE(dlls/winegstreamer)
 WINE_CONFIG_MAKEFILE(dlls/winehid.sys)
 WINE_CONFIG_MAKEFILE(dlls/winemac.drv)
 WINE_CONFIG_MAKEFILE(dlls/winemapi)
+WINE_CONFIG_MAKEFILE(dlls/wineohos.drv)
 WINE_CONFIG_MAKEFILE(dlls/wineoss.drv)
 WINE_CONFIG_MAKEFILE(dlls/wineps.drv)
 WINE_CONFIG_MAKEFILE(dlls/wineps16.drv16)

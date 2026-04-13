@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE accessibility_adapter.cc accessibility_delegate_ohos_registry.cc)

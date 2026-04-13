@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE ohos_i18n.cc)

@@ -1,0 +1,32 @@
+// Copyright (c) 2024 Huawei Device Co., Ltd. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import { WineStatusBarEntryAbility } from 'wine_engine';
+import { AbilityConstant, UIExtensionContentSession, Want } from '@kit.AbilityKit';
+
+  export default class StatusBarEntryAbility extends WineStatusBarEntryAbility {
+  onCreate(launchParam: AbilityConstant.LaunchParam) {
+    super.onCreate(launchParam)
+  }
+
+  onForeground() {
+    super.onForeground()
+  }
+
+  onBackground() {
+    super.onBackground()
+  }
+
+  onDestroy() {
+    super.onDestroy()
+  }
+
+  onSessionCreate(want: Want, session: UIExtensionContentSession) {
+    super.onSessionCreate(want, session)
+  }
+
+  onSessionDestroy(session: UIExtensionContentSession) {
+    super.onSessionDestroy(session)
+  }
+}

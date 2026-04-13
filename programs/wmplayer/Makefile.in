@@ -2,6 +2,18 @@ MODULE    = wmplayer.exe
 
 EXTRADLLFLAGS = -mwindows -municode
 
+DEFINES = -DUSE_WMPLAYER_MF
+
 SOURCES = \
 	main.c \
 	version.rc
+
+IMPORTS = \
+	mfplat \
+	mfplay \
+	mfuuid \
+	uuid \
+	ole32 \
+	user32 \
+	gdi32 \
+	advapi32

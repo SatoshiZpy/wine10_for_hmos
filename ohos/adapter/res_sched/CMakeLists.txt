@@ -1,0 +1,1 @@
+target_sources(adapter PRIVATE res_sched.cc manager/background_manager_api_wrapper.cc manager/res_api_wrapper.cc manager/throttle_manager.cc)
