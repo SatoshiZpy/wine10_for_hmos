@@ -88,7 +88,7 @@ if [ ! -d "${BUILD_TOOLS}" ]; then
     mkdir -p ${BUILD_TOOLS}
     cd ${BUILD_TOOLS}
 
-    ac_cv_clang_supports_no_default_config=no ../configure --without-x
+    ../configure --without-x
     make -j$(nproc)
 
     echo "build x86 wine done"
@@ -147,7 +147,8 @@ make -j$(nproc)
 echo "install wine in: ${INSTALL_DIR}"
 make install-lib
 
-cp ${FREETYPE_PREFIX}/lib/libfreetype.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
+cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so
+cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so.6
 cp ${ADAPTER_DIR}/lib/libadapter.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 
@@ -155,6 +156,7 @@ echo "copy resources"
 cd ${ROOT_DIR}/
 mkdir -p ohos/app/wine_engine/src/main/resources/resfile/lib/wine
 cp out/lib/wine/aarch64-unix/*.so ohos/app/wine_engine/libs/arm64-v8a
+cp out/lib/wine/aarch64-unix/libfreetype.so.6 ohos/app/wine_engine/libs/arm64-v8a
 cp -r out/share ohos/app/wine_engine/src/main/resources/resfile/
 cp -r out/lib/wine/aarch64-windows ohos/app/wine_engine/src/main/resources/resfile/lib/wine/
 
