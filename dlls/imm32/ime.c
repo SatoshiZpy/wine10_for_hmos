@@ -508,6 +508,15 @@ BOOL WINAPI ImeSelect( HIMC himc, BOOL select )
 BOOL WINAPI ImeSetActiveContext( HIMC himc, BOOL flag )
 {
     TRACE( "himc %p, flag %#x stub!\n", himc, flag );
+#ifdef __OHOS__
+    INPUTCONTEXT *ctx;
+    ctx = ImmLockIMC( himc );
+    if (ctx)
+    {
+        NtUserNotifyIMEStatus( ctx->hWnd, flag );
+        ImmUnlockIMC( himc );
+    }
+#endif
     return TRUE;
 }
 
