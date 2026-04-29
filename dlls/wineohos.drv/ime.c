@@ -164,8 +164,6 @@ void ime_attach()
     IMEAttachTextInput(showKeyboard, &text_config, reason);
 }
 
-// when the screen is locked in the attach state, 
-// wine needs to be attached again after the screen is unlocked.
 void OHOS_NotifyIMEStatus(HWND hwnd, UINT status)
 {
     TRACE("notify ime status, hwnd : %d, status : %u\n", hwnd, status);
@@ -205,4 +203,15 @@ BOOL OHOS_SetIMECompositionRect(HWND hwnd, RECT rect)
     IMENotifyCursorUpdate(&g_cursor_info);
 
     return TRUE;
+}
+
+void ime_on_screen_unlock(void)
+{
+    lock_ime_state();
+    if (ime_enabled && ime_focused_hwnd)
+    {
+        TRACE("screen unlocked, re-attaching ime\n");
+        ime_attach();
+    }
+    unlock_ime_state();
 }

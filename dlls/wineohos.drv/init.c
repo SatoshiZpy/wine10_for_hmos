@@ -342,6 +342,7 @@ static HRESULT ohos_init( void *arg )
     RegisterInputEventCallBack(distribute_input_event_callback);
     RegisterWindowEventCallBack(distribute_input_event_callback);
     RegisterIMEEventCallBack(send_ime_event);
+    StartListeningForScreenlock(send_screenlock_event);
 
     return STATUS_SUCCESS;
 }

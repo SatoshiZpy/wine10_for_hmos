@@ -18,6 +18,7 @@
 #include "ohos/adapter/multiprocess/child_process/child_process.h"
 #include "ohos/adapter/multiprocess/child_process/child_process_helper.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
+#include "ohos/adapter/screenlock_monitor/screenlock_monitor_adapter.h"
 #include "ohos/adapter/xcomponent/adapter/input_event_callback_adapter.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
 #include "ohos/adapter/xcomponent/event/window_event_common.h"
@@ -481,6 +482,15 @@ void IMENotifyCursorUpdate(const struct ime_cursor_info* cursor_info)
   info.width = cursor_info->width;
   info.height = cursor_info->height;
   InputMethodAdapter::GetInstance().NotifyCursorUpdate(info);
+}
+
+void StartListeningForScreenlock(screenlock_event_callback callback)
+{
+  if (callback == nullptr) {
+    LOGE("screenlock_event_callback is nullptr!");
+    return;
+  }
+  ScreenlockMonitorAdapter::GetInstance().StartListeningForScreenlock(callback);
 }
 
 EXTERN_C_END

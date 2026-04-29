@@ -86,6 +86,9 @@ ADAPTER_API void IMEDetachTextInput();
 ADAPTER_API void IMEUpdateAttribute(const struct ime_input_attribute input_attribute);
 ADAPTER_API void IMENotifyCursorUpdate(const struct ime_cursor_info* cursor_info);
 
+/* screenlock */
+ADAPTER_API void StartListeningForScreenlock(screenlock_event_callback callback);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

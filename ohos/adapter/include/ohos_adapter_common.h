@@ -112,6 +112,8 @@ struct launch_options
   int id[MAX_SEND_FDS];
 };
 
+typedef void (*screenlock_event_callback)(const char* event_type);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

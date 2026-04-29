@@ -327,6 +327,8 @@ static int process_events( DWORD mask )
             continue;  /* skip it */
         case IME_EVENT:
             break;
+        case SCREENLOCK_EVENT:
+            break;
         default:
             if (mask & QS_SENDMESSAGE) break;
             continue;  /* skip it */
@@ -401,6 +403,9 @@ static int process_events( DWORD mask )
             break;
         case IME_EVENT:
             distribute_ime_callback(&(event->data.ime.data));
+            break;
+        case SCREENLOCK_EVENT:
+            distribute_screenlock_callback(event->data.screenlock.unlocked);
             break;
         default:
             FIXME("got event %u\n", event->data.type);

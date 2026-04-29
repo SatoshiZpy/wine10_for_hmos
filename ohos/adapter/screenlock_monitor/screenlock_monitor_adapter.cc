@@ -5,6 +5,7 @@
 #include "ohos/adapter/screenlock_monitor/screenlock_monitor_adapter.h"
 
 #include "ohos/adapter/aki_hook/aki_hook.h"
+#include "ohos/adapter/common/logging.h"
 
 namespace ohos::adapter {
 
@@ -13,17 +14,23 @@ ScreenlockMonitorAdapter& ScreenlockMonitorAdapter::GetInstance() {
   return instance;
 }
 
-void ScreenlockMonitorAdapter::StartListeningForScreenlock(
-    ScreenlockEventCallback screenlock_event_callback) {
+void ScreenlockMonitorAdapter::StartListeningForScreenlock(screenlock_event_callback callback) {
+  screenlock_event_callback_ = callback;
+
   auto start_listening_func = ohos::adapter::GetJSFunction(
       "ScreenlockMonitorAdapter.StartListeningForScreenlock");
-  if (start_listening_func) {
-    std::function<void(const std::string&)> callback =
-      [=](const std::string& event_type) {
-        screenlock_event_callback(event_type);
-      };
-    start_listening_func->Invoke<void>(callback);
+  if (start_listening_func == nullptr) {
+    LOGE("start_listening_func is nullptr");
+    return;
   }
+
+  std::function<void(const std::string&)> event_callback =
+    [=](const std::string& event_type) {
+      if (screenlock_event_callback_) {
+        screenlock_event_callback_(event_type.c_str());
+      }
+    };
+  start_listening_func->Invoke<void>(event_callback);
 }
 
 void ScreenlockMonitorAdapter::StopListeningForScreenlock() {

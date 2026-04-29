@@ -117,6 +117,7 @@ enum event_type
     MOTION_EVENT,
     KEYBOARD_EVENT,
     IME_EVENT,
+    SCREENLOCK_EVENT,
 };
 
 struct ime_data
@@ -135,6 +136,11 @@ extern BOOL OHOS_SetIMECompositionRect( HWND hwnd, RECT rect );
 extern void send_ime_event( const ime_event* event );
 extern void ime_attach();
 extern void distribute_ime_callback( const struct ime_data* data );
+extern void ime_on_screen_unlock(void);
+
+/* screenlock */
+extern void send_screenlock_event( const char* event_type );
+extern void distribute_screenlock_callback( int unlocked );
 
 union event_data
 {
@@ -177,6 +183,11 @@ union event_data
         enum event_type type;
         struct ime_data data;
     } ime;
+    struct
+    {
+        enum event_type type;
+        int unlocked;
+    } screenlock;
 };
 
 int send_event( const union event_data *data );
