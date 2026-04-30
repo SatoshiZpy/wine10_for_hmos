@@ -1983,7 +1983,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
     if (status == STATUS_DLL_NOT_FOUND &&
         (strpbrk( main_argv[1], "/\\" ) || (main_argv[1][0] && main_argv[1][1] == ':')))
     {
-        MESSAGE( "wine: failed to open %s\n", debugstr_a(main_argv[1]) );
+        MESSAGE( "failed to open %s\n", debugstr_a(main_argv[1]) );
         NtTerminateProcess( GetCurrentProcess(), status );
     }
 

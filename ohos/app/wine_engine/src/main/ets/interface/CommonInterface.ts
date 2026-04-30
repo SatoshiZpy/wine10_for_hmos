@@ -108,7 +108,6 @@ export interface NativeContext {
 }
 
 export interface IParams {
-  callback: (id: number) => void,
   id: number,
   size: number[], // [width, height]
   initColorRgb: number,
@@ -291,7 +290,7 @@ export enum WindowState {
   WINDOW_MAXIMIZED,
   WINDOW_FULL_SCREEN,
   WINDOW_SPLIT_MODE,
-  WINDOW_VISIABLE,
+  WINDOW_VISIBLE,
 };
 
 export class WindowStyles {
@@ -318,6 +317,11 @@ export interface NewWindowParam {
   init_color_argb: number,
   hwnd: number,
   owner_pid: number,
+}
+
+export interface IWindowInfo {
+  id: number,
+  localStorage: LocalStorage,
 }
 
 export interface ISubWindowInfo {

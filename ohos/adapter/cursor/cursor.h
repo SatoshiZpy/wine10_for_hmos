@@ -69,7 +69,7 @@ struct CustomCusorInfo {
   std::shared_ptr<char[]> buff;
 };
 
-void ADAPTER_EXPORT_API SetCursorVisible(const bool visiable);
+void ADAPTER_EXPORT_API SetCursorVisible(const bool visible);
 void ADAPTER_EXPORT_API SetCursor(int32_t id, const OhosCursorType cursor_type);
 void ADAPTER_EXPORT_API SetCustomCursor(CustomCusorInfo& cursor_info);
 

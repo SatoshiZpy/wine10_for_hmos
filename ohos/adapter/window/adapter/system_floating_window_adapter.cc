@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ohos/adapter/window/system_floating_window_adapter.h"
+#include "ohos/adapter/window/adapter/system_floating_window_adapter.h"
 
 #include "ohos/adapter/aki_hook/aki_hook.h"
 
@@ -13,12 +13,25 @@ SystemFloatingWindowAdapter& SystemFloatingWindowAdapter::GetInstance() {
   return instance;
 }
 
-void SystemFloatingWindowAdapter::Create(const NewWindowParam& param) {
-  auto jsFunc =
-      ohos::adapter::GetJSFunction("SystemFloatingWindow.CreateWindow");
-  if (jsFunc) {
-    jsFunc->Invoke<void>(param);
+int32_t SystemFloatingWindowAdapter::Create(const NewWindowParam& param) {
+  auto promise = std::make_shared<std::promise<int32_t>>();
+  std::function<void(int32_t)> callback =
+    [promise](int32_t reply_id) {
+      promise->set_value(reply_id);
+    };
+
+  if (auto jsFunc = ohos::adapter::GetJSFunction("SystemFloatingWindow.CreateWindow")) {
+    jsFunc->Invoke<void>(param, callback);
+    auto future = promise->get_future();
+    auto status = future.wait_for(std::chrono::seconds(3));
+    if (status == std::future_status::timeout) {
+      LOGE("SystemFloatingWindow::Create timeout");
+      return -1;
+    }
+    return future.get();
   }
+  LOGE("SystemFloatingWindow::Create error");
+  return -1;
 }
 
 void SystemFloatingWindowAdapter::Close(int32_t id) {

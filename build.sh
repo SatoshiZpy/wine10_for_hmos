@@ -8,6 +8,9 @@ BUILD_TOOLS=${ROOT_DIR}/nativeBuild
 BUILD_DIR=${ROOT_DIR}/build
 INSTALL_DIR=${ROOT_DIR}/out
 ADAPTER_DIR=${ROOT_DIR}/ohos/adapter
+LLVM_DIR=${ROOT_DIR}/third_party/llvm
+ARM64EC_BUILD_DIR=${ROOT_DIR}/arm64ecbuild
+ARM64EC_INSTALL_DIR=${ROOT_DIR}/out-arm64ec
 
 OHOS_SDK=${ROOT_DIR}/ohos_sdk/command-line-tools/sdk/default/openharmony
 CMAKE_PATH=${OHOS_SDK}/native/build-tools/cmake/bin/cmake
@@ -16,18 +19,24 @@ CMAKE_FILE_PATH=${OHOS_SDK}/native/build/cmake/ohos.toolchain.cmake
 
 # Processing parameters
 NO_CACHE=0
+BUILD_ARM64EC=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-cache)
             NO_CACHE=1
             shift
             ;;
+	--build-arm64ec)
+            BUILD_ARM64EC=1
+            shift
+            ;;
         -h|--help)
             echo "用法: $0 [--no-cache]"
             echo ""
             echo "选项:"
-            echo "  --no-cache    清理所有缓存后重新编译"
-            echo "  -h, --help    显示此帮助信息"
+            echo "  --no-cache        清理所有缓存后重新编译"
+            echo "  --build-arm64ec   编译arm64ec/wow64 mode dll"
+	    echo "  -h, --help        显示此帮助信息"
             exit 0
             ;;
         *)
@@ -77,7 +86,12 @@ export PATH=$PATH:${ROOT_DIR}/ohos_sdk/command-line-tools/bin
 # ./build_gstreamer_ohos.sh
 
 # Build third_party freetype
-source  ${ROOT_DIR}/third_party/freetypebuild.sh
+source ${ROOT_DIR}/third_party/freetypebuild.sh
+
+# Build wine dll for arm64ec and wow64 mode
+if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+	source ${ROOT_DIR}/buildarm64ec.sh
+fi
 
 # Build x86 wine
 cd ${ROOT_DIR}
@@ -147,6 +161,9 @@ make -j$(nproc)
 echo "install wine in: ${INSTALL_DIR}"
 make install-lib
 
+if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+	cp ${INSTALL_DIR}/lib/wine/aarch64-windows/wineboot.exe ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
+fi
 cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so
 cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so.6
 cp ${ADAPTER_DIR}/lib/libadapter.so ${INSTALL_DIR}/lib/wine/aarch64-unix/

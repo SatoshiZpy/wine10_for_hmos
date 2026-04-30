@@ -929,6 +929,24 @@ void open_master_socket(void)
         acquire_lock();
     }
 
+#ifdef __OHOS__
+    int sync_fd = -1;
+    const char *env_fd = getenv( "WINESYNCPIPE" );
+    if (!env_fd) fatal_error( "WINESYNCPIPE set to invalid value\n" );
+
+    sync_fd = atoi( env_fd );
+    LOGD("get sync_fd=%{public}d", sync_fd);
+    if (fcntl( sync_fd, F_SETFD, FD_CLOEXEC ) == -1)
+        fatal_error( "Bad sync fd %d\n", sync_fd );
+
+    /* signal parent */
+    dummy = 0;
+    if (write( sync_fd, &dummy, 1 ) != 1) fatal_error( "write dummy error: (%d:%s)\n", errno, strerror( errno ));
+
+    close( sync_fd );
+    unsetenv( "WINESYNCPIPE" );
+#endif
+
     /* init the process tracing mechanism */
     init_tracing_mechanism();
     close( fd );

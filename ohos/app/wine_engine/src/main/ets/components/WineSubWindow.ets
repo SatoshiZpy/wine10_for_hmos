@@ -16,15 +16,12 @@ export struct WineSubWindow {
   @LocalStorageLink('subWindowParams') params: IParams = {
     id: -1,
     size: [0, 0], // [width, height]
-    callback: (id: number) => {
-    },
     initColorRgb: 0xffffff,
     ownerPid: -1,
   };
   private widgetId: number = this.params.id;
   private ownerPid: number = this.params.ownerPid;
   private LIBRARY_NAME: string = 'adapter';
-  private callback: (id: number) => void = this.params.callback;
   private XCOMPONENT_NAME: string = 'subXcomponent';
   private MODULE_NAME: string = this.widgetId + ':' + this.XCOMPONENT_NAME + ':' + this.ownerPid;
   private dragDropAdapter: DragDropAdapter = Inject.get(DragDropAdapter);
@@ -92,7 +89,6 @@ export struct WineSubWindow {
       })
       .onLoad(() => {
         LogUtil.info(WineSubWindow.TAG, 'onLoad xComponent:' + this.MODULE_NAME);
-        this.callback(this.widgetId);
       })
       .id(this.XCOMPONENT_NAME)
   }

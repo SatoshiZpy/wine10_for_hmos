@@ -91,6 +91,7 @@ enum ohos_window_messages
     WM_OHOS_REFRESH = WM_WINE_FIRST_DRIVER_MSG,
 };
 
+extern struct window_state get_window_state(HWND hwnd);
 extern struct window_features get_window_features_for_style(DWORD style, DWORD ex_style);
 extern int get_widget_id( HWND hwnd );
 extern HWND get_capture_window(void);
@@ -107,6 +108,7 @@ extern WORD vkey_to_scancode[];
 extern const UINT keycode_to_vkey( int keycode );
 extern void send_keyboard_input( HWND hwnd, WORD vkey, WORD scan, DWORD flags );
 extern void update_keyboard_lock_state( WORD vkey, UINT state );
+extern void sync_modifier_key_state( WORD vkey, uint64_t modifier_key_states );
 extern void distribute_input_event_callback( const input_event* event );
 
 enum event_type
@@ -170,6 +172,7 @@ union event_data
         enum event_type type;
         HWND            hwnd;
         UINT            lock_state;
+        uint64_t        modifier_key_states;
         INPUT           input;
     } kbd;
     struct

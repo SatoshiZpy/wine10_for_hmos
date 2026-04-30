@@ -170,9 +170,6 @@ void WindowAdapter::NotifyKeyboardHeightEvent(int32_t widget_id, int32_t height)
     MutexLock lock(keyboard_height_mutex_);
     auto itCallback = keyboard_height_callbacks_.find(widget_id);
     if (itCallback != keyboard_height_callbacks_.end()) {
-        LOGI("WindowAdapter::NotifyKeyboardHeightEvent widget_id: %{public}d, "
-             "keyboardHeight: %{public}d",
-             widget_id, height);
         auto callback = keyboard_height_callbacks_[widget_id];
         callback(widget_id, height);
     }
@@ -244,7 +241,6 @@ void WindowCachedEventQueue::AddCacheEventToQueue(std::shared_ptr<Event> event)
     if (event->type() == EventType::ET_WINDOW_CHANGE && !first_occluded_event_received_) {
         auto window_event = static_pointer_cast<WindowChangeEvent>(event);
         if (window_event->window_event_type_ == WindowEventType::WINDOW_OCCLUDED) {
-            LOGW("first WINDOW_OCCLUDED event will not cached");
             first_occluded_event_received_ = true;
             return;
         }

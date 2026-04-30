@@ -21,7 +21,7 @@ class ADAPTER_EXPORT_API SystemFloatingWindowAdapter {
  public:
   static SystemFloatingWindowAdapter& GetInstance();
 
-  void Create(const NewWindowParam& param);
+  int32_t Create(const NewWindowParam& param);
   void Close(int32_t id);
   void SetBounds(int32_t id,
                  const WindowRect& rect);

@@ -31,7 +31,6 @@
 #include "winnls.h"
 #include "excpt.h"
 #include "wine/debug.h"
-#include "wine/logging.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 
@@ -347,7 +346,10 @@ void CDECL perror(const char* str)
     }
     _write( 2, MSVCRT__sys_errlist[err], strlen(MSVCRT__sys_errlist[err]) );
     _write( 2, "\n", 1 );
-    LOGE("errmsg:%{public}s, errno:%{public}d, error:%{public}s", str, err, MSVCRT__sys_errlist[err]);
+
+#ifdef __OHOS__
+    ERR("%s: %d, error:%s\n", str, err, MSVCRT__sys_errlist[err]);
+#endif
 }
 
 /*********************************************************************

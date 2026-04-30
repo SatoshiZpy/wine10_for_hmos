@@ -217,6 +217,10 @@ static inline WCHAR facename_tolower( WCHAR c )
 
 static inline int facename_compare( const WCHAR *str1, const WCHAR *str2, SIZE_T len )
 {
+    if (!str1 && !str2) return 0;
+    if (!str1) return -1;
+    if (!str2) return 1;
+
     while (len--)
     {
         WCHAR c1 = facename_tolower( *str1++ ), c2 = facename_tolower( *str2++ );

@@ -33,7 +33,7 @@
 
 #include "mock_utils.h"
 #include "ohos/adapter/browser/browser_adapter.h"
-#include "ohos/adapter/window/app_window_adapter.h"
+#include "ohos/adapter/window/adapter/app_window_adapter.h"
 
 namespace ohos::adapter {
 class IBrowserAdapter {

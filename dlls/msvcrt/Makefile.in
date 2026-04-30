@@ -3,7 +3,6 @@ MODULE    = msvcrt.dll
 IMPORTLIB = msvcrt
 IMPORTS   = $(MUSL_PE_LIBS) ntdll
 DELAYIMPORTS = advapi32 user32
-UNIX_LIBS = $(OHOS_LIBS)
 
 SOURCES = \
 	concurrency.c \

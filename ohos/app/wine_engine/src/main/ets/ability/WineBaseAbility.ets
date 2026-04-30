@@ -59,7 +59,7 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
     this.initParameters(want);
 
     if (this.widgetId <= 0) {
-      this.widgetId = this.nativeContext.ExecuteCommand(CommandType.kGetWidget, {}).widget_Id;
+      this.widgetId = ConfigData.DEFAULT_WIDGET_ID;
       this.ownerPid = this.nativeContext.ExecuteCommand(CommandType.kGetPid, {}).pid;
     }
     LogUtil.info(TAG, 'widgetId:' + this.widgetId + ',ownerPid:' + this.ownerPid + ',styles:' + JSON.stringify(this.styles));

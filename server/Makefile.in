@@ -1,5 +1,6 @@
 PROGRAMS = $(WINESERVER_PROGRAMS)
 INSTALL_LIB = $(WINESERVER_PROGRAMS)
+EXTRAINCL = -I$(top_srcdir)/ohos/adapter/include
 
 SOURCES = \
 	async.c \
@@ -49,9 +50,8 @@ SOURCES = \
 	winstation.c
 
 UNIX_CFLAGS = $(INOTIFY_CFLAGS)
-#UNIX_LIBS   = $(LDEXECFLAGS) $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS)
 
-libwineserver_so_LDFLAGS = -shared $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS) $(OHOS_LIBS)
+libwineserver_so_LDFLAGS = -shared $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS) $(OHOS_LIBS) $(ADAPTER_LIBS)
 wineserver_LDFLAGS = $(LDEXECFLAGS) $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS)
 
 

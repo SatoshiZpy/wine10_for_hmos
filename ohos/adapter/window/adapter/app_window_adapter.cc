@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ohos/adapter/window/app_window_adapter.h"
+#include "ohos/adapter/window/adapter/app_window_adapter.h"
 
 #include "ohos/adapter/aki_hook/aki_hook.h"
+#include "ohos/adapter/common/logging.h"
 
 namespace ohos::adapter::window {
 
@@ -13,11 +14,25 @@ AppWindowAdapter& AppWindowAdapter::GetInstance() {
   return instance;
 }
 
-void AppWindowAdapter::Create(const NewWindowParam& param) {
-  auto jsFunc = ohos::adapter::GetJSFunction("AppWindow.CreateWindow");
-  if (jsFunc) {
-    jsFunc->Invoke<void>(param);
+int32_t AppWindowAdapter::Create(const NewWindowParam& param) {
+  auto promise = std::make_shared<std::promise<int32_t>>();
+  std::function<void(int32_t)> callback =
+    [promise](int32_t reply_id) {
+      promise->set_value(reply_id);
+    };
+
+  if (auto jsFunc = ohos::adapter::GetJSFunction("AppWindow.CreateWindow")) {
+    jsFunc->Invoke<void>(param, callback);
+    auto future = promise->get_future();
+    auto status = future.wait_for(std::chrono::seconds(3));
+    if (status == std::future_status::timeout) {
+      LOGE("AppWindowAdapter::Create timeout");
+      return -1;
+    }
+    return future.get();
   }
+  LOGE("AppWindowAdapter::Create error");
+  return -1;
 }
 
 void AppWindowAdapter::Close(int32_t id) {

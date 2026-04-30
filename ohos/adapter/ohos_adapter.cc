@@ -10,6 +10,7 @@
 
 #include "ohos/adapter/common/constants.h"
 #include "ohos/adapter/common/logging.h"
+#include "ohos/adapter/common/mutex.h"
 #include "ohos/adapter/cursor/cursor.h"
 #include "ohos/adapter/ime_adapter/input_method_adapter.h"
 #include "ohos/adapter/ime_adapter/wine_ime_delegate.h"
@@ -18,6 +19,7 @@
 #include "ohos/adapter/multiprocess/child_process/child_process.h"
 #include "ohos/adapter/multiprocess/child_process/child_process_helper.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
+#include "ohos/adapter/window/wine_window_manager.h"
 #include "ohos/adapter/xcomponent/adapter/input_event_callback_adapter.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
 #include "ohos/adapter/xcomponent/event/window_event_common.h"
@@ -31,6 +33,8 @@ using namespace ohos::adapter::life_cycle;
 using namespace ohos::adapter::xcomponent;
 using namespace ohos::adapter::multiprocess;
 using namespace ohos::adapter::window;
+
+static Mutex mutex;
 
 static window_features_mask get_features_mask(const struct window_features* features)
 {
@@ -113,8 +117,8 @@ static window_state_mask get_window_state_mask(const struct window_state* state)
         mask |= state_mask_for_type(WindowState::WINDOW_SPLIT_MODE);
     }
 
-    if (state && state->visiable) {
-        mask |= state_mask_for_type(WindowState::WINDOW_VISIABLE);
+    if (state && state->visible) {
+        mask |= state_mask_for_type(WindowState::WINDOW_VISIBLE);
     }
 
     return mask;
@@ -150,9 +154,10 @@ static ipc::DisplayParam GetDisplay()
 
 static void UpdateWindow(int widget_id, const ipc::WindowParam& param)
 {
+    MutexLock lock_protect(mutex);
     if (!IsMainProcess()) {
         // todo: Implement function in a child process
-        LOGW("update window in a child process is not supported");
+        LOGW("performed in a child process is not supported");
         return;
     }
     ChildProcessHelper::UpdateWindow(widget_id, param);
@@ -160,40 +165,43 @@ static void UpdateWindow(int widget_id, const ipc::WindowParam& param)
 
 ohos_window CreateNativeWindow(const struct window_param* param, int* widget_id)
 {
+    MutexLock lock_protect(mutex);
     if (!param) {
         LOGE("invalid param");
         return nullptr;
     }
-    ipc::WindowParam init_param = Builder(param);
-    int create_id = -1;
+
     if (!IsMainProcess()) {
         // todo: Implement function in a child process
-        LOGW("Creating windows in a child process is not supported");
-    } else {
-        create_id = ChildProcessHelper::CreateWindow(std::move(init_param));
-    }
-
-    if (create_id <= 0) {
-        LOGE("Cannot create window");
+        LOGW("performed in a child process is not supported");
         return nullptr;
     }
-    LOGI("create window ok, widget_id: %{public}d", create_id);
+
+    ipc::WindowParam init_param = Builder(param);
+    int create_id = ChildProcessHelper::CreateWindow(std::move(init_param));
+    if (create_id <= 0) {
+        return nullptr;
+    }
+    auto window = WineWindowManager::GetInstance().GetWindow(create_id);
     *widget_id = create_id;
-    return WindowAdapter::GetInstance().GetWindow(create_id);
+    return (ohos_window)window.get();
 }
 
 void CloseNativeWindow(int widget_id)
 {
+    MutexLock lock_protect(mutex);
     if (!IsMainProcess()) {
         // todo: Implement function in a child process
-        LOGW("close window in a child process is not supported");
+        LOGW("performed in a child process is not supported");
         return;
     }
     ChildProcessHelper::CloseWindow(widget_id);
+    WineWindowManager::GetInstance().RemoveWindow(widget_id);
 }
 
 int StartNativeProcess(int argc, char** argv, const struct launch_options* options)
 {
+    MutexLock lock_protect(mutex);
     if (!options) {
         LOGE("invalid launch_options");
         return -1;
@@ -225,29 +233,35 @@ void SetCustomCursor(int widget_id, int width, int height, int hotspot_x, int ho
         LOGE("invalid bits");
         return;
     }
-    if (IsMainProcess()) {
-        size_t buff_size = width * height * sizeof(unsigned int);
-        std::shared_ptr<char[]> buff = std::make_shared<char[]>(buff_size);
-        std::memcpy(buff.get(), bits, buff_size);
-        CustomCusorInfo cursor_info{widget_id, width, height, hotspot_x, hotspot_y, buff};
-        SetCustomCursor(cursor_info);
+
+    if (!IsMainProcess()) {
+        // todo: Implement function in a child process
+        LOGW("performed in a child process is not supported");
+        return;
     }
+
+    size_t buff_size = width * height * sizeof(unsigned int);
+    std::shared_ptr<char[]> buff = std::make_shared<char[]>(buff_size);
+    std::memcpy(buff.get(), bits, buff_size);
+    CustomCusorInfo cursor_info{widget_id, width, height, hotspot_x, hotspot_y, buff};
+    SetCustomCursor(cursor_info);
 }
 
 void SetWindowBounds(int widget_id, const struct window_bounds* bounds)
 {
+    MutexLock lock_protect(mutex);
     if (!bounds) {
         LOGE("invalid bounds");
         return;
     }
-
-    WindowRect window_rect = {bounds->left, bounds->top, bounds->width, bounds->height};
     if (!IsMainProcess()) {
         // todo: Implement function in a child process
-        LOGW("set window bounds in a child process is not supported");
+        LOGW("performed in a child process is not supported");
         return;
     }
-    ChildProcessHelper::SetWindowBounds(widget_id, window_rect);
+
+    WindowRect rect = {bounds->left, bounds->top, bounds->width, bounds->height};
+    ChildProcessHelper::SetWindowBounds(widget_id, std::move(rect));
 }
 
 void SetParentWindow(int widget_id, int parent_id)
@@ -272,14 +286,19 @@ void SetWindowAlpha(int widget_id, float opacity)
 
 void SetWindowTitle(int widget_id, const char* title)
 {
-    // todo: impl function
+    if (!IsMainProcess()) {
+        // todo: Implement function in a child process
+        LOGW("performed in a child process is not supported");
+        return;
+    }
+    ChildProcessHelper::SetWindowTitle(widget_id, title);
 }
 
 void SetWindowVisible(int widget_id, int visible)
 {
     if (!IsMainProcess()) {
         // todo: Implement function in a child process
-        LOGW("set window visible in a child process is not supported");
+        LOGW("performed in a child process is not supported");
         return;
     }
     ChildProcessHelper::SetWindowVisible(widget_id, visible);
@@ -289,6 +308,7 @@ struct window_bounds GetInitialBounds()
 {
     window_bounds bounds = {0};
     if (!IsMainProcess()) {
+        LOGW("performed in a child process is not supported");
         return bounds;
     }
 
@@ -302,6 +322,21 @@ struct window_bounds GetInitialBounds()
     bounds.width = window_rect.width;
     bounds.height = window_rect.height;
     return bounds;
+}
+
+ohos_native_window GetNativeWindow(ohos_window* w)
+{
+    if (!IsMainProcess()) {
+        // todo: Implement function in a child process
+        LOGW("performed in a child process is not supported");
+        return nullptr;
+    }
+    WineWindow* window = (WineWindow*)w;
+    if (!window) {
+        LOGE("invalid wine window");
+        return nullptr;
+    }
+    return window->GetNativeWindow();
 }
 
 struct window_bounds GetDisplayAvailArea()
