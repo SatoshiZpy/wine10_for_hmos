@@ -6,14 +6,25 @@ import("//build/config/ohos/config.gni")
 
 component("window") {
   sources = [
-    "app_window_adapter.h",
-    "app_window_adapter.cc",
-    "system_floating_window_adapter.h",
-    "system_floating_window_adapter.cc",
-    "sub_window_adapter.h",
-    "sub_window_adapter.cc",
+    "adapter/app_window_adapter.h",
+    "adapter/app_window_adapter.cc",
+    "adapter/system_floating_window_adapter.h",
+    "adapter/system_floating_window_adapter.cc",
+    "adapter/sub_window_adapter.h",
+    "adapter/sub_window_adapter.cc",
     "window_common.h",
     "window_common.cc",
+    "wine_float_window.h",
+    "wine_float_window.cc",
+    "wine_popup_window.h",
+    "wine_popup_window.cc",
+    "wine_toplevel_window.h",
+    "wine_toplevel_window.cc",
+    "wine_window_factory.cc",
+    "wine_window_manager.h",
+    "wine_window_manager.cc",
+    "wine_window.h",
+    "wine_window.cc",
   ]
 
   deps = [ "//third_party/aki:aki_jsbind" ]

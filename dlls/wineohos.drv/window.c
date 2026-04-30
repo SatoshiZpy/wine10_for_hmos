@@ -138,20 +138,52 @@ static inline BOOL can_window_become_foreground(HWND hwnd)
     return !(style & WS_DISABLED);
 }
 
-static void get_window_state(struct ohos_win_data *data,
-                             DWORD style, DWORD ex_style,
-                             struct window_state* state)
+struct window_state get_window_state(HWND hwnd)
 {
-    memset(state, 0, sizeof(*state));
-    state->disabled = (style & WS_DISABLED) != 0;
-    state->no_foreground = !can_window_become_foreground(data->hwnd);
-    state->top_most = (ex_style & WS_EX_TOPMOST) != 0;
-    state->excluded_by_control = (!(ex_style & WS_EX_APPWINDOW) &&
-                                     (NtUserGetWindowRelative(data->hwnd, GW_OWNER) ||
-                                     (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))));
-    state->minimized = (style & WS_MINIMIZE) != 0;
-    state->minimized_valid = state->minimized != data->minimized;
-    state->maximized = (style & WS_MAXIMIZE) != 0;
+    struct window_state ws = {0};
+    DWORD style, ex_style;
+
+    style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+    ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
+
+    ws.disabled = (style & WS_DISABLED) != 0;
+    ws.no_foreground = !can_window_become_foreground(hwnd);
+    ws.top_most = (ex_style & WS_EX_TOPMOST) != 0;
+    ws.excluded_by_control = (!(ex_style & WS_EX_APPWINDOW) &&
+                                (NtUserGetWindowRelative(hwnd, GW_OWNER) ||
+                                (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))));
+    ws.minimized = (style & WS_MINIMIZE) != 0;
+    ws.maximized = (style & WS_MAXIMIZE) != 0;
+
+    ws.visible = ((style & WS_VISIBLE) == WS_VISIBLE) && (!(ex_style & WS_EX_LAYERED));
+    return ws;
+}
+
+struct window_features get_window_features_for_style(DWORD style, DWORD ex_style)
+{
+    struct window_features wf = {0};
+
+    if (ex_style & WS_EX_NOACTIVATE) wf.prevents_app_activation = TRUE;
+
+    if ((style & WS_CAPTION) == WS_CAPTION && !(ex_style & WS_EX_LAYERED))
+    {
+        wf.shadow = TRUE;
+        wf.title_bar = TRUE;
+        if (style & WS_SYSMENU) wf.close_button = TRUE;
+        if (style & WS_MINIMIZEBOX) wf.minimize_button = TRUE;
+        if (style & WS_MAXIMIZEBOX) wf.maximize_button = TRUE;
+    }
+    if (style & WS_THICKFRAME)
+    {
+        wf.shadow = TRUE;
+        wf.resizable = TRUE;
+    }
+    else if (ex_style & WS_EX_DLGMODALFRAME) wf.shadow = TRUE;
+    else if ((style & (WS_DLGFRAME | WS_BORDER)) == WS_DLGFRAME) wf.shadow = TRUE;
+
+    wf.use_floating_window = FALSE;
+    wf.use_dark_mode = FALSE;
+    return wf;
 }
 
 static void set_window_properties(struct ohos_win_data *data)
@@ -176,9 +208,10 @@ static void set_window_properties(struct ohos_win_data *data)
     wf = get_window_features_for_style(style, ex_style);
     SetWindowFeatures(widget_id, &wf);
 
-    get_window_state(data, style, ex_style, &state);
+    state = get_window_state(data->hwnd);
     SetWindowState(widget_id, &state);
-    if (state.minimized_valid)
+
+    if (state.minimized != data->minimized)
         data->minimized = state.minimized;
 }
 
@@ -397,6 +430,7 @@ static int process_events( DWORD mask )
                 TRACE("KEYDOWN hwnd %p vkey %x '%c' scancode %x\n", event->data.kbd.hwnd, event->data.kbd.input.ki.wVk,
                       event->data.kbd.input.ki.wVk, event->data.kbd.input.ki.wScan);
             update_keyboard_lock_state(event->data.kbd.input.ki.wVk, event->data.kbd.lock_state);
+            sync_modifier_key_state(event->data.kbd.input.ki.wVk, event->data.kbd.modifier_key_states);
             NtUserSendHardwareInput(0, 0, &event->data.kbd.input, 0);
             break;
         case IME_EVENT:
@@ -1291,7 +1325,33 @@ done:
  */
 void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
 {
-    FIXME( "win %p parent %p -> %p\n", hwnd, old_parent, parent );
+    DWORD style, ex_style;
+    struct ohos_win_data *data;
+
+    if (parent == old_parent) return;
+    if (!(data = get_win_data( hwnd ))) return;
+
+    style = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
+    ex_style = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
+
+    TRACE( "hwnd %p parent %p -> %p style %08x ex_style %08x window_rects %s\n",
+        data->hwnd, old_parent, parent, style, ex_style, debugstr_window_rects(&data->rects) );
+
+    if (parent != NtUserGetDesktopWindow()) /* a child window */
+    {
+        if (old_parent == NtUserGetDesktopWindow())
+        {
+            /* destroy the old ohos window */
+            destroy_native_window(old_parent);
+        }
+    }
+    else  /* new top level window */
+    {
+        create_native_window(data);
+    }
+
+    data->parent = (parent == NtUserGetDesktopWindow()) ? 0 : parent;
+    release_win_data(data);
 }
 
 

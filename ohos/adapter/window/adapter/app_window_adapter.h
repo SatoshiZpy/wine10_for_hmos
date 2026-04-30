@@ -19,7 +19,7 @@ class ADAPTER_EXPORT_API AppWindowAdapter {
   using ChangeSizeCallback = std::function<void()>;
   static AppWindowAdapter& GetInstance();
 
-  void Create(const NewWindowParam& param);
+  int32_t Create(const NewWindowParam& param);
   void Close(int32_t id);
   void Show(int32_t id);
   void Hide(int32_t id);

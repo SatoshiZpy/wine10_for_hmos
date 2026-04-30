@@ -44,7 +44,6 @@
 #include "mtdll.h"
 #include "wine/asm.h"
 #include "wine/debug.h"
-#include "wine/logging.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 
@@ -5242,7 +5241,7 @@ static int puts_clbk_file_a(void *file, int len, const char *str)
 {
 #ifdef __OHOS__
     if (((FILE*)file)->_file == STDOUT_FILENO || ((FILE*)file)->_file == STDERR_FILENO)
-        LOGI("%{public}s", str);
+        TRACE("%s\n", str);
 #endif
     return fwrite(str, sizeof(char), len, file);
 }

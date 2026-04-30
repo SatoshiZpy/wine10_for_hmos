@@ -36,7 +36,8 @@ extern "C" {
 # define ADAPTER_API ADAPTER_IMPORT
 #endif
 
-typedef OHNativeWindow* ohos_window;
+typedef struct ohosdrv_opaque_window* ohos_window;
+typedef OHNativeWindow* ohos_native_window;
 typedef OHNativeWindowBuffer* ohos_window_buffer;
 typedef BufferHandle* ohos_buffer_handle;
 
@@ -51,6 +52,7 @@ ADAPTER_API void SetWindowAlpha(int widget_id, float opacity);
 ADAPTER_API void SetWindowTitle(int widget_id, const char* title);
 ADAPTER_API void SetWindowVisible(int widget_id, int visible);
 ADAPTER_API struct window_bounds GetInitialBounds(void);
+ADAPTER_API ohos_native_window GetNativeWindow(ohos_window* w);
 
 /* process */
 ADAPTER_API int StartNativeProcess(int argc, char **argv, const struct launch_options *options);

@@ -38,7 +38,7 @@
 namespace ohos::adapter {
 class ICursorAdapter {
  public:
-  virtual void SetCursorVisible(const bool visiable) = 0;
+  virtual void SetCursorVisible(const bool visible) = 0;
   virtual void SetCursor(int32_t id, const OhosCursorType cursor_type) = 0;
   virtual void SetCustomCursor(CustomCusorInfo& cursor_info) = 0;
 };

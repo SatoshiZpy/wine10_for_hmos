@@ -36,6 +36,10 @@
 #include "request.h"
 #include "unicode.h"
 
+#ifdef __OHOS__
+# include "ohos_adapter.h"
+#endif
+
 /* command-line options */
 int debug_level = 0;
 int foreground = 0;
@@ -244,5 +248,20 @@ int main( int argc, char *argv[] )
 
 __attribute((visibility("default"))) int wine_main(int argc, char *argv[])
 {
+#ifdef __OHOS__
+    LOGD("argc: %{public}d\n", argc);
+    for (int i = 0; i < argc; i++) {
+       LOGD("args: %{public}s\n", argv[i]); 
+    }
+
+    int fd = GetGlobalDescriptor(FILE_DIR_DESCRIPTOR);
+    if (fd > 0) {
+        char fd_env[64];
+        snprintf( fd_env, sizeof(fd_env), "WINESYNCPIPE=%u", fd );
+
+        LOGD("get fd_env = %{public}s\n", fd_env);
+        putenv( fd_env );
+    }
+#endif
     return main(argc, argv);
 }

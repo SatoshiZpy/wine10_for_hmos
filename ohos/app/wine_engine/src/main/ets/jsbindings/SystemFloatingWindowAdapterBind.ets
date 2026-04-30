@@ -11,8 +11,8 @@ function implSystemFloatingWindowAdapter(): SystemFloatingWindowAdapter {
   return Inject.getOrCreate(SystemFloatingWindowAdapter);
 }
 
-function createWindow(param: NewWindowParam) {
-  implSystemFloatingWindowAdapter().createWindow(param);
+function createWindow(param: NewWindowParam, callback: (id: number) => void) {
+  implSystemFloatingWindowAdapter().createWindow(param, callback);
 }
 
 function closeWindow(id: number) {

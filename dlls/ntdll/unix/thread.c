@@ -1451,7 +1451,7 @@ done:
  */
 void abort_thread( int status )
 {
-    ERR("abort_thread code=%d, nb_threads=%d\n", get_unix_exit_code( status ), nb_threads);
+    TRACE("abort_thread code=%d, nb_threads=%d\n", get_unix_exit_code( status ), nb_threads);
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
     if (InterlockedDecrement( &nb_threads ) <= 0) abort_process( status );
     pthread_exit_wrapper( status );
@@ -1463,7 +1463,7 @@ void abort_thread( int status )
  */
 void abort_process( int status )
 {
-    ERR("abort_process code=%d\n", get_unix_exit_code( status ));
+    TRACE("abort_process code=%d\n", get_unix_exit_code( status ));
 #ifdef __OHOS__
     KillNativeProcess(get_unix_exit_code( status ), 1);
 #else
@@ -1480,7 +1480,7 @@ static DECLSPEC_NORETURN void exit_thread( int status )
     static void *prev_teb;
     TEB *teb;
 
-    ERR("exit_thread code=%d\n, nb_threads=%d", get_unix_exit_code( status ), nb_threads);
+    TRACE("exit_thread code=%d\n, nb_threads=%d", get_unix_exit_code( status ), nb_threads);
 
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
 
@@ -1505,7 +1505,7 @@ static DECLSPEC_NORETURN void exit_thread( int status )
  */
 void exit_process( int status )
 {
-    ERR("exit_process code=%d\n", get_unix_exit_code( status ));
+    TRACE("exit_process code=%d\n", get_unix_exit_code( status ));
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
     process_exit_wrapper( get_unix_exit_code( status ));
 }

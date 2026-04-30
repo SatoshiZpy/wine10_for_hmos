@@ -297,31 +297,31 @@ NTSTATUS unixcall_wine_dbg_write( void *args )
     struct wine_dbg_write_params *params = args;
 
 #ifdef __OHOS__
-        char *buffer = malloc(params->len + 1);
-        if (buffer) {
-            memcpy(buffer, params->str, params->len);
-            buffer[params->len] = '\0';
+    char *buffer = malloc(params->len + 1);
+    if (buffer) {
+        memcpy(buffer, params->str, params->len);
+        buffer[params->len] = '\0';
 
-            enum __wine_debug_class cls = get_debug_class(buffer);
-            switch (cls)
-            {
-                case __WINE_DBCL_FIXME:
-                case __WINE_DBCL_WARN:
-                    LOGW("wine-dll: %{public}s", buffer);
-                    break;
-                case __WINE_DBCL_ERR:
-                    LOGE("wine-dll: %{public}s", buffer);
-                    break;
-                case __WINE_DBCL_TRACE:
-                    LOGI("wine-dll: %{public}s", buffer);
-                    break;
-                default:
-                    LOGD("wine-dll: %{public}s", buffer);
-                    break;
-            }
-
-            free(buffer);
+        enum __wine_debug_class cls = get_debug_class(buffer);
+        switch (cls)
+        {
+            case __WINE_DBCL_FIXME:
+            case __WINE_DBCL_WARN:
+                LOGW("wine-dll: %{public}s", buffer);
+                break;
+            case __WINE_DBCL_ERR:
+                LOGE("wine-dll: %{public}s", buffer);
+                break;
+            case __WINE_DBCL_TRACE:
+                LOGI("wine-dll: %{public}s", buffer);
+                break;
+            default:
+                LOGD("wine-dll: %{public}s", buffer);
+                break;
         }
+
+        free(buffer);
+    }
 #endif
     return write( 2, params->str, params->len );
 }
@@ -339,31 +339,31 @@ NTSTATUS wow64_wine_dbg_write( void *args )
     } const *params32 = args;
 
 #ifdef __OHOS__
-        char *buffer = malloc(params32->len + 1);
-        if (buffer) {
-            memcpy(buffer, ULongToPtr(params32->str), params32->len);
-            buffer[params32->len] = '\0';
+    char *buffer = malloc(params32->len + 1);
+    if (buffer) {
+        memcpy(buffer, ULongToPtr(params32->str), params32->len);
+        buffer[params32->len] = '\0';
 
-            enum __wine_debug_class cls = get_debug_class(buffer);
-            switch (cls)
-            {
-                case __WINE_DBCL_FIXME:
-                case __WINE_DBCL_WARN:
-                    LOGW("wine-dll: %{public}s", buffer);
-                    break;
-                case __WINE_DBCL_ERR:
-                    LOGE("wine-dll: %{public}s", buffer);
-                    break;
-                case __WINE_DBCL_TRACE:
-                    LOGI("wine-dll: %{public}s", buffer);
-                    break;
-                default:
-                    LOGD("wine-dll: %{public}s", buffer);
-                    break;
-            }
-
-            free(buffer);
+        enum __wine_debug_class cls = get_debug_class(buffer);
+        switch (cls)
+        {
+            case __WINE_DBCL_FIXME:
+            case __WINE_DBCL_WARN:
+                LOGW("wine-dll: %{public}s", buffer);
+                break;
+            case __WINE_DBCL_ERR:
+                LOGE("wine-dll: %{public}s", buffer);
+                break;
+            case __WINE_DBCL_TRACE:
+                LOGI("wine-dll: %{public}s", buffer);
+                break;
+            default:
+                LOGD("wine-dll: %{public}s", buffer);
+                break;
         }
+
+        free(buffer);
+    }
 #endif
     return write( 2, ULongToPtr(params32->str), params32->len );
 }

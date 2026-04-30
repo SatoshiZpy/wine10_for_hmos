@@ -11,9 +11,7 @@ function implSubWindowAdapter(): SubWindowAdapter {
   return Inject.getOrCreate(SubWindowAdapter);
 }
 
-function createSubWindow(
-  param: NewWindowParam,
-  callback: (id: number) => void) {
+function createSubWindow(param: NewWindowParam, callback: (id: number) => void) {
   implSubWindowAdapter().createSubWindow(param, callback)
 }
 

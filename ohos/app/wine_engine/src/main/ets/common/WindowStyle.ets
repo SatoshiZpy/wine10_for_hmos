@@ -47,7 +47,7 @@ export class WindowStyle {
     styles.resizable = is_enable && this.hasValue(WindowFeatures.WINDOW_RESIZABLE, features);
     styles.focusable = is_enable && !this.hasValue(WindowFeatures.WINDOW_NO_ACTIVATION, features);
     styles.touchable = is_enable && this.hasValue(WindowFeatures.WINDOW_TOUCHABLE, features);
-    styles.show_widow = this.hasValue(WindowState.WINDOW_VISIABLE, window_state);
+    styles.show_widow = this.hasValue(WindowState.WINDOW_VISIBLE, window_state);
     return styles;
   }
 };

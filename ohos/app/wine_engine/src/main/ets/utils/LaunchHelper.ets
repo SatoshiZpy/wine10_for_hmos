@@ -12,27 +12,32 @@ const TAG: string = 'LaunchHelper';
 export default class LaunchHelper {
   static LaunchWithOptions(uiContext: Context | undefined,
                            want: Want,
-                           options: StartOptions): boolean {
-    try {
-      let context = uiContext as common.UIAbilityContext ||
-        uiContext as common.UIExtensionContext;
-      if (!context) {
-        LogUtil.error(TAG, `excute failed, want: ${JSON.stringify(want)}, options:  ${JSON.stringify(options)}`);
-        return false;
+                           options: StartOptions): Promise<boolean> {
+    return new Promise<boolean>((resolve, reject) => {
+      try {
+        let context = uiContext as common.UIAbilityContext ||
+          uiContext as common.UIExtensionContext;
+        if (!context) {
+          LogUtil.error(TAG, `excute failed, want: ${JSON.stringify(want)}, options: ${JSON.stringify(options)}`);
+          resolve(false);
+          return;
+        }
+        context.startAbility(want, options)
+          .then(() => {
+            resolve(true);
+          })
+          .catch((error: BusinessError) => {
+            LogUtil.error(TAG, `excute failed. Cause: ${JSON.stringify(error)}`);
+            resolve(false);
+          });
+      } catch (exception) {
+        LogUtil.error(TAG, `excute failed exception. Cause: ${JSON.stringify(exception)}`);
+        resolve(false);
       }
-      context.startAbility(want, options)
-        .catch((error: BusinessError) => {
-        LogUtil.error(TAG, `excute failed. Cause: ${JSON.stringify(error)}`);
-        return false;
-      });
-    } catch (exception) {
-      LogUtil.error(TAG, `excute failed exception. Cause: ${JSON.stringify(exception)}`);
-      return false;
-    }
-    return true;
+    });
   }
 
-  static Launch(uiContext: Context | undefined, want: Want): boolean {
+  static Launch(uiContext: Context | undefined, want: Want): Promise<boolean> {
     return LaunchHelper.LaunchWithOptions(uiContext, want, {});
   }
 }

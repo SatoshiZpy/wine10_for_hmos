@@ -47,6 +47,7 @@ public:
     static int SetWindowBounds(int32_t widget_id, const WindowRect& rect);
     static int SetWindowVisible(int widget_id, int visible);
     static int CloseWindow(int32_t widget_id);
+    static int SetWindowTitle(int widget_id, const std::string& title);
     static int GetDisplay(ipc::DisplayParam& display);
 };
 } // namespace ohos::adapter::multiprocess

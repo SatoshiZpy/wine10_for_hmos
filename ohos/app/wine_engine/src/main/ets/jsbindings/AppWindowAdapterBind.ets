@@ -11,8 +11,8 @@ function implAppWindowAdapter(): AppWindowAdapter {
   return Inject.getOrCreate(AppWindowAdapter);
 }
 
-function createWindow(param: NewWindowParam) {
-  implAppWindowAdapter().createWindow(param);
+function createWindow(param: NewWindowParam, callback: (id: number) => void) {
+  implAppWindowAdapter().createWindow(param, callback);
 }
 
 function closeWindow(id: number) {
