@@ -9,12 +9,13 @@ Wine is a compatibility layer for running Microsoft Windows programs on Unix-lik
 **Fork Context**: This is an OHOS (OpenHarmony) port of Wine 10.12, targeting aarch64-linux-ohos platform. The project adds an OHOS adapter layer that translates Windows API calls to OHOS native APIs.
 
 **Key Statistics**:
-- 717 DLL implementations (dlls/)
-- 115 Windows programs (programs/)
-- 53 OHOS adapter modules (ohos/adapter/)
-- 743 compiled Windows DLLs
+- 715 DLL implementations (dlls/)
+- 113 Windows programs (programs/)
+- 52 OHOS adapter modules (ohos/adapter/)
+- 746 compiled Windows DLLs
 - 30 compiled Unix shared libraries
 - Total output: 814MB
+- Test files: 142 files, 2845 lines of code
 
 ## Build Commands
 
@@ -124,7 +125,7 @@ broken(condition)             // True on Windows if condition is true
 
 ```
 /home/ubuntu/wine/wine/
-├── dlls/                   - Windows DLL implementations (717 dirs)
+├── dlls/                   - Windows DLL implementations (715 dirs)
 │   ├── kernel32/           - Kernel32.dll (process, thread, memory, file)
 │   ├── user32/             - User32.dll (window, message, input)
 │   ├── gdi32/              - GDI32.dll (graphics, drawing, fonts)
@@ -132,11 +133,12 @@ broken(condition)             // True on Windows if condition is true
 │   ├── ntdll/              - NTdll.dll (NT API底层)
 │   ├── shell32/            - Shell32.dll (shell, icons)
 │   ├── ole32/              - OLE32.dll (COM/OLE)
+│   ├── wineohos.drv/       - OHOS graphics driver (window, keyboard, device)
 │   ├── d3d11/              - Direct3D 11
 │   ├── dxgi/               - DirectX Graphics Infrastructure
 │   └── */tests/            - Unit tests for each DLL
 │
-├── programs/               - Windows programs (115 dirs)
+├── programs/               - Windows programs (113 dirs)
 │   ├── winecfg/            - Wine configuration
 │   ├── notepad/            - Notepad
 │   ├── regedit/            - Registry editor
@@ -149,10 +151,21 @@ broken(condition)             // True on Windows if condition is true
 ├── tools/                  - Build tools (widl, winebuild, wrc, runtest)
 │
 ├── ohos/                   - OHOS-specific code
-│   ├── adapter/            - OHOS adapter layer (53 modules)
+│   ├── adapter/            - OHOS adapter layer (52 modules)
 │   │   ├── ohos_adapter.cc - Main adapter implementation
 │   │   ├── native_initializer.cc - Initialization
 │   │   ├── window/         - Window adapter
+│   │   │   ├── adapter/    - Window adapters (moved)
+│   │   │   │   ├── app_window_adapter.cc/h
+│   │   │   │   ├── sub_window_adapter.cc/h
+│   │   │   │   └── system_floating_window_adapter.cc/h
+│   │   │   ├── wine_window.cc/h - Window base class
+│   │   │   ├── wine_window_manager.cc/h - Window manager
+│   │   │   ├── wine_window_factory.cc - Window factory
+│   │   │   ├── wine_float_window.cc/h - Float window
+│   │   │   ├── wine_popup_window.cc/h - Popup window
+│   │   │   ├── wine_toplevel_window.cc/h - Toplevel window
+│   │   │   └── window_state_monitor.h - State monitor
 │   │   ├── xcomponent/     - XComponent adapter
 │   │   ├── ime_adapter/    - Input method adapter
 │   │   ├── file_manager/   - File manager adapter
@@ -164,6 +177,7 @@ broken(condition)             // True on Windows if condition is true
 │   │   ├── net/            - Network adapter
 │   │   ├── permission_manager/ - Permission adapter
 │   │   ├── multiprocess/   - Multiprocess support
+│   │   ├── web_entry/      - Wine loader entry
 │   │   ├── lib/            - Compiled libadapter.so (4.5MB)
 │   │   └── include/        - Header files
 │   │
@@ -205,7 +219,7 @@ broken(condition)             // True on Windows if condition is true
 │   ├── bin/                - Wine programs (12)
 │   ├── lib/wine/
 │   │   ├── aarch64-unix/   - Unix shared libraries (30)
-│   │   └── aarch64-windows/ - Windows DLLs (743)
+│   │   └── aarch64-windows/ - Windows DLLs (746)
 │   └── share/              - Resources
 │
 ├── include/                - Windows API headers
@@ -236,7 +250,7 @@ broken(condition)             // True on Windows if condition is true
 
 **System libraries**: mountmgr.so, netapi32.so, dnsapi.so, bcrypt.so, crypt32.so, etc.
 
-### out/lib/wine/aarch64-windows/ (743 Windows DLLs)
+### out/lib/wine/aarch64-windows/ (746 Windows DLLs)
 
 **Core system DLLs**: kernel32.dll, user32.dll, gdi32.dll, advapi32.dll, shell32.dll, ole32.dll, ntdll.dll
 
@@ -335,6 +349,95 @@ hdc install ohos/app/entry/build/default/outputs/default/entry-default-signed.ha
 # Or use DevEco Studio IDE
 # Open project in DevEco Studio and click Run
 ```
+
+## Wine Test Project
+
+The Wine test project (`/home/ubuntu/wine/wine_test/`) is an OHOS application for testing Wine API functionality.
+
+### Project Structure
+
+```
+wine_test/
+├── wine_api_test/          - Main test project (moved from root)
+│   ├── AppScope/           - Application config
+│   ├── entry/              - Entry module
+│   │   ├── src/main/
+│   │   │   ├── cpp/        - Native module
+│   │   │   │   ├── wine_api.cpp (1155 lines) - Wine API bridge
+│   │   │   │   ├── wine_api.h
+│   │   │   │   └── CMakeLists.txt
+│   │   │   ├── ets/        - ArkTS code
+│   │   │   │   ├── pages/Index.ets (575 lines) - Main UI
+│   │   │   │   ├── common/WineHelper.ets - Helper class
+│   │   │   │   └── test/   - Test modules (142 files, 2845 lines)
+│   │   │   │       ├── kernel32/ (29 tests)
+│   │   │   │       ├── user32/ (23 tests)
+│   │   │   │       ├── ntdll/ (26 tests)
+│   │   │   │       ├── advapi32/ (10 tests)
+│   │   │   │       ├── ole32/ (13 tests)
+│   │   │   │       ├── shell32/ (18 tests)
+│   │   │   │       ├── gdi32/ (13 tests)
+│   │   │   │       ├── crypt32/ (14 tests)
+│   │   │   │       ├── oleaut32/ (9 tests)
+│   │   │   │       ├── List.ets - Test list
+│   │   │   │       └── TestRunner.ets - Test runner
+│   │   │   └── resources/
+│   │   └── build-profile.json5
+│   ├── docs/               - Documentation
+│   ├── hvigor/             - Build config
+│   └── oh-package.json5
+├── .gitignore
+└── .git/
+```
+
+### wine_api.cpp Core Functions (1155 lines)
+
+| Category | Functions | Example |
+|----------|-----------|---------|
+| Initialization | 4 | `initialize`, `cleanup`, `isInitialized`, `getVersion` |
+| Process/Thread | 5 | `GetCurrentProcessId`, `GetCurrentThreadId`, `GetTickCount`, `Sleep` |
+| Sync Objects | 7 | `CreateMutex`, `CreateEvent`, `SetEvent`, `WaitForSingleObject` |
+| File Operations | 5 | `CreateFile`, `DeleteFile`, `CreateDirectory` |
+| Registry | 5 | `RegOpenKey`, `RegCloseKey`, `RegQueryValue` |
+| Test Runner | 6 | `RunTestExe`, `RunWine`, `Destroyed`, `wineRunning` |
+
+### Build wine_api_test HAP
+
+```bash
+cd /home/ubuntu/wine/wine_test/wine_api_test
+
+# Set environment
+export PATH=$PATH:/home/ubuntu/wine/wine/ohos_sdk/command-line-tools/bin
+export DEVECO_SDK_HOME=/home/ubuntu/wine/wine/ohos_sdk/command-line-tools/sdk
+
+# Install dependencies
+ohpm install
+
+# Build HAP
+hvigorw --mode module -p product=default assembleHap
+```
+
+### Index.ets UI Features
+
+The main test UI provides:
+- Wine status display (version, initialized, hasWineMain)
+- Kernel32 API test button (ProcessId, ThreadId, TickCount, directories)
+- Test runner (exe test execution)
+- Application launcher with startAbility (NEW_PROCESS mode support)
+- Error handling (401, 16300003 codes)
+
+### Test Documentation
+
+Test framework documentation in `/home/ubuntu/wine/docs/test/`:
+| Document | Content |
+|----------|---------|
+| README.md | Test system overview |
+| architecture.md | Architecture diagrams |
+| build_flow.md | Test compilation flow |
+| run_flow.md | Test execution flow |
+| test_framework.md | wine/test.h API reference |
+| loader_comparison.md | Loader comparison |
+| ohos_preloader.md | OHOS preloader design
 
 ## Code Style Guidelines
 
@@ -512,7 +615,7 @@ target_include_directories(adapter PUBLIC ../../ ./include/)
 add_subdirectory(../../third_party/aki aki)
 add_subdirectory(window)
 add_subdirectory(xcomponent)
-# ... 53 modules
+# ... 52 modules
 
 target_link_libraries(adapter PUBLIC 
     aki_jsbind 
@@ -550,7 +653,90 @@ ohos/app/wine_engine/
     ├── ets/            - ArkTS source
     └── resources/resfile/
         └── lib/wine/
-            └── aarch64-windows/ - Windows DLLs (743)
+            └── aarch64-windows/ - Windows DLLs (746)
+```
+
+## Window Manager Architecture
+
+The OHOS window management system has been refactored to support three window types:
+
+### Window Classes
+
+```
+ohos/adapter/window/
+├── adapter/                     - Window adapters (moved)
+│   ├── app_window_adapter.cc/h
+│   ├── sub_window_adapter.cc/h
+│   └── system_floating_window_adapter.cc/h
+├── wine_window.h/cc            - Window base class (133 lines)
+├── wine_window_manager.h/cc    - Window manager (60 lines)
+├── wine_window_factory.cc      - Window factory
+├── wine_float_window.h/cc      - Float window
+├── wine_popup_window.h/cc      - Popup window
+├── wine_toplevel_window.h/cc   - Toplevel window
+├── window_state_monitor.h      - State monitor
+└── window_common.h/cc          - Common definitions
+```
+
+### WineWindow Base Class
+
+```cpp
+class WineWindow {
+  public:
+    virtual WineFloatWindow* AsFloatWindow();
+    virtual WinePopupWindow* AsPopupWindow();
+    virtual WineToplevelWindow* AsToplevelWindow();
+    
+    static std::shared_ptr<WineWindow> Create(
+      const ipc::WindowParam& param, int* widget_id);
+    
+    bool Initialize(const ipc::WindowParam& param);
+    void set_parent_window(WineWindow* parent_window);
+    WineWindow* parent_window() const;
+};
+```
+
+### WineWindowManager
+
+```cpp
+class WineWindowManager : public WindowStatusListener {
+  public:
+    static WineWindowManager& GetInstance();
+    
+    int32_t AddWindow(int32_t widget_id, std::shared_ptr<WineWindow> window);
+    void RemoveWindow(int32_t widget_id);
+    std::shared_ptr<WineWindow> GetWindow(int32_t widget_id);
+    
+    void OnWindowAdd(const WindowInfo& info) override;
+    void OnWindowRemove(const WindowInfo& info) override;
+    
+    void SetLastActiveWidgetId(int32_t widget_id);
+    int32_t GetLastActiveWidgetId();
+};
+```
+
+### Window Types
+
+| Type | Class | Description |
+|------|-------|-------------|
+| Float | WineFloatWindow | Floating window (overlay) |
+| Popup | WinePopupWindow | Popup/dialog window |
+| Toplevel | WineToplevelWindow | Main application window |
+
+### Window Flow
+
+```
+wineohos.drv/window.c
+       ↓
+WineWindowManager::GetInstance()
+       ↓
+WineWindow::Create(param, widget_id)
+       ↓
+WineWindowFactory::CreateWindow(type)
+       ↓
+WineFloatWindow / WinePopupWindow / WineToplevelWindow
+       ↓
+OHOS WindowManager (native API)
 ```
 
 ## Wine DLL Development
@@ -670,7 +856,7 @@ static LRESULT WINAPI window_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 ┌─────────────────────────────────────────────────┐
 │           Wine DLL Implementation Layer           │
 │  kernel32.dll, user32.dll, gdi32.dll, etc.       │
-│  (743 Windows DLLs)                              │
+│  (746 Windows DLLs)                              │
 └─────────────────────────────────────────────────┘
                     ↓ Calls Wine Unix APIs
 ┌─────────────────────────────────────────────────┐
@@ -682,8 +868,9 @@ static LRESULT WINAPI window_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 ┌─────────────────────────────────────────────────┐
 │           OHOS Adapter Layer                      │
 │  libadapter.so (4.5MB)                            │
+│  - WineWindowManager, WineWindowFactory           │
 │  - Window, IME, File, Device, Network, etc.       │
-│  (53 adapter modules)                             │
+│  (52 adapter modules)                             │
 └─────────────────────────────────────────────────┘
                     ↓ Calls OHOS Native APIs
 ┌─────────────────────────────────────────────────┐
@@ -763,9 +950,21 @@ Detailed documentation available in `/home/ubuntu/wine/docs/`:
 | Document | Content |
 |----------|---------|
 | project_structure.md | Full project structure analysis |
-| build_output.md | Build products analysis (743 DLLs, 30 SOs) |
+| build_output.md | Build products analysis (746 DLLs, 30 SOs) |
 | build_process.md | Build process step-by-step |
 | README.md | Documentation index |
+
+Test framework documentation in `/home/ubuntu/wine/docs/test/`:
+
+| Document | Content |
+|----------|---------|
+| README.md | Test system overview |
+| architecture.md | Architecture diagrams |
+| build_flow.md | Test compilation flow |
+| run_flow.md | Test execution flow |
+| test_framework.md | wine/test.h API reference |
+| loader_comparison.md | Loader comparison |
+| ohos_preloader.md | OHOS preloader design
 
 ## Submitting Changes
 
@@ -785,3 +984,6 @@ Follow guidelines at: https://gitlab.winehq.org/wine/wine/-/wikis/Submitting-Pat
 - **Build Host**: x86_64-pc-linux-gnu
 - **Cross-Compiler**: LLVM/Clang (OHOS SDK)
 - **Build Products Size**: 814MB
+- **DLL Count**: 715 implementations, 746 compiled
+- **Adapter Modules**: 52
+- **Test Coverage**: 142 files, 2845 lines
