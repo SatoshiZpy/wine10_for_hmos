@@ -9,15 +9,15 @@
 
 #include "ohos/adapter/aki_hook/aki_hook.h"
 #include "ohos/adapter/export.h"
+#include "ohos/adapter/include/ohos_adapter_common.h"
 
 namespace ohos::adapter {
 
 class ADAPTER_EXPORT_API ScreenlockMonitorAdapter {
  public:
-  using ScreenlockEventCallback = std::function<void(const std::string&)>;
   static ScreenlockMonitorAdapter& GetInstance();
 
-  void StartListeningForScreenlock(ScreenlockEventCallback screenlock_event_callback);
+  void StartListeningForScreenlock(screenlock_event_callback callback);
   void StopListeningForScreenlock();
 
  private:
@@ -25,6 +25,8 @@ class ADAPTER_EXPORT_API ScreenlockMonitorAdapter {
   ~ScreenlockMonitorAdapter() = default;
   ScreenlockMonitorAdapter(const ScreenlockMonitorAdapter&) = delete;
   ScreenlockMonitorAdapter& operator=(const ScreenlockMonitorAdapter&) = delete;
+  
+  screenlock_event_callback screenlock_event_callback_ = nullptr;
 };
 
 }  // namespace ohos::adapter

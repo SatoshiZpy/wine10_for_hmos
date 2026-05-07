@@ -2,8 +2,7 @@
 
 set -ex
 basedir=$(dirname "$0")
-CUR_DIR=$PWD
-ROOT_DIR="${CUR_DIR%/wine*}""/wine"
+ROOT_DIR=$PWD
 BUILD_TOOLS=${ROOT_DIR}/nativeBuild
 BUILD_DIR=${ROOT_DIR}/build
 INSTALL_DIR=${ROOT_DIR}/out

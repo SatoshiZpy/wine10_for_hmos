@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -580,6 +581,32 @@ void distribute_input_event_callback( const input_event* event )
             send_event(&data);
             break;
         }
+        case OHOS_WINDOW_FOCUS_EVENT:
+        {
+            HWND hwnd = get_hwnd_by_widget_id(event->widget_id);
+            if (!hwnd) {
+                return;
+            }
+            union event_data data;
+            data.type = WINDOW_FOCUS_EVENT;
+            data.focus.hwnd = hwnd;
+            data.focus.gained = TRUE;
+            send_event(&data);
+            break;
+        }
+        case OHOS_WINDOW_BLUR_EVENT:
+        {
+            HWND hwnd = get_hwnd_by_widget_id(event->widget_id);
+            if (!hwnd) {
+                return;
+            }
+            union event_data data;
+            data.type = WINDOW_FOCUS_EVENT;
+            data.focus.hwnd = hwnd;
+            data.focus.gained = FALSE;
+            send_event(&data);
+            break;
+        }
         default:
             return;
     }
@@ -838,4 +865,29 @@ void set_window_title( HWND hwnd, const WCHAR *text)
     SetWindowTitle(data->widget_id, utf8_buffer);
 
     free( utf8_buffer );
+}
+
+void send_screenlock_event( const char* event_type )
+{
+    union event_data data;
+    int unlocked;
+
+    if (strcmp(event_type, "locked") == 0)
+        unlocked = 0;
+    else if (strcmp(event_type, "unlocked") == 0)
+        unlocked = 1;
+    else
+        return;
+    
+    data.screenlock.type = SCREENLOCK_EVENT;
+    data.screenlock.unlocked = unlocked;
+    send_event(&data);
+}
+
+void distribute_screenlock_callback( int unlocked )
+{
+    TRACE("distribute_screenlock_callback: unlocked=%d\n", unlocked);
+    
+    if (unlocked)
+        ime_on_screen_unlock();
 }
