@@ -19,6 +19,7 @@
 #include "winbase.h"
 #include "wingdi.h"
 #include "winuser.h"
+#include "ntuser.h"
 
 #include "ohos.h"
 #include "wine/server.h"
@@ -329,6 +330,8 @@ static int process_events( DWORD mask )
             break;
         case SCREENLOCK_EVENT:
             break;
+        case WINDOW_FOCUS_EVENT:
+            break;
         default:
             if (mask & QS_SENDMESSAGE) break;
             continue;  /* skip it */
@@ -407,6 +410,26 @@ static int process_events( DWORD mask )
         case SCREENLOCK_EVENT:
             distribute_screenlock_callback(event->data.screenlock.unlocked);
             break;
+        case WINDOW_FOCUS_EVENT: {
+            HWND hwnd = event->data.focus.hwnd;
+            BOOL gained = event->data.focus.gained;
+            GUITHREADINFO info;
+            info.cbSize = sizeof(info);
+            HWND focused_hwnd = NtUserGetGUIThreadInfo(GetCurrentThreadId(), &info) ? info.hwndFocus : 0;
+
+            TRACE("WINDOW_FOCUS_EVENT: hwnd=%p, gained=%d, current_focus=%p\n", hwnd, gained, focused_hwnd);
+            
+            if (gained) {
+                HWND root = NtUserGetAncestor(hwnd, GA_ROOT);
+                if (root && root != focused_hwnd) {
+                    NtUserSetFocus(root);
+                }
+                if (hwnd != root && hwnd != focused_hwnd) {
+                    NtUserSetFocus(hwnd);
+                }
+            }
+            break;
+        }
         default:
             FIXME("got event %u\n", event->data.type);
         }

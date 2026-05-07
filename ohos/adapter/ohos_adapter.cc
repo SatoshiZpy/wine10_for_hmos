@@ -399,6 +399,8 @@ static void GlobalWindowEventCallbackAdapter(int32_t widget_id, std::shared_ptr<
         return;
     }
 
+    input_event c_event;
+    
     // 处理窗口矩形变化事件
     if (event->type() == EventType::ET_WINDOW_RECT_CHANGE) {
         auto rect_event = std::static_pointer_cast<WindowRectChangeEvent>(event);
@@ -406,7 +408,6 @@ static void GlobalWindowEventCallbackAdapter(int32_t widget_id, std::shared_ptr<
             return;
         }
 
-        input_event c_event;
         c_event.type = OHOS_WINDOW_RECT_CHANGE_EVENT;
         c_event.widget_id = widget_id;
         c_event.data.window_rect_change_event.left = rect_event->left;
@@ -414,6 +415,24 @@ static void GlobalWindowEventCallbackAdapter(int32_t widget_id, std::shared_ptr<
         c_event.data.window_rect_change_event.width = static_cast<int32_t>(rect_event->width);
         c_event.data.window_rect_change_event.height = static_cast<int32_t>(rect_event->height);
 
+        g_window_event_callback(&c_event);
+        return;
+    }
+    
+    // 处理窗口获得焦点事件
+    if (event->type() == EventType::ET_SURFACE_FOCUS) {
+        c_event.type = OHOS_WINDOW_FOCUS_EVENT;
+        c_event.widget_id = widget_id;
+        c_event.data.window_focus_event.widget_id = widget_id;
+        g_window_event_callback(&c_event);
+        return;
+    }
+    
+    // 处理窗口失去焦点事件
+    if (event->type() == EventType::ET_SURFACE_BLUR) {
+        c_event.type = OHOS_WINDOW_BLUR_EVENT;
+        c_event.widget_id = widget_id;
+        c_event.data.window_focus_event.widget_id = widget_id;
         g_window_event_callback(&c_event);
         return;
     }

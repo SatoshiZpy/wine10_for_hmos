@@ -17,6 +17,8 @@ typedef enum {
     OHOS_MOUSE_EVENT,
     OHOS_KEY_EVENT,
     OHOS_WINDOW_RECT_CHANGE_EVENT,
+    OHOS_WINDOW_FOCUS_EVENT,
+    OHOS_WINDOW_BLUR_EVENT,
 } input_event_type;
 
 typedef enum {
@@ -60,11 +62,16 @@ typedef struct {
     int32_t height;
 } window_rect_change_event_param;
 
+typedef struct {
+    int32_t widget_id;
+} window_focus_event_param;
+
 typedef union {
     mouse_event_param mouse_event;
     mouse_hover_event_param mouse_hover_event;
     key_event_param key_event;
     window_rect_change_event_param window_rect_change_event;
+    window_focus_event_param window_focus_event;
 } event_data;
 
 typedef struct {

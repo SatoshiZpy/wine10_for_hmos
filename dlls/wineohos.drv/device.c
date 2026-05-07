@@ -607,6 +607,32 @@ void distribute_input_event_callback( const input_event* event )
             send_event(&data);
             break;
         }
+        case OHOS_WINDOW_FOCUS_EVENT:
+        {
+            HWND hwnd = get_hwnd_by_widget_id(event->widget_id);
+            if (!hwnd) {
+                return;
+            }
+            union event_data data;
+            data.type = WINDOW_FOCUS_EVENT;
+            data.focus.hwnd = hwnd;
+            data.focus.gained = TRUE;
+            send_event(&data);
+            break;
+        }
+        case OHOS_WINDOW_BLUR_EVENT:
+        {
+            HWND hwnd = get_hwnd_by_widget_id(event->widget_id);
+            if (!hwnd) {
+                return;
+            }
+            union event_data data;
+            data.type = WINDOW_FOCUS_EVENT;
+            data.focus.hwnd = hwnd;
+            data.focus.gained = FALSE;
+            send_event(&data);
+            break;
+        }
         default:
             return;
     }

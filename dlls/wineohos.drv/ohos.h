@@ -118,6 +118,7 @@ enum event_type
     KEYBOARD_EVENT,
     IME_EVENT,
     SCREENLOCK_EVENT,
+    WINDOW_FOCUS_EVENT,
 };
 
 struct ime_data
@@ -188,6 +189,12 @@ union event_data
         enum event_type type;
         int unlocked;
     } screenlock;
+    struct
+    {
+        enum event_type type;
+        HWND            hwnd;
+        BOOL            gained;
+    } focus;
 };
 
 int send_event( const union event_data *data );
