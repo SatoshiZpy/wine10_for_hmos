@@ -33,9 +33,9 @@ namespace ohos::adapter {
 
 constexpr int IMAGE_PIXEL_MAP = 4;
 
-void SetCursorVisible(const bool visiable) {
+void SetCursorVisible(const bool visible) {
   MockCursorAdapter* instance = MockCursorAdapter::GetInstance();
-  instance->SetCursorVisible(visiable);
+  instance->SetCursorVisible(visible);
 }
 
 void SetCursor(int32_t id, const OhosCursorType cursor_type) {

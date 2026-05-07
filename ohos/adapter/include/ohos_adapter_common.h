@@ -80,11 +80,10 @@ struct window_state {
   int  top_most;
   int  excluded_by_control;
   int  minimized;
-  int  minimized_valid;
   int  maximized;
   int  full_screen;
   int  split_mode;
-  int  visiable;
+  int  visible;
 };
 
 struct window_param

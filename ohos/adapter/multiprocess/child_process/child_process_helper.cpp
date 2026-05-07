@@ -44,13 +44,11 @@
 #include "ohos/adapter/multiprocess/isolate_process/native_child_process_library.h"
 #include "ohos/adapter/multiprocess/isolate_process/native_childprocess_args_wrapper.h"
 #include "ohos/adapter/screen/screen_adapter.h"
-#include "ohos/adapter/xcomponent/adapter/window_adapter.h"
-#include "ohos/adapter/xcomponent/xcomponent_manager.h"
+#include "ohos/adapter/window/wine_window_manager.h"
 
 using namespace std::literals;
 using namespace ohos::adapter;
 using namespace ohos::adapter::window;
-using namespace ohos::adapter::xcomponent;
 
 namespace ohos::adapter::multiprocess {
 static NativeChildProcessLibrary nativeChildProcessLibrary;
@@ -142,65 +140,76 @@ int ChildProcessHelper::KillProcess(int32_t pid)
 
 int ChildProcessHelper::CreateWindow(const ipc::WindowParam& param)
 {
-    int create_id = XComponentManager::GetInstance()->CreateWindow(param);
-    if (create_id <= 0) {
-      LOGE("Cannot create window");
-      return -1;
-    }
-    LOGI("CreateWindow owner_pid: %{public}d, windowId %{public}d", param.owner_pid, create_id);
-    auto window = WindowAdapter::GetInstance().GetWindow(create_id);
+    LOGI("CreateWindow type: %{public}d, rect: (%{public}d,%{public}d,%{public}d,%{public}d)",
+        param.window_type, param.left, param.top, param.width, param.height);
+
+    int widget_id = -1;
+    auto window = WineWindow::Create(std::move(param), &widget_id);
     if (!window) {
-        LOGE("window is not exists, windowId: %{public}d", create_id);
+        LOGE("create window error");
         return -1;
     }
-    ChildProcessHost::Instance().SetWindowInfo(param.owner_pid, create_id, window);
-    return create_id;
+    LOGI("CreateWindow windowId %{public}d", widget_id);
+    return widget_id;
 }
 
 int ChildProcessHelper::UpdateWindow(int32_t widget_id, const ipc::WindowParam& param)
 {
-    auto window = WindowAdapter::GetInstance().GetWindow(widget_id);
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
         LOGE("window is not exists, windowId: %{public}d", widget_id);
         return -1;
     }
-    LOGI("UpdateWindow owner_pid: %{public}d, windowId %{public}d", param.owner_pid, widget_id);
-    XComponentManager::GetInstance()->UpdateWindow(widget_id, param);
+    LOGI("UpdateWindow windowId %{public}d", widget_id);
     return 0;
 }
 
 int ChildProcessHelper::SetWindowBounds(int32_t widget_id, const WindowRect& rect)
 {
-    auto window = WindowAdapter::GetInstance().GetWindow(widget_id);
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
         LOGE("window is not exists, windowId: %{public}d", widget_id);
         return -1;
     }
+
     LOGI("SetWindowBounds windowId %{public}d", widget_id);
-    XComponentManager::GetInstance()->SetWindowBounds(widget_id, rect);
+    window->SetBounds(rect);
     return 0;
 }
 
 int ChildProcessHelper::SetWindowVisible(int widget_id, int visible)
 {
-    auto window = WindowAdapter::GetInstance().GetWindow(widget_id);
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
         LOGE("window is not exists, windowId: %{public}d", widget_id);
         return -1;
     }
-    XComponentManager::GetInstance()->SetWindowVisible(widget_id, visible);
+    LOGI("SetWindowVisible windowId %{public}d, visible %{public}d", widget_id, visible);
+    visible ? window->Show() : window->Hide();
     return 0;
 }
 
 int ChildProcessHelper::CloseWindow(int32_t widget_id)
 {
-    auto window = WindowAdapter::GetInstance().GetWindow(widget_id);
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
         LOGE("window is not exists, windowId: %{public}d", widget_id);
         return -1;
     }
     LOGI("CloseWindow windowId: %{public}d", widget_id);
-    XComponentManager::GetInstance()->CloseWindow(widget_id);
+    window->Close();
+    return 0;
+}
+
+int ChildProcessHelper::SetWindowTitle(int widget_id, const std::string& title)
+{
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
+    if (!window) {
+        LOGE("window is not exists, windowId: %{public}d", widget_id);
+        return -1;
+    }
+    LOGI("SetWindowTitle windowId: %{public}d", widget_id);
+    window->SetTitle(title);
     return 0;
 }
 

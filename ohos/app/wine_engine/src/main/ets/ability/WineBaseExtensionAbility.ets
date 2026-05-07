@@ -57,7 +57,7 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
 
     if (this.widgetId <= 0) {
       LogUtil.info(TAG, 'onCreate, Allocate widgetId');
-      this.widgetId = this.nativeContext.ExecuteCommand(CommandType.kGetWidget, {}).widget_Id;
+      this.widgetId = ConfigData.DEFAULT_WIDGET_ID;
       this.ownerPid = this.nativeContext.ExecuteCommand(CommandType.kGetPid, {}).pid;
       LogUtil.info(TAG, 'onCreate, Allocate widgetId:' + this.widgetId + ',ownerPid:' + this.ownerPid);
     }

@@ -86,7 +86,7 @@ static BOOL ohos_surface_create( HWND hwnd, HDC hdc, int format, struct opengl_d
 
         gl = impl_from_opengl_drawable( *drawable );
         funcs->p_eglGetConfigAttrib( egl->display, egl_config_for_format(format), EGL_NATIVE_VISUAL_ID, &pf );
-        int ret = OH_NativeWindow_NativeWindowHandleOpt(gl->window, SET_FORMAT, pf);
+        int ret = OH_NativeWindow_NativeWindowHandleOpt(GetNativeWindow(gl->window), SET_FORMAT, pf);
         if (ret != 0) {
             ERR("set format error: %d", ret);
         }

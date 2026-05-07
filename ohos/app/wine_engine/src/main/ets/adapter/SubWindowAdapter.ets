@@ -5,9 +5,10 @@
 import { inject, injectable } from 'inversify';
 import window from '@ohos.window';
 import { IParams,
-         ISubWindowInfo,
-         NewWindowParam,
-         WindowBound } from '../interface/CommonInterface';
+  ISubWindowInfo,
+  NewWindowParam,
+  WindowBound,
+  WindowState} from '../interface/CommonInterface';
 import { AbilityManager } from '../common/AbilityManager';
 import { BaseAdapter } from '../common/BaseAdapter';
 import LogUtil from '../utils/LogUtil';
@@ -18,6 +19,7 @@ import { SystemFloatingWindowManager } from '../common/SystemFloatingWindowManag
 import StringUtil from '../utils/StringUtil';
 import { WineProxy } from '../interface/WineProxy';
 import { ContextAdapter } from './ContextAdapter';
+import { WindowStyle } from '../common/WindowStyle';
 
 const TAG: string = 'SubWindow';
 const FEEDBACK_X: number = 2;
@@ -32,25 +34,29 @@ export class SubWindowAdapter extends BaseAdapter {
   private reusableSubWindow: Map<number, (ISubWindowInfo)[]> =
     new Map<number, (ISubWindowInfo)[]>();
   private globalCache: (ISubWindowInfo)[] = [];
+  private windowStyle: WindowStyle;
 
   constructor(
     @inject(AbilityManager) abilityManager: AbilityManager,
     @inject(SystemFloatingWindowManager) systemFloatingWindowManager: SystemFloatingWindowManager,
     @inject(ContextAdapter) ctxAdapter: ContextAdapter,
+    @inject(WindowStyle) windowStyle: WindowStyle
   ) {
     super();
     this.abilityManager = abilityManager;
     this.systemFloatingWindowManager = systemFloatingWindowManager;
     this.ctxAdapter = ctxAdapter;
+    this.windowStyle = windowStyle;
   }
 
   @LogMethod
-  createSubWindow(param: NewWindowParam,
-    callback: (id: number) => void) {
+  createSubWindow(param: NewWindowParam, callback: (id: number) => void) {
     let parentId = this.getParentWindowId(param.parent_id);
-    LogUtil.info(TAG, 'createSubWindow widget_id:' + param.widget_id + ',parentId:' + param.parent_id + ',proxyId:' + parentId);
-
+    let visibility = this.windowStyle.hasValue(WindowState.WINDOW_VISIBLE, param.window_state_mask);
     let fixedBounds = this.adjustBounds(parentId, param.bounds);
+    LogUtil.info(TAG, 'createSubWindow widget_id:' + param.widget_id + ',parentId:' + param.parent_id +
+      ',proxyId:' + parentId + ',visibility:' + visibility);
+
     const reusableWindow =
       this.findReuseableSubWindow(parentId, fixedBounds.width, fixedBounds.height);
     if (reusableWindow) {
@@ -62,7 +68,7 @@ export class SubWindowAdapter extends BaseAdapter {
         paramsLink.set(lastParams);
         this.resizeSubWindow(reusableWindow.subWindow, fixedBounds.width, fixedBounds.height);
         this.moveSubWindow(reusableWindow.subWindow, fixedBounds.left, fixedBounds.top, parentId);
-        reusableWindow.subWindow.showWindow()
+        visibility && reusableWindow.subWindow.showWindow()
           .catch((err: BusinessError) => {
             LogUtil.error(TAG, 'Failed to reuseSubWindow: ' + reusableWindow.id + ',err:' + JSON.stringify(err));
             return;
@@ -76,14 +82,13 @@ export class SubWindowAdapter extends BaseAdapter {
     const para: Record<string, IParams> = {
       'subWindowParams': {
         id: param.widget_id,
-        callback: callback,
         size: [fixedBounds.width, fixedBounds.height],
         initColorRgb: param.init_color_argb,
         ownerPid: param.owner_pid,
       }
     };
     let subStorage: LocalStorage = new LocalStorage(para);
-    this.createNewWindow(parentId, param.widget_id, fixedBounds, subStorage);
+    this.createNewWindow(parentId, param.widget_id, fixedBounds, subStorage, visibility, callback);
   }
 
   private getParentProxy(parentId: number): WineProxy {
@@ -161,7 +166,7 @@ export class SubWindowAdapter extends BaseAdapter {
         if (!found) {
           LogUtil.error(TAG, 'Global cache is inconsistent with cache of ' + reusableWindow.parentId);
         }
-        LogUtil.error(TAG, `reusableWindow ${reusableWindow.id} size ${reusableSubWindowList.length}`);
+        LogUtil.info(TAG, `reusableWindow ${reusableWindow.id} size ${reusableSubWindowList.length}`);
         this.subWindowList.push(reusableWindow);
         return reusableWindow;
       }
@@ -172,11 +177,14 @@ export class SubWindowAdapter extends BaseAdapter {
   private createNewWindow(parentId: number,
                           id: number,
                           bounds: WindowBound,
-                          subStorage: LocalStorage) {
+                          subStorage: LocalStorage,
+                          visibility: boolean,
+                          callback: (id: number) => void) {
     let proxy = this.getParentProxy(parentId);
     proxy?.createSubWindow(StringUtil.widgetConvert(id))
       .then((data: window.Window) => {
-        this.initSubWindow(data, parentId, id, bounds, subStorage);
+        this.initSubWindow(data, parentId, id, bounds, subStorage, visibility);
+        callback(id);
       }).catch((error: BusinessError) => {
       LogUtil.error(TAG, 'Failed to create the subWindow. Cause: ' + JSON.stringify(error));
     });
@@ -186,7 +194,8 @@ export class SubWindowAdapter extends BaseAdapter {
                         parentId: number,
                         id: number,
                         bounds: WindowBound,
-                        subStorage: LocalStorage) {
+                        subStorage: LocalStorage,
+                        visibility: boolean) {
     try {
       let windowClass = data;
       windowClass.keepKeyboardOnFocus(true);
@@ -219,7 +228,7 @@ export class SubWindowAdapter extends BaseAdapter {
         }
         windowClass.setWindowFocusable(false)
           .then(() => {
-            windowClass.showWindow()
+            visibility && windowClass.showWindow()
               .catch((err: BusinessError) => {
                 LogUtil.error(TAG, 'Failed to show SubWindow. Cause: ' + JSON.stringify(err));
               });
@@ -233,7 +242,12 @@ export class SubWindowAdapter extends BaseAdapter {
   }
 
   private async resizeSubWindow(windowClass: window.Window, width: number, height: number) {
-    return await windowClass.resize(width, height);
+    return await windowClass.resizeAsync(width, height)
+      .then(() => {
+        LogUtil.info(TAG, `Succeeded in resize window, ${width}x${height}`);
+      }).catch((err: BusinessError) => {
+        LogUtil.error(TAG, `Failed to resize window. Cause code: ${err.code}, message: ${err.message}`);
+      });
   }
 
   private moveSubWindow(windowClass: window.Window, x: number, y: number, parentId: number) {
@@ -250,7 +264,7 @@ export class SubWindowAdapter extends BaseAdapter {
         };
         let promise = windowClass.moveWindowToAsync(x, y, config);
         promise.then(() => {
-          LogUtil.info(TAG, `Succeeded in moving the window, display id: ${displayId}`);
+          LogUtil.info(TAG, `Succeeded in moving the window, display id: ${displayId}, pos: ${x},${y}`);
         }).catch((err: BusinessError) => {
           LogUtil.error(TAG, `Failed to move the window. Cause code: ${err.code},
             message: ${err.message}, display id: ${displayId}`);

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ohos/adapter/window/sub_window_adapter.h"
+#include "ohos/adapter/window/adapter/sub_window_adapter.h"
 
 #include <chrono>
 #include <cstdint>

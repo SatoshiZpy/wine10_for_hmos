@@ -18,7 +18,8 @@ import { NewWindowParam,
   WindowBound,
   WindowState,
   WindowFeatures,
-  AbilityType} from '../interface/CommonInterface';
+  AbilityType,
+  IWindowInfo} from '../interface/CommonInterface';
 import LaunchHelper from '../utils/LaunchHelper';
 import { ContextAdapter } from './ContextAdapter';
 import { DeviceInfoAdapter } from '../adapter/DeviceInfoAdapter';
@@ -44,6 +45,7 @@ export class AppWindowAdapter extends BaseAdapter {
   private deviceInfoAdapter: DeviceInfoAdapter;
   private themeAdapter: NativeThemeAdapter;
   private windowStyle: WindowStyle;
+  private windowList: (IWindowInfo)[] = [];
 
   constructor(
     @inject(AbilityManager) abilityManager: AbilityManager,
@@ -83,7 +85,7 @@ export class AppWindowAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  createWindow(param: NewWindowParam) {
+  createWindow(param: NewWindowParam, callback: (id: number) => void) {
     let abilityName: string = kAbilityMap.get(param.ability_type) ?? 'EntryAbility';
     const want: Want = {
       bundleName: this.bundleName,
@@ -100,7 +102,7 @@ export class AppWindowAdapter extends BaseAdapter {
     const windowProp = windowClass?.getWindowProperties();
     let xComBorder: number = windowProp?.drawableRect.left || 0;
     let xComTop: number = windowProp?.drawableRect.top || 0;
-    let visibility = this.windowStyle.hasValue(WindowState.WINDOW_VISIABLE, param.window_state_mask);
+    let visibility = this.windowStyle.hasValue(WindowState.WINDOW_VISIBLE, param.window_state_mask);
     let useDarkMode = this.windowStyle.hasValue(WindowFeatures.USE_DARK_MODE, param.window_state_mask);
     let options: StartOptions = {
       windowLeft: param.bounds.left - xComBorder,
@@ -110,20 +112,34 @@ export class AppWindowAdapter extends BaseAdapter {
       startWindowBackgroundColor: this.backgroundColor(useDarkMode),
     }
     LogUtil.info(TAG, 'createWindow want:' + JSON.stringify(want) + 'options:' + JSON.stringify(options));
-    LaunchHelper.LaunchWithOptions(this.ctxAdapter.getActiveContext(), want, options);
+    let subStorage: LocalStorage = new LocalStorage(want);
+    LaunchHelper.LaunchWithOptions(this.ctxAdapter.getActiveContext(), want, options)
+      .then((result) => {
+        result && this.windowList.push({
+          id: param.widget_id,
+          localStorage: subStorage
+        });
+        LogUtil.info(TAG, 'createWindow id:' + param.widget_id +
+          ',result:' + result + ',length:' + this.windowList.length);
+        result && callback(param.widget_id);
+      }).catch((err: BusinessError) => {
+      LogUtil.error(TAG, 'Failed to create window. Cause:' + JSON.stringify(err));
+    });
   }
 
   @LogMethod
   closeWindow(id: number) {
     let proxy = this.abilityManager.getProxy(id);
     proxy?.closeWindow();
+    this.removeWindow(id);
+    LogUtil.info(TAG, 'closeWindow id:' + id + ',length:' + this.windowList.length);
   }
 
   @LogMethod
   showWindow(id: number) {
     let context = this.abilityManager.getProxy(id)?.getWindowContext() as common.UIAbilityContext;
     context?.showAbility().then(() => {
-      LogUtil.info(TAG, 'showAbility success, id:' + id);
+      LogUtil.info(TAG, 'showWindow success, id:' + id);
     }).catch((err: BusinessError) => {
       LogUtil.error(TAG, 'Failed to show window. Cause:' + JSON.stringify(err));
     });
@@ -133,7 +149,7 @@ export class AppWindowAdapter extends BaseAdapter {
   hideWindow(id: number) {
     let context = this.abilityManager.getProxy(id)?.getWindowContext() as common.UIAbilityContext;
     context?.hideAbility().then(() => {
-      LogUtil.info(TAG, 'hideAbility success, id:' + id);
+      LogUtil.info(TAG, 'hideWindow success, id:' + id);
     }).catch((err: BusinessError) => {
       LogUtil.error(TAG, 'Failed to hide window. Cause:' + JSON.stringify(err));
     });
@@ -548,6 +564,26 @@ export class AppWindowAdapter extends BaseAdapter {
         });
     } catch (err) {
       LogUtil.error(TAG, 'Failed to set parent window. Cause: ' + JSON.stringify(err));
+    }
+  }
+
+  private findWindow(id: number): IWindowInfo | undefined {
+    for (let i = 0; i < this.windowList.length; i++) {
+      const item = this.windowList[i];
+      if (item && item.id === id) {
+        return item;
+      }
+    }
+    return undefined;
+  }
+
+  private removeWindow(id: number) {
+    for (let i = 0; i < this.windowList.length; i++) {
+      const item = this.windowList[i];
+      if (item && item.id === id) {
+        this.windowList.splice(i, 1);
+        break;
+      }
     }
   }
 };

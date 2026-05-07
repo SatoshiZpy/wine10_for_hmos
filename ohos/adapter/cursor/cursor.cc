@@ -10,10 +10,10 @@ namespace ohos::adapter {
 
 constexpr int IMAGE_PIXEL_MAP = 4;
 
-void SetCursorVisible(const bool visiable) {
+void SetCursorVisible(const bool visible) {
   if (auto func =
           ohos::adapter::GetJSFunction("CursorAdapter.SetCursorVisible")) {
-    func->InvokeAsync<void>(visiable);
+    func->InvokeAsync<void>(visible);
   }
 }
 

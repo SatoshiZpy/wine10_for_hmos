@@ -8,7 +8,7 @@
 
 #include "ohos/adapter/aki_hook/aki_hook.h"
 #include "ohos/adapter/device_info/device_info.h"
-#include "ohos/adapter/xcomponent/adapter/window_adapter.h"
+#include "ohos/adapter/window/adapter/app_window_adapter.h"
 #include "ohos/adapter/xcomponent/xcomponent_manager.h"
 
 namespace ohos::adapter::window {

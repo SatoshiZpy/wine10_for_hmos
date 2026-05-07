@@ -680,6 +680,8 @@ void start_server( BOOL debug )
     char *argv[4];
     static char foreground_flag[] = "-f";
     static char debug_flag[] = "-d2";
+    int sync_pipe[2];
+    char dummy;
 
     if (!started)
     {
@@ -703,10 +705,22 @@ void start_server( BOOL debug )
         }
         options->type = SERVER_PROCESS;
 
+        if (pipe( sync_pipe ) == -1) fatal_error( "pipe: %s\n", strerror( errno ));
+        TRACE("sync_pipe=(%d,%d)\n", sync_pipe[0], sync_pipe[1]);
+        options->fds[0] = sync_pipe[1];
+        options->id[0] = FILE_DIR_DESCRIPTOR;
+
         pid_t pid = StartNativeProcess(argc, argv, options);
         if (pid < 0) {
             fatal_error( "could not exec wineserver\n" );
         }
+
+        /* wait for server to signal us */
+        if (read( sync_pipe[0], &dummy, 1 ) != 1) fatal_error("read dummy error: (%d:%s)\n", errno, strerror( errno ));
+
+        close( sync_pipe[0] );
+        close( sync_pipe[1] );
+
         TRACE("start_server ok, pid = %d\n", pid);
         free(options);
         started = TRUE;

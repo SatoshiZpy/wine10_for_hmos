@@ -6,6 +6,10 @@
 
 #include <ace/xcomponent/native_xcomponent_key_event.h>
 #include "ohos.h"
+
+#define ARKUI_MODIFIER_KEY_CTRL  (1 << 0)
+#define ARKUI_MODIFIER_KEY_SHIFT (1 << 1)
+#define ARKUI_MODIFIER_KEY_ALT   (1 << 2)
 #include "wine/server.h"
 #include "wine/debug.h"
 
@@ -159,8 +163,7 @@ WORD vkey_to_scancode[] =
     0,     /* 0x8f undefined */
     0,     /* VK_NUMLOCK */
     0,     /* VK_SCROLL */
-    0x10d, /* VK_OEM_NEC_EQUAL */
-    0,     /* VK_OEM_FJ_JISHO */
+    0x10d, /* VK_OEM_NEC_EQUAL = VK_OEM_FJ_JISHO (both are 0x92) */
     0,     /* VK_OEM_FJ_MASSHOU */
     0,     /* VK_OEM_FJ_TOUROKU */
     0,     /* VK_OEM_FJ_LOYA */
@@ -427,4 +430,56 @@ void update_keyboard_lock_state( WORD vkey, UINT state )
         send_keyboard_input( 0, VK_SCROLL, 0x46, 0 );
         send_keyboard_input( 0, VK_SCROLL, 0x46, KEYEVENTF_KEYUP );
     }
+}
+
+/***********************************************************************
+ *           sync_modifier_key_state
+ *
+ */
+void sync_modifier_key_state( WORD vkey, uint64_t modifier_key_states )
+{
+    BYTE keystate[256];
+    BOOL changed = FALSE;
+
+    if (!NtUserGetAsyncKeyboardState( keystate )) return;
+
+    if (vkey != VK_LMENU && vkey != VK_RMENU &&
+        (keystate[VK_MENU] & 0x80) && !(modifier_key_states & ARKUI_MODIFIER_KEY_ALT))
+    {
+        TRACE( "adjusting Alt state (%02x/%02x)\n", keystate[VK_LMENU], keystate[VK_RMENU] );
+        keystate[VK_LMENU] &= ~0x80;
+        keystate[VK_RMENU] &= ~0x80;
+        keystate[VK_MENU]  &= ~0x80;
+        changed = TRUE;
+    }
+
+    if (vkey != VK_LCONTROL && vkey != VK_RCONTROL &&
+        (keystate[VK_CONTROL] & 0x80) && !(modifier_key_states & ARKUI_MODIFIER_KEY_CTRL))
+    {
+        TRACE( "adjusting Ctrl state (%02x/%02x)\n", keystate[VK_LCONTROL], keystate[VK_RCONTROL] );
+        keystate[VK_LCONTROL] &= ~0x80;
+        keystate[VK_RCONTROL] &= ~0x80;
+        keystate[VK_CONTROL]  &= ~0x80;
+        changed = TRUE;
+    }
+
+    if (vkey != VK_LSHIFT && vkey != VK_RSHIFT &&
+        (keystate[VK_SHIFT] & 0x80) && !(modifier_key_states & ARKUI_MODIFIER_KEY_SHIFT))
+    {
+        TRACE( "adjusting Shift state (%02x/%02x)\n", keystate[VK_LSHIFT], keystate[VK_RSHIFT] );
+        keystate[VK_LSHIFT] &= ~0x80;
+        keystate[VK_RSHIFT] &= ~0x80;
+        keystate[VK_SHIFT]  &= ~0x80;
+        changed = TRUE;
+    }
+
+    if (!changed) return;
+
+    SERVER_START_REQ( set_key_state )
+    {
+        req->async = 1;
+        wine_server_add_data( req, keystate, sizeof(keystate) );
+        wine_server_call( req );
+    }
+    SERVER_END_REQ;
 }

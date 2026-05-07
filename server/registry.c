@@ -1989,6 +1989,20 @@ void init_registry(void)
 
     /* create windows directories */
 
+#ifdef __OHOS__
+    if (!mkdir( "dosdevices/c:/windows", 0777 ))
+    {
+        mkdir( "dosdevices/c:/windows/system32", 0777 );
+        for (i = 1; i < supported_machines_count; i++)
+        {
+            switch (supported_machines[i])
+            {
+            case IMAGE_FILE_MACHINE_I386:  mkdir( "dosdevices/c:/windows/syswow64", 0777 ); break;
+            case IMAGE_FILE_MACHINE_ARMNT: mkdir( "dosdevices/c:/windows/sysarm32", 0777 ); break;
+            }
+        }
+    }
+#else
     if (!mkdir( "drive_c/windows", 0777 ))
     {
         mkdir( "drive_c/windows/system32", 0777 );
@@ -2001,6 +2015,7 @@ void init_registry(void)
             }
         }
     }
+#endif
 
     /* go back to the server dir */
     if (fchdir( server_dir_fd ) == -1) fatal_error( "chdir to server dir: %s\n", strerror( errno ));

@@ -27,12 +27,10 @@
         "skills": [
           {
             "entities": [
-              "entity.system.home",
-              "entity.system.browsable"
+              "entity.system.home"
             ],
             "actions": [
-              "action.system.home",
-              "ohos.want.action.viewData"
+              "action.system.home"
             ],
             "uris": [
               {

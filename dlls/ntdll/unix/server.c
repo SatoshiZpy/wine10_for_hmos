@@ -1400,6 +1400,13 @@ static int setup_config_dir(void)
 
     server_dir = init_server_dir( st.st_dev, st.st_ino );
 
+#ifdef __OHOS__
+    if (!mkdir( "dosdevices", 0777 ))
+    {
+        if (mkdir( "dosdevices/c:", 0777 ) != 0)
+            ERR( "mkdir error:%d, %s\n", errno, strerror(errno));
+    }
+#else
     if (!mkdir( "dosdevices", 0777 ))
     {
         mkdir( "drive_c", 0777 );
@@ -1408,6 +1415,7 @@ static int setup_config_dir(void)
         if (symlink( "/", "dosdevices/z:" ) != 0)
             ERR( "symlink error:%d, %s\n", errno, strerror(errno));
     }
+#endif
     else if (errno != EEXIST) fatal_perror( "cannot create %s/dosdevices", config_dir );
 
     if (fd_cwd == -1) fd_cwd = open( "dosdevices/c:", O_RDONLY );

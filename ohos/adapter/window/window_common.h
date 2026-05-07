@@ -14,6 +14,8 @@ namespace ohos::adapter::window {
 using window_features_mask = int64_t;
 using window_state_mask = int64_t;
 
+static constexpr int32_t USER_DEFAULT_WIDGET_ID = 1;
+
 enum WindowFeatures : int32_t {
     WINDOW_TITLE_BAR,
     WINDOW_CLOSE_BUTTON,
@@ -36,7 +38,7 @@ enum WindowState : int32_t {
     WINDOW_MAXIMIZED,
     WINDOW_FULL_SCREEN,
     WINDOW_SPLIT_MODE,
-    WINDOW_VISIABLE,
+    WINDOW_VISIBLE,
 };
 
 static inline window_features_mask features_mask_for_type(int32_t type)

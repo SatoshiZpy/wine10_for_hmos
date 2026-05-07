@@ -959,7 +959,10 @@ end:
 
 HRESULT WINAPI DllRegisterServer(void)
 {
+#ifndef __OHOS__
+    // todo: Implement Mono installation on the OHOS platform
     install_wine_mono();
+#endif
 
     return __wine_register_resources();
 }

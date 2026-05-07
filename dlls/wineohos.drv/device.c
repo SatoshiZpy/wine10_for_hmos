@@ -157,33 +157,6 @@ done:
     return widget_id;
 }
 
-struct window_features get_window_features_for_style(DWORD style, DWORD ex_style)
-{
-    struct window_features wf = {0};
-
-    if (ex_style & WS_EX_NOACTIVATE) wf.prevents_app_activation = TRUE;
-
-    if ((style & WS_CAPTION) == WS_CAPTION && !(ex_style & WS_EX_LAYERED))
-    {
-        wf.shadow = TRUE;
-        wf.title_bar = TRUE;
-        if (style & WS_SYSMENU) wf.close_button = TRUE;
-        if (style & WS_MINIMIZEBOX) wf.minimize_button = TRUE;
-        if (style & WS_MAXIMIZEBOX) wf.maximize_button = TRUE;
-    }
-    if (style & WS_THICKFRAME)
-    {
-        wf.shadow = TRUE;
-        wf.resizable = TRUE;
-    }
-    else if (ex_style & WS_EX_DLGMODALFRAME) wf.shadow = TRUE;
-    else if ((style & (WS_DLGFRAME | WS_BORDER)) == WS_DLGFRAME) wf.shadow = TRUE;
-
-    wf.use_floating_window = FALSE;
-    wf.use_dark_mode = FALSE;
-    return wf;
-}
-
 int get_widget_id( HWND hwnd )
 {
     struct native_win_data *data = data_map[data_map_idx( hwnd )];
@@ -259,10 +232,10 @@ static struct native_buffer *get_registered_buffer( struct native_win_data *win,
 
 static int dequeueBuffer( HWND hwnd, struct native_buffer **buffer )
 {
-    ohos_window win;
+    ohos_native_window win;
     struct native_win_data *win_data;
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
-    if (!(win = win_data->win)) return STATUS_DEVICE_NOT_READY;
+    if (!(win = GetNativeWindow(win_data->win))) return STATUS_DEVICE_NOT_READY;
 
     ohos_window_buffer win_buffer;
     int fence = -1, ret;
@@ -326,13 +299,13 @@ static int cancelBuffer( HWND hwnd, int buffer_id )
 
 static int queueBuffer( HWND hwnd, struct native_buffer *locked_buffer )
 {
-    ohos_window win;
+    ohos_native_window win;
     struct native_buffer *buffer;
     struct native_win_data *win_data;
     int ret;
 
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
-    if (!(win = win_data->win)) return STATUS_DEVICE_NOT_READY;
+    if (!(win = GetNativeWindow(win_data->win))) return STATUS_DEVICE_NOT_READY;
 
     if (!(buffer = get_registered_buffer( win_data, locked_buffer->buffer_id ))) return STATUS_INVALID_HANDLE;
     if (buffer != locked_buffer) return STATUS_INVALID_HANDLE;
@@ -357,10 +330,10 @@ int perform( HWND hwnd, int operation, ... )
     };
 
     int ret = STATUS_SUCCESS;
-    ohos_window win;
+    ohos_native_window win;
     struct native_win_data *win_data;
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
-    if (!(win = win_data->win)) return STATUS_DEVICE_NOT_READY;
+    if (!(win = GetNativeWindow(win_data->win))) return STATUS_DEVICE_NOT_READY;
 
     va_list args;
 
@@ -463,7 +436,7 @@ int perform( HWND hwnd, int operation, ... )
 
 int set_swap_interval( HWND hwnd, int interval )
 {
-    ohos_window win;
+    ohos_native_window win;
     struct native_win_data *win_data;
     
     TRACE( "hwnd %08x interval %d\n", HandleToLong(hwnd), interval );
@@ -471,7 +444,7 @@ int set_swap_interval( HWND hwnd, int interval )
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
     win_data->swap_interval = interval;
 
-    if (!(win = win_data->win)) return STATUS_SUCCESS;
+    if (!(win = GetNativeWindow(win_data->win))) return STATUS_SUCCESS;
     int ret = OH_NativeWindow_NativeWindowHandleOpt(win, SET_SWAP_INTERVAL, interval);
     if (ret != 0) {
         ERR("setSwapInterval_ioctl error: %d\n", ret);
@@ -560,6 +533,7 @@ void key_event_callback( const input_event* event )
     if (event->data.key_event.is_num_lockon) data.kbd.lock_state |= KEYBOARD_NUM_LOCK;
     if (event->data.key_event.is_caps_lockon) data.kbd.lock_state |= KEYBOARD_CAPS_LOCK;
     if (event->data.key_event.is_scroll_lockon) data.kbd.lock_state |= KEYBOARD_SCROLL_LOCK;
+    data.kbd.modifier_key_states = event->data.key_event.modifier_key_states;
 
     data.kbd.input.type           = INPUT_KEYBOARD;
     data.kbd.input.ki.wVk         = vkey;
@@ -662,6 +636,8 @@ static ohos_window create_window( HWND hwnd, int window_type, const struct windo
     if (window_type == POPUP_WINDOW)
         param.parent_id = get_owner_window_id(hwnd);
 
+    param.state = get_window_state(hwnd);
+
     window = CreateNativeWindow(&param, &win_data->widget_id);
     if (!window) {
         ERR("create native window error\n");
@@ -671,16 +647,6 @@ static ohos_window create_window( HWND hwnd, int window_type, const struct windo
     win_data->container = param.container;
     win_data->win_type = param.type;
     win_data->generation++;
-    ret = OH_NativeWindow_NativeWindowHandleOpt(win_data->win, SET_FORMAT, win_data->buffer_format);
-    if (ret != 0) {
-        ERR("set format error: %d\n", ret);
-        goto failed;
-    }
-    ret = OH_NativeWindow_NativeWindowHandleOpt(win_data->win, SET_SWAP_INTERVAL, win_data->swap_interval);
-    if (ret != 0) {
-        ERR("setSwapInterval error: %d\n", ret);
-        goto failed;
-    }
 
     TRACE( "hwnd %p widget_id %d\n", win_data->hwnd, win_data->widget_id );
     return window;
@@ -728,7 +694,7 @@ void create_native_window( struct ohos_win_data *data )
 {
     DWORD style, ex_style;
     WCHAR text[1024];
-    int window_type;
+    int window_type = POPUP_WINDOW;
 
     TRACE( "hwnd %p window_rects %s\n", data->hwnd, debugstr_window_rects(&data->rects) );
 
@@ -748,8 +714,12 @@ void create_native_window( struct ohos_win_data *data )
 
     if (((style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME)))
         window_type = POPUP_WINDOW;
-    else
+    else if (((style & WS_OVERLAPPEDWINDOW) == WS_OVERLAPPEDWINDOW || (ex_style & WS_EX_APPWINDOW)))
         window_type = MAIN_WINDOW;
+    else
+        WARN("The popup window style is used by default.");
+
+    TRACE( "hwnd %p style %08x ex_style %08x\n", data->hwnd, style, ex_style );
 
     int cx, cy;
     if (!(cx = data->rects.visible.right - data->rects.visible.left)) cx = 1;
@@ -762,10 +732,6 @@ void create_native_window( struct ohos_win_data *data )
     bounds.top = data->rects.visible.top;
     bounds.width = cx;
     bounds.height = cy;
-
-    TRACE( "hwnd %p style %08x ex_style %08x bounds (%d,%d)-(%d,%d)\n",
-        data->hwnd, style, ex_style, bounds.left, bounds.top, bounds.width, bounds.height );
-
     data->window = create_window(data->hwnd, window_type, &bounds);
     if (!data->window) {
         return;
