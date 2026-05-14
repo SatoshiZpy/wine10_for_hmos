@@ -1001,9 +1001,8 @@ static FT_Face new_ft_face( const char *file, void *font_data_ptr, UINT font_dat
             ERR("Invalid font data: ptr=%p, size=%u\n", font_data_ptr, font_data_size);
             return NULL;
         }
-#else
-        err = pFT_New_Memory_Face(library, font_data_ptr, font_data_size, face_index, &ft_face);
 #endif
+        err = pFT_New_Memory_Face(library, font_data_ptr, font_data_size, face_index, &ft_face);
     }
 
     if (err != 0)
@@ -2400,11 +2399,11 @@ static BOOL freetype_load_font( struct gdi_font *font )
     }
 
 #ifdef __OHOS__
-        if (!data_ptr || !data_size)
-        {
-            ERR("Invalid font data: ptr=%p, size=%u\n", data_ptr, data_size);
-            return FALSE;
-        }
+    if (!data_ptr || !data_size)
+    {
+        ERR("Invalid font data: ptr=%p, size=%u\n", data_ptr, data_size);
+        return FALSE;
+    }
 #endif
 
     if (pFT_New_Memory_Face( library, data_ptr, data_size, font->face_index, &ft_face )) return FALSE;

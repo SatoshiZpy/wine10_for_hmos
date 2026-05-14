@@ -88,14 +88,14 @@ vs-chromium-project.txt
 ohos_sdk/command-line-tools/
 configure
 ohos/adapter/lib/*
-ohos/app/entry/oh-package-lock.json5
-ohos/app/oh-package-lock.json5
+**/oh-package-lock.json5
 ohos/app/wine_engine/libs/arm64-v8a/*
-ohos/app/wine_engine/oh-package-lock.json5
 ohos/app/wine_engine/src/main/resources/resfile/*
 out/*
 build/
 nativeBuild/
+third_party/freetype
+third_party/aki
 
 # Ignore any Android RenderTest goldens
 **/render_tests/*.png

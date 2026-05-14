@@ -7,6 +7,8 @@ BUILD_TOOLS=${ROOT_DIR}/nativeBuild
 BUILD_DIR=${ROOT_DIR}/build
 INSTALL_DIR=${ROOT_DIR}/out
 ADAPTER_DIR=${ROOT_DIR}/ohos/adapter
+APP_DIR=${ROOT_DIR}/ohos/app
+FEX_DIR=${ROOT_DIR}/ohos/fex
 LLVM_DIR=${ROOT_DIR}/third_party/llvm
 ARM64EC_BUILD_DIR=${ROOT_DIR}/arm64ecbuild
 ARM64EC_INSTALL_DIR=${ROOT_DIR}/out-arm64ec
@@ -162,6 +164,8 @@ make install-lib
 
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
 	cp ${INSTALL_DIR}/lib/wine/aarch64-windows/wineboot.exe ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
+    cp ${FEX_DIR}/libarm64ecfex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
+    cp ${FEX_DIR}/libwow64fex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
 fi
 cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so
 cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so.6
@@ -170,11 +174,11 @@ cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 
 echo "copy resources"
 cd ${ROOT_DIR}/
-mkdir -p ohos/app/wine_engine/src/main/resources/resfile/lib/wine
-cp out/lib/wine/aarch64-unix/*.so ohos/app/wine_engine/libs/arm64-v8a
-cp out/lib/wine/aarch64-unix/libfreetype.so.6 ohos/app/wine_engine/libs/arm64-v8a
-cp -r out/share ohos/app/wine_engine/src/main/resources/resfile/
-cp -r out/lib/wine/aarch64-windows ohos/app/wine_engine/src/main/resources/resfile/lib/wine/
+mkdir -p ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine
+cp out/lib/wine/aarch64-unix/*.so ${APP_DIR}/wine_engine/libs/arm64-v8a
+cp out/lib/wine/aarch64-unix/libfreetype.so.6 ${APP_DIR}/wine_engine/libs/arm64-v8a
+cp -r out/share ${APP_DIR}/wine_engine/src/main/resources/resfile/
+cp -r out/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 
 # Copy GStreamer libraries if available
 # if [ -d "${GSTREAMER_INSTALL_DIR}" ]; then

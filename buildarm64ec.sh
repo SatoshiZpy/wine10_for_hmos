@@ -26,7 +26,7 @@ fi
 export PATH=${LLVM_DIR}/LLVM-21.1.0-rc1-Linux-X64/bin/:$PATH
 cd ${ARM64EC_BUILD_DIR}
 ../configure --without-gstreamer --without-x --with-mingw=clang --enable-archs=aarch64,arm64ec,i386 --disable-tests --prefix=${ARM64EC_INSTALL_DIR} --exec-prefix=${ARM64EC_INSTALL_DIR}
-make -j $(nproc) && make install 
+make -j $(nproc) && make install-lib
 ../configure --enable-wineohos-drv --without-x --with-mingw=clang --enable-archs=aarch64,arm64ec,i386 --disable-tests 
 make dlls/wineohos.drv/aarch64-windows/wineohos.drv dlls/wineohos.drv/i386-windows/wineohos.drv
 cp dlls/wineohos.drv/aarch64-windows/wineohos.drv  ../out-arm64ec/lib/wine/aarch64-windows/
