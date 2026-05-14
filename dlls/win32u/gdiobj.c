@@ -508,7 +508,16 @@ HGDIOBJ GDI_inc_ref_count( HGDIOBJ handle )
     GDI_HANDLE_ENTRY *entry;
 
     pthread_mutex_lock( &gdi_lock );
+#ifdef __OHOS__
+    if ((entry = handle_entry( handle )))
+    {
+        WORD old_count = entry_obj( entry )->selcount;
+        entry_obj( entry )->selcount++;
+        TRACE( "handle %p old %u new %u\n", handle, old_count, entry_obj( entry )->selcount );
+    }
+#else
     if ((entry = handle_entry( handle ))) entry_obj( entry )->selcount++;
+#endif
     else handle = 0;
     pthread_mutex_unlock( &gdi_lock );
     return handle;
@@ -527,7 +536,17 @@ BOOL GDI_dec_ref_count( HGDIOBJ handle )
     pthread_mutex_lock( &gdi_lock );
     if ((entry = handle_entry( handle )))
     {
+#ifdef __OHOS__
+        if (!entry_obj( entry )->selcount)
+        {
+            WARN( "handle %p has zero selcount, possible double-free or handle reuse\n", handle);
+            pthread_mutex_unlock( &gdi_lock );
+            return FALSE;
+        }
+        WORD old_count = entry_obj( entry )->selcount;
+#else
         assert( entry_obj( entry )->selcount );
+#endif
         if (!--entry_obj( entry )->selcount && entry_obj( entry )->deleted)
         {
             /* handle delayed DeleteObject*/
@@ -537,6 +556,9 @@ BOOL GDI_dec_ref_count( HGDIOBJ handle )
             NtGdiDeleteObjectApp( handle );
             return TRUE;
         }
+#ifdef __OHOS__
+        TRACE( "handle %p old %u new %u\n", handle, old_count, entry_obj( entry )->selcount );
+#endif
     }
     pthread_mutex_unlock( &gdi_lock );
     return entry != NULL;

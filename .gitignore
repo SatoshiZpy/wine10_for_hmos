@@ -110,3 +110,5 @@ nativeBuild/
 .cache
 
 autom4te.cache/
+build.log
+*.tar.xz

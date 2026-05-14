@@ -2000,7 +2000,13 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
         }
     }
 
-    if (status)  /* try launching it through start.exe */
+#ifdef __OHOS__
+    BOOL is_wow64 = (current_machine == IMAGE_FILE_MACHINE_ARM64 &&
+                        main_image_info.Machine == IMAGE_FILE_MACHINE_I386);
+    if (status && !((is_arm64ec() || is_wow64) && status == STATUS_IMAGE_NOT_AT_BASE))
+#else
+    if (status) /* try launching it through start.exe */
+#endif
     {
         static const char *args[] = { "start.exe", "/exec" };
         free( nt_name.Buffer );
