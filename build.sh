@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
             NO_CACHE=1
             shift
             ;;
-	--build-arm64ec)
+        --build-arm64ec)
             BUILD_ARM64EC=1
             shift
             ;;
@@ -77,6 +77,13 @@ if [ ! -d "${COMMAND_LINE_TOOLS_DIR}" ]; then
 fi
 export PATH=$PATH:${ROOT_DIR}/ohos_sdk/command-line-tools/bin
 
+# Clear out
+rm -rf ${INSTALL_DIR}
+rm -rf ${ARM64EC_INSTALL_DIR}
+
+# Build adapter
+source ${ROOT_DIR}/ohos/script/build_adapter.sh
+
 # GStreamer support for OHOS
 # GSTREAMER_INSTALL_DIR=${ROOT_DIR}/third_party/gstreamer/install_ohos
 # export PKG_CONFIG_PATH="${GSTREAMER_INSTALL_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}"
@@ -84,14 +91,14 @@ export PATH=$PATH:${ROOT_DIR}/ohos_sdk/command-line-tools/bin
 # export GSTREAMER_LIBS="-L${GSTREAMER_INSTALL_DIR}/lib -lgstreamer-1.0 -lgstbase-1.0 -lgstvideo-1.0 -lgstaudio-1.0 -lgsttag-1.0 -lgobject-2.0 -lglib-2.0"
 # buildargs="${buildargs} --with-gstreamer"
 # echo "GStreamer support enabled: ${GSTREAMER_INSTALL_DIR}"
-# ./build_gstreamer_ohos.sh
+# source ${ROOT_DIR}/ohos/script/build_gstreamer.sh
 
 # Build third_party freetype
-source ${ROOT_DIR}/third_party/freetypebuild.sh
+source ${ROOT_DIR}/ohos/script/build_freetype.sh
 
 # Build wine dll for arm64ec and wow64 mode
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
-	source ${ROOT_DIR}/buildarm64ec.sh
+    source ${ROOT_DIR}/ohos/script/build_arm64ec.sh
 fi
 
 # Build x86 wine
@@ -121,26 +128,11 @@ export NM=${OHOS_SDK}/native/llvm/bin/llvm-nm
 export AR=${OHOS_SDK}/native/llvm/bin/llvm-ar
 export CFLAGS="-fPIC -D__MUSL__=1"
 export CXXFLAGS="-fPIC -D__MUSL__=1"
-export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_PREFIX}/include/freetype2"
-export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_PREFIX}/lib ${GSTREAMER_LIBS}"
+export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include"
+export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build ${GSTREAMER_LIBS}"
 export PATH=${OHOS_SDK}/native/llvm/bin:$PATH
 
 time_start_for_build=$(date +%s)
-
-if [ ! -d "${ADAPTER_DIR}/build" ]; then
-    mkdir -p ${ADAPTER_DIR}/build
-fi
-
-# Build adapter
-cd ${ADAPTER_DIR}/build
-$CMAKE_PATH  -G "Ninja" -D OHOS_ARCH=arm64-v8a -D OHOS_STL=c++_shared -D OHOS_PLATFORM=OHOS -D CMAKE_TOOLCHAIN_FILE=$CMAKE_FILE_PATH -D CMAKE_MAKE_PROGRAM=$NINJA_PATH -DAKI_BUILDING_SHARED=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ../
-$CMAKE_PATH --build .
-
-echo "cp libadapter.so: ${ADAPTER_DIR}/lib"
-if [ ! -d "${ADAPTER_DIR}/lib" ]; then
-    mkdir -p ${ADAPTER_DIR}/lib
-fi
-cp -rf libadapter.so ${ADAPTER_DIR}/lib
 
 echo "generating args list: $buildargs"
 echo "build wine in: ${BUILD_DIR}"
@@ -163,32 +155,50 @@ echo "install wine in: ${INSTALL_DIR}"
 make install-lib
 
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
-	cp ${INSTALL_DIR}/lib/wine/aarch64-windows/wineboot.exe ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
+    cp ${INSTALL_DIR}/lib/wine/aarch64-windows/wineboot.exe ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
     cp ${FEX_DIR}/libarm64ecfex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
     cp ${FEX_DIR}/libwow64fex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
 fi
-cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so
-cp ${FREETYPE_PREFIX}/lib/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so.6
+cp ${FREETYPE_DIR}/build/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so
 cp ${ADAPTER_DIR}/lib/libadapter.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 
 echo "copy resources"
 cd ${ROOT_DIR}/
+rm -rf ${APP_DIR}/wine_engine/src/main/resources/resfile/
 mkdir -p ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine
-cp out/lib/wine/aarch64-unix/*.so ${APP_DIR}/wine_engine/libs/arm64-v8a
-cp out/lib/wine/aarch64-unix/libfreetype.so.6 ${APP_DIR}/wine_engine/libs/arm64-v8a
-cp -r out/share ${APP_DIR}/wine_engine/src/main/resources/resfile/
-cp -r out/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
+mkdir -p ${APP_DIR}/wine_engine/src/main/resources/resfile/share
+cp ${INSTALL_DIR}/lib/wine/aarch64-unix/*.so ${APP_DIR}/wine_engine/libs/arm64-v8a
+if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+    cp -r ${ARM64EC_INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
+    cp -r ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
+else
+    cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
+    cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
+fi
 
 # Copy GStreamer libraries if available
 # if [ -d "${GSTREAMER_INSTALL_DIR}" ]; then
 #     echo "copying GStreamer libraries"
-#     mkdir -p ohos/app/wine_engine/libs/arm64-v8a/gstreamer-1.0
-#     cp -r ${GSTREAMER_INSTALL_DIR}/lib/*.so* ohos/app/wine_engine/libs/arm64-v8a/
+#     mkdir -p ${APP_DIR}/wine_engine/libs/arm64-v8a/gstreamer-1.0
+#     cp -r ${GSTREAMER_INSTALL_DIR}/lib/*.so* ${APP_DIR}/wine_engine/libs/arm64-v8a/
 #     # Copy GStreamer plugins
 #     echo "copying GStreamer plugins"
-#     cp -r ${GSTREAMER_INSTALL_DIR}/lib/gstreamer-1.0/*.so* ohos/app/wine_engine/libs/arm64-v8a/gstreamer-1.0/ 2>/dev/null
+#     cp -r ${GSTREAMER_INSTALL_DIR}/lib/gstreamer-1.0/*.so* ${APP_DIR}/wine_engine/libs/arm64-v8a/gstreamer-1.0/ 2>/dev/null
 # fi
+
+echo "compile hap"
+cd ${APP_DIR}/
+rm -rf ~/.hvigor
+ohpm install --all
+hvigorw clean --daemon
+hvigorw --sync -p product=default --analyze=normal --parallel --incremental --daemon
+hvigorw --mode module -p product=default assembleHap --analyze=normal --parallel --incremental --daemon
+
+echo "copy hap"
+cd ${ROOT_DIR}/
+mkdir ${INSTALL_DIR}/wine_hap/
+cp ${APP_DIR}/entry/build/default/outputs/default/entry-default-unsigned.hap ${INSTALL_DIR}/wine_hap/
 
 time_end_for_build=$(date +%s)
 

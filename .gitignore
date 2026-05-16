@@ -112,3 +112,6 @@ third_party/aki
 autom4te.cache/
 build.log
 *.tar.xz
+arm64ecbuild/
+third_party/llvm/
+**/oh_modules/
