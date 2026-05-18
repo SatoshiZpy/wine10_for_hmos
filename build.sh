@@ -160,6 +160,7 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp ${FEX_DIR}/libwow64fex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
 fi
 cp ${FREETYPE_DIR}/build/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so
+cp ${FREETYPE_DIR}/build/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so.6
 cp ${ADAPTER_DIR}/lib/libadapter.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 
