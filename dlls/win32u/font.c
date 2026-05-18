@@ -230,6 +230,25 @@ static inline int facename_compare( const WCHAR *str1, const WCHAR *str2, SIZE_T
     return 0;
 }
 
+#ifdef __OHOS__
+static SIZE_T strip_font_locale_annotation( const WCHAR *name )
+{
+    SIZE_T len = lstrlenW( name );
+    SIZE_T i;
+    BOOL has_non_ascii = FALSE;
+
+    if (len < 4) return 0;
+    if (name[len - 1] != ')') return 0;
+    for (i = len - 2; i > 0; i--)
+    {
+        if (name[i] > 127) has_non_ascii = TRUE;
+        if (name[i] == '(' && name[i - 1] == ' ' && has_non_ascii)
+            return i - 1;
+    }
+    return 0;
+}
+#endif
+
   /* Device -> World size conversion */
 
 /* Performs a device to world transformation on the specified width (which
@@ -450,22 +469,38 @@ static const struct nls_update_font_list
     /* Japanese */
     { 932, 932, "vga932.fon", "jvgafix.fon", "jvgasys.fon",
       "coure.fon", "serife.fon", "jsmalle.fon", "sserife.fon", "sseriff.fon",
+#ifdef __OHOS__
+      "Tahoma", "Noto Serif CJK JP"
+#else
       "MS UI Gothic","MS Serif"
+#endif
     },
     /* Chinese Simplified */
     { 936, 936, "vga936.fon", "svgafix.fon", "svgasys.fon",
       "coure.fon", "serife.fon", "smalle.fon", "sserife.fon", "sseriff.fon",
+#ifdef __OHOS__
+      "Tahoma", "Noto Serif CJK SC"
+#else
       "SimSun", "NSimSun"
+#endif
     },
     /* Korean */
     { 949, 949, "vga949.fon", "hvgafix.fon", "hvgasys.fon",
       "coure.fon", "serife.fon", "smalle.fon", "sserife.fon", "sseriff.fon",
+#ifdef __OHOS__
+      "Tahoma", "Noto Serif CJK KR"
+#else
       "Gulim",  "Batang"
+#endif
     },
     /* Chinese Traditional */
     { 950, 950, "vga950.fon", "cvgafix.fon", "cvgasys.fon",
       "coure.fon", "serife.fon", "smalle.fon", "sserife.fon", "sseriff.fon",
+#ifdef __OHOS__
+      "Tahoma", "Noto Serif CJK TC"
+#else
       "PMingLiU",  "MingLiU"
+#endif
     }
 };
 
@@ -2332,7 +2367,29 @@ static struct gdi_font_face *find_matching_face( const LOGFONTW *lf, CHARSETINFO
     if (lf->lfFaceName[0])
     {
         int subst_charset;
+#ifdef __OHOS__
+        const WCHAR *face_name = lf->lfFaceName;
+        WCHAR stripped_buf[LF_FACESIZE];
+        SIZE_T stripped_len = strip_font_locale_annotation( lf->lfFaceName );
+
+        /* HarmonyOS: use the base name without any " (LocaleName)" annotation
+         * for substitution and family lookups; some applications (e.g. SAP
+         * OCX controls on CJK Windows) store the display-only locale
+         * annotation in lfFaceName which would otherwise prevent matching
+         * the "MS Shell Dlg" substitution. */
+        if (stripped_len && stripped_len < LF_FACESIZE)
+        {
+            memcpy( stripped_buf, lf->lfFaceName, stripped_len * sizeof(WCHAR) );
+            stripped_buf[stripped_len] = 0;
+            face_name = stripped_buf;
+            TRACE( "stripped locale annotation: %s -> %s\n",
+                   debugstr_w(lf->lfFaceName), debugstr_w(face_name) );
+        }
+
+        const WCHAR *subst = get_gdi_font_subst( face_name, lf->lfCharSet, &subst_charset );
+#else
         const WCHAR *subst = get_gdi_font_subst( lf->lfFaceName, lf->lfCharSet, &subst_charset );
+#endif
 
 	if (subst)
         {
@@ -2343,7 +2400,11 @@ static struct gdi_font_face *find_matching_face( const LOGFONTW *lf, CHARSETINFO
             *substituted = TRUE;
 	}
 
+#ifdef __OHOS__
+        if ((face = find_matching_face_by_name( face_name, subst, lf, csi->fs, can_use_bitmap, orig_name )))
+#else
         if ((face = find_matching_face_by_name( lf->lfFaceName, subst, lf, csi->fs, can_use_bitmap, orig_name )))
+#endif
             return face;
     }
     *substituted = FALSE; /* substitution is no longer relevant */
