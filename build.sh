@@ -21,6 +21,8 @@ CMAKE_FILE_PATH=${OHOS_SDK}/native/build/cmake/ohos.toolchain.cmake
 # Processing parameters
 NO_CACHE=0
 BUILD_ARM64EC=0
+COMPILE_HAP=0
+DEBUG_MODE=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-cache)
@@ -31,13 +33,23 @@ while [[ $# -gt 0 ]]; do
             BUILD_ARM64EC=1
             shift
             ;;
+        --compile-hap)
+            COMPILE_HAP=1
+            shift
+            ;;
+        --debug)
+            DEBUG_MODE=1
+            shift
+            ;;
         -h|--help)
             echo "用法: $0 [--no-cache]"
             echo ""
             echo "选项:"
             echo "  --no-cache        清理所有缓存后重新编译"
             echo "  --build-arm64ec   编译arm64ec/wow64 mode dll"
-	    echo "  -h, --help        显示此帮助信息"
+            echo "  --compile-hap     编译HAP包"
+            echo "  --debug           启用调试模式"
+            echo "  -h, --help        显示此帮助信息"
             exit 0
             ;;
         *)
@@ -82,6 +94,11 @@ rm -rf ${INSTALL_DIR}
 rm -rf ${ARM64EC_INSTALL_DIR}
 
 # Build adapter
+if [${DEBUG_MODE} -eq 1]; then
+    export ADAPTER_BUILD_TYPE=Debug
+else
+    export ADAPTER_BUILD_TYPE=Release
+fi
 source ${ROOT_DIR}/ohos/script/build_adapter.sh
 
 # GStreamer support for OHOS
@@ -126,8 +143,13 @@ export OBJDUMP=${OHOS_SDK}/native/llvm/bin/llvm-objdump
 export OBJCOPY=${OHOS_SDK}/native/llvm/bin/llvm-objcopy
 export NM=${OHOS_SDK}/native/llvm/bin/llvm-nm
 export AR=${OHOS_SDK}/native/llvm/bin/llvm-ar
-export CFLAGS="-fPIC -D__MUSL__=1"
-export CXXFLAGS="-fPIC -D__MUSL__=1"
+if [${DEBUG_MODE} -eq 1]; then
+    export CFLAGS="-fPIC -D__MUSL__=1 -g"
+    export CXXFLAGS="-fPIC -D__MUSL__=1 -g"
+else
+    export CFLAGS="-fPIC -D__MUSL__=1"
+    export CXXFLAGS="-fPIC -D__MUSL__=1"
+fi
 export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include"
 export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build ${GSTREAMER_LIBS}"
 export PATH=${OHOS_SDK}/native/llvm/bin:$PATH
@@ -188,18 +210,20 @@ fi
 #     cp -r ${GSTREAMER_INSTALL_DIR}/lib/gstreamer-1.0/*.so* ${APP_DIR}/wine_engine/libs/arm64-v8a/gstreamer-1.0/ 2>/dev/null
 # fi
 
-echo "compile hap"
-cd ${APP_DIR}/
-rm -rf ~/.hvigor
-ohpm install --all
-hvigorw clean --daemon
-hvigorw --sync -p product=default --analyze=normal --parallel --incremental --daemon
-hvigorw --mode module -p product=default assembleHap --analyze=normal --parallel --incremental --daemon
+if [ "${COMPILE_HAP}" -eq 1 ]; then
+    echo "compile hap"
+    cd ${APP_DIR}/
+    rm -rf ~/.hvigor
+    ohpm install --all
+    hvigorw clean --daemon
+    hvigorw --sync -p product=default --analyze=normal --parallel --incremental --daemon
+    hvigorw --mode module -p product=default assembleHap --analyze=normal --parallel --incremental --daemon
 
-echo "copy hap"
-cd ${ROOT_DIR}/
-mkdir ${INSTALL_DIR}/wine_hap/
-cp ${APP_DIR}/entry/build/default/outputs/default/entry-default-unsigned.hap ${INSTALL_DIR}/wine_hap/
+    echo "copy hap"
+    cd ${ROOT_DIR}/
+    mkdir ${INSTALL_DIR}/wine_hap/
+    cp ${APP_DIR}/entry/build/default/outputs/default/entry-default-unsigned.hap ${INSTALL_DIR}/wine_hap/
+fi
 
 time_end_for_build=$(date +%s)
 
