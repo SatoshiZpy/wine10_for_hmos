@@ -94,8 +94,8 @@ ohos/app/wine_engine/src/main/resources/resfile/*
 out/*
 build/
 nativeBuild/
-third_party/freetype
-third_party/aki
+- third_party/freetype
+- third_party/aki
 
 # Ignore any Android RenderTest goldens
 **/render_tests/*.png
@@ -114,4 +114,5 @@ build.log
 *.tar.xz
 arm64ecbuild/
 third_party/llvm/
+third_party/*.xz/
 **/oh_modules/
