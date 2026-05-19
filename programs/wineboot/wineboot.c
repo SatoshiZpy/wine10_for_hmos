@@ -1621,6 +1621,55 @@ static void update_user_profile(void)
     LocalFree(sid);
 }
 
+
+#ifdef __OHOS__
+static const char exagear_config_conf[] =
+"EXAGEAR_DISABLE_LDST_ADDR_OPT=\"y\"\n"
+"EXAGEAR_SMO_MODE=\"all\"\n"
+"EXAGEAR_SMO_SEVERITY=\"full\"\n"
+"EXAGEAR_DISABLE_SMO_IN_JIT=\"n\"\n"
+"EXAGEAR_FAST_MATH=\"n\"\n"
+"EXAGEAR_SAFE_MODE=\"y\"\n";
+
+static const struct { const WCHAR *name; const char *data; SIZE_T size; } exagear_files[] =
+{
+    { L"config.conf", exagear_config_conf, sizeof(exagear_config_conf) - 1 },
+};
+
+static void create_exagearconf(void)
+{
+    WCHAR windows_dir[MAX_PATH];
+    WCHAR dst_dir[MAX_PATH];
+    WCHAR dst_file[MAX_PATH];
+    HANDLE hfile;
+    DWORD written;
+    SIZE_T i;
+
+    if (!GetWindowsDirectoryW( windows_dir, MAX_PATH ))
+        return;
+
+    swprintf( dst_dir, MAX_PATH, L"%s\\exagear", windows_dir );
+    if (!CreateDirectoryW( dst_dir, NULL ) && GetLastError() != ERROR_ALREADY_EXISTS)
+    {
+        ERR( "Failed to create directory %s, error %lu\n", debugstr_w(dst_dir), GetLastError() );
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(exagear_files); i++)
+    {
+        swprintf( dst_file, MAX_PATH, L"%s\\%s", dst_dir, exagear_files[i].name );
+        hfile = CreateFileW( dst_file, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL );
+        if (hfile == INVALID_HANDLE_VALUE)
+        {
+            WARN( "Failed to create %s: error %lu\n", debugstr_w(exagear_files[i].name), GetLastError() );
+            continue;
+        }
+        WriteFile( hfile, exagear_files[i].data, exagear_files[i].size, &written, NULL );
+        CloseHandle( hfile );
+    }
+}
+#endif /* __OHOS__ */
+
 /* execute rundll32 on the wine.inf file if necessary */
 static void update_wineprefix( BOOL force )
 {
@@ -1675,6 +1724,17 @@ static void update_wineprefix( BOOL force )
         }
         install_root_pnp_devices();
         update_user_profile();
+        
+#ifdef __OHOS__
+        for (int i = 0; i < count; i++)
+        {
+            if (!machines[i].Native)
+            {
+                create_exagearconf();
+                break;
+            }
+        }
+#endif
 
         TRACE( "wine: configuration in %s has been updated.\n", debugstr_w(prettyprint_configdir()) );
     }
