@@ -78,6 +78,11 @@ bool WineWindow::Initialize(const ipc::WindowParam& param)
   return true;
 }
 
+WineFakeWindow* WineWindow::AsFakeWindow()
+{
+  return nullptr;
+}
+
 WineFloatWindow* WineWindow::AsFloatWindow()
 {
   return nullptr;

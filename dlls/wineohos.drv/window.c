@@ -1262,6 +1262,12 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             show_window(data);
     }
 
+    if (!data->on_screen)
+    {
+        if (swp_flags & SWP_SHOWWINDOW)
+            show_window(data);
+    }
+
 done:
     release_win_data(data);
 }

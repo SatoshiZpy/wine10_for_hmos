@@ -135,6 +135,9 @@ void XComponentManager::OnWidgetAvailable(int32_t widget_id) {
 void XComponentManager::OnWidgetDestroyed(int32_t widget_id) {
   std::lock_guard<std::mutex> lock_protect(mutex_);
   RemoveXComponent(widget_id);
+  if (widget_id_ == widget_id) {
+    widget_id_ = -1;
+  }
 }
 
 void XComponentManager::SetActivateWindow(int32_t widget_id) {
@@ -142,6 +145,12 @@ void XComponentManager::SetActivateWindow(int32_t widget_id) {
   if (jsFunc) {
     jsFunc->Invoke<void>(widget_id);
   }
+  widget_id_ = widget_id;
+}
+
+int32_t XComponentManager::GetActivateWindow() {
+  std::lock_guard<std::mutex> lock_protect(mutex_);
+  return widget_id_;
 }
 
 }  // namespace ohos::adapter::xcomponent

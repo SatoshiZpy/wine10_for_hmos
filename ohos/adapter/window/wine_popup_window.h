@@ -11,7 +11,7 @@ namespace ohos::adapter::window {
 
 class WinePopupWindow : public WineWindow {
   public:
-    WinePopupWindow(WineWindow* parent);
+    explicit WinePopupWindow(std::shared_ptr<WineWindow> parent);
     WinePopupWindow(WinePopupWindow&&) = delete;
     WinePopupWindow& operator=(WinePopupWindow&&) = delete;
     WinePopupWindow(const WinePopupWindow&) = delete;

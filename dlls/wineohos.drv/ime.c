@@ -18,12 +18,12 @@ static bool ime_enabled = false;
 static HWND ime_focused_hwnd = 0;
 static struct ime_cursor_info g_cursor_info = {0};
 
-static void lock_ime_state()
+static void lock_ime_state(void)
 {
     pthread_mutex_lock( &ime_mutex );
 }
 
-static void unlock_ime_state()
+static void unlock_ime_state(void)
 {
     pthread_mutex_unlock( &ime_mutex );
 }
@@ -43,7 +43,7 @@ static void on_ime_commit_text(const char* str, int count)
     len = ntdll_umbstowcs( str, count, output, count );
     output[len] = 0;
 
-    TRACE( "ime commit text, ime_focused_hwnd : %d, string : %s\n", ime_focused_hwnd, debugstr_an(str, count) );
+    TRACE( "ime commit text, ime_focused_hwnd: %p, string: %s\n", ime_focused_hwnd, debugstr_an(str, count) );
     post_ime_update( ime_focused_hwnd, 0, NULL, output );
 
     free( output );
@@ -53,21 +53,29 @@ static void on_ime_delete_text(int direction, int32_t length)
 {
     WORD vkey;
     WORD scan;
-    if (direction == OHOS_IME_DELETE_BACKWARD) {
+    if (direction == OHOS_IME_DELETE_BACKWARD)
+    {
         vkey = VK_BACK;
         scan = 0x0e;
-    } else if (direction == OHOS_IME_DELETE_FORWARD) {
+    }
+    else if (direction == OHOS_IME_DELETE_FORWARD)
+    {
         vkey = VK_DELETE;
         scan = 0x153;
     }
+    else
+    {
+        ERR("unknown direction %d\n", direction);
+        return;
+    }
 
-    TRACE("delete text, ime_focused_hwnd : %d direction : %d\n", ime_focused_hwnd, direction);
+    TRACE("delete text, ime_focused_hwnd: %p direction: %d\n", ime_focused_hwnd, direction);
     send_keyboard_input( ime_focused_hwnd, vkey, scan, 0 );
 }
 
 static void on_ime_function_key(const int enter_key_type)
 {
-    TRACE("enter_key hwnd : %d, type : %d\n", ime_focused_hwnd, enter_key_type);
+    TRACE("enter_key hwnd: %p, type: %d\n", ime_focused_hwnd, enter_key_type);
     send_keyboard_input( ime_focused_hwnd, VK_RETURN, 0x1c, 0 );
 }
 
@@ -80,7 +88,8 @@ void send_ime_event( const ime_event* event )
 
     int size = event->data.input_text_len;
     data.ime.data.input_text_len = size;
-    if (event->data.input_text) {
+    if (event->data.input_text)
+    {
         memcpy(data.ime.data.input_text, event->data.input_text, size + 1);
     }
     data.ime.data.delete_text_len = event->data.delete_text_len;
@@ -93,13 +102,15 @@ void send_ime_event( const ime_event* event )
 
 void distribute_ime_callback( const struct ime_data* data )
 {
-    TRACE("distribute_ime_callback, callback type : %d\n", data->ime_type);
+    TRACE("distribute_ime_callback, callback type: %d\n", data->ime_type);
     lock_ime_state();
-    if (!ime_enabled || !ime_focused_hwnd) {
+    if (!ime_enabled || !ime_focused_hwnd)
+    {
         unlock_ime_state();
         return;
     }
-    switch (data->ime_type) {
+    switch (data->ime_type)
+    {
         case OHOS_IME_INSERT_TEXT:
             on_ime_commit_text(data->input_text, data->input_text_len);
             break;
@@ -121,30 +132,39 @@ void distribute_ime_callback( const struct ime_data* data )
 void init_input_attribute(struct ime_input_attribute* input_attribute)
 {
     LONG style = NtUserGetWindowLongW(ime_focused_hwnd, GWL_STYLE);
-    if (style & ES_PASSWORD) {
-        if (style & ES_NUMBER) {
+    if (style & ES_PASSWORD)
+    {
+        if (style & ES_NUMBER)
+        {
             input_attribute->input_pattern = IME_TEXT_INPUT_NUMBER_PASSWORD;
-        } else {
+        }
+        else
+        {
             input_attribute->input_pattern = IME_TEXT_INPUT_VISIBLE_PASSWORD;
         }
-    } else if (style & ES_NUMBER) {
+    }
+    else if (style & ES_NUMBER)
+    {
         input_attribute->input_pattern = IME_TEXT_INPUT_NUMBER_DECIMAL;
-    } else if (style & ES_MULTILINE) {
+    }
+    else if (style & ES_MULTILINE)
+    {
         input_attribute->input_pattern = IME_TEXT_INPUT_MULTILINE;
-        if (style & ES_WANTRETURN) {
+        if (style & ES_WANTRETURN)
+        {
             input_attribute->enter_key_type = IME_ENTER_KEY_NEWLINE;
         }
     }
 }
 
-void update_input_attribute()
+void update_input_attribute(void)
 {
     struct ime_input_attribute input_attribute = {0};
     init_input_attribute(&input_attribute);
     IMEUpdateAttribute(input_attribute);
 }
 
-void ime_attach()
+void ime_attach(void)
 {
     bool showKeyboard = false;
     int reason = IME_REQUEST_KEYBOARD_NONE;
@@ -166,21 +186,28 @@ void ime_attach()
 
 void OHOS_NotifyIMEStatus(HWND hwnd, UINT status)
 {
-    TRACE("notify ime status, hwnd : %d, status : %u\n", hwnd, status);
+    TRACE("notify ime status, hwnd: %p, status: %u\n", hwnd, status);
     struct ohos_win_data *data;
     if (!(data = get_win_data(hwnd))) return;
 
     lock_ime_state();
-    if (status) {
-        if (!ime_enabled) {
+    if (status)
+    {
+        if (!ime_enabled)
+        {
             ime_attach();
             ime_enabled = true;
-        } else {
+        }
+        else
+        {
             update_input_attribute();
         }
         ime_focused_hwnd = hwnd;
-    } else {
-        if (ime_focused_hwnd == hwnd) {
+    }
+    else
+    {
+        if (ime_focused_hwnd == hwnd)
+        {
             TRACE("ime detach\n");
             IMEDetachTextInput();
             ime_enabled = false;
@@ -193,7 +220,7 @@ void OHOS_NotifyIMEStatus(HWND hwnd, UINT status)
 
 BOOL OHOS_SetIMECompositionRect(HWND hwnd, RECT rect)
 {
-    TRACE("set ime composition rect, hwnd : %d, rect : {%d,%d,%d,%d}\n",
+    TRACE("set ime composition rect, hwnd: %p, rect: {%d,%d,%d,%d}\n",
           hwnd, rect.left, rect.top, rect.right, rect.bottom);
     
     g_cursor_info.left = rect.left;

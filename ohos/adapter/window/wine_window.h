@@ -19,6 +19,7 @@
 
 namespace ohos::adapter::window {
 
+class WineFakeWindow;
 class WineFloatWindow;
 class WinePopupWindow;
 class WineToplevelWindow;
@@ -40,20 +41,23 @@ class WineWindow {
 
     bool Initialize(const ipc::WindowParam& param);
 
+    virtual WineFakeWindow* AsFakeWindow();
     virtual WineFloatWindow* AsFloatWindow();
     virtual WinePopupWindow* AsPopupWindow();
     virtual WineToplevelWindow* AsToplevelWindow();
 
-    void set_parent_window(WineWindow* parent_window) {
+    void set_parent_window(std::shared_ptr<WineWindow> parent_window) {
       parent_window_ = parent_window;
     }
-    WineWindow* parent_window() const { return parent_window_; }
+    WineWindow* parent_window() const { return parent_window_.get(); }
 
     void SetWidget(int32_t new_widget);
     int32_t GetWidget() const { return widget_; }
 
-    void set_child_window(WineWindow* window) { child_window_ = window; }
-    WineWindow* child_window() const { return child_window_; }
+    void set_child_window(std::shared_ptr<WineWindow> child_window) {
+      child_window_ = child_window;
+    }
+    WineWindow* child_window() const { return child_window_.get(); }
 
     WindowInitType type() const { return type_; }
     
@@ -121,8 +125,8 @@ class WineWindow {
     WindowRect bounds_;
     WindowRect previous_bounds_;
 
-    WineWindow* parent_window_ = nullptr;
-    WineWindow* child_window_ = nullptr;
+    std::shared_ptr<WineWindow> parent_window_;
+    std::shared_ptr<WineWindow> child_window_;
 
     int32_t buffer_format = -1;
     int32_t swap_interval = -1;

@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ohos/adapter/window/wine_window.h"
-
 #ifndef OHOS_ADAPTER_WINDOW_WINE_TOPLEVEL_WINDOW_H_
 #define OHOS_ADAPTER_WINDOW_WINE_TOPLEVEL_WINDOW_H_
+
+#include "ohos/adapter/window/wine_window.h"
 
 namespace ohos::adapter::window {
 

@@ -6,6 +6,7 @@
 
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/window/window_common.h"
+#include "ohos/adapter/window/wine_fake_window.h"
 #include "ohos/adapter/window/wine_float_window.h"
 #include "ohos/adapter/window/wine_popup_window.h"
 #include "ohos/adapter/window/wine_toplevel_window.h"
@@ -26,10 +27,11 @@ std::shared_ptr<WineWindow> WineWindow::Create(
     case WindowInitType::kTooltip:
       // sub window created with a parent window set.
       if (auto parent = WineWindowManager::GetInstance().GetWindow(param.parent_id)) {
-        window = std::make_shared<WinePopupWindow>(parent.get());
+        window = std::make_shared<WinePopupWindow>(parent);
       } else {
-        LOGW("Failed to determine parent for menu/popup window.");
-        return nullptr;
+        LOGW("Failed to determine parent: %{public}d for menu/popup window.", param.parent_id);
+        auto fake_parent = std::make_shared<WineFakeWindow>();
+        window = std::make_shared<WinePopupWindow>(fake_parent);
       }
       break;
     case WindowInitType::kWindow: {

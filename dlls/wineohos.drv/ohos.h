@@ -105,7 +105,7 @@ enum keyboard_lock_state{
   KEYBOARD_SCROLL_LOCK = 0x04,
 };
 extern WORD vkey_to_scancode[];
-extern const UINT keycode_to_vkey( int keycode );
+extern UINT keycode_to_vkey( int keycode );
 extern void send_keyboard_input( HWND hwnd, WORD vkey, WORD scan, DWORD flags );
 extern void update_keyboard_lock_state( WORD vkey, UINT state );
 extern void sync_modifier_key_state( WORD vkey, uint64_t modifier_key_states );
@@ -137,7 +137,7 @@ extern pthread_mutex_t ime_mutex;
 extern void OHOS_NotifyIMEStatus( HWND hwnd, UINT status );
 extern BOOL OHOS_SetIMECompositionRect( HWND hwnd, RECT rect );
 extern void send_ime_event( const ime_event* event );
-extern void ime_attach();
+extern void ime_attach(void);
 extern void distribute_ime_callback( const struct ime_data* data );
 extern void ime_on_screen_unlock(void);
 

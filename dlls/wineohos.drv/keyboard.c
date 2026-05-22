@@ -275,7 +275,7 @@ WORD vkey_to_scancode[] =
     0,     /* 0xff undefined */
 };
 
-const UINT keycode_to_vkey(int keycode)
+UINT keycode_to_vkey(int keycode)
 {
     switch (keycode) {
         case KEY_0: return '0';

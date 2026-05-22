@@ -9,8 +9,8 @@
 
 namespace ohos::adapter::window {
 
-WinePopupWindow::WinePopupWindow(WineWindow* parent)
-    : WineWindow() {
+WinePopupWindow::WinePopupWindow(std::shared_ptr<WineWindow> parent)
+  : WineWindow() {
   set_parent_window(parent);
 }
 

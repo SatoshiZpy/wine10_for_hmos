@@ -253,7 +253,9 @@ public:
     virtual ~RemoteHolder()
     {
         if (remote_) {
+            LOGD("RemoteHolder destroyed, descriptor: %{public}s", GetInterfaceToken().c_str());
             OH_IPCRemoteProxy_Destroy(remote_);
+            remote_ = nullptr;
         }
     }
 
@@ -357,7 +359,9 @@ public:
     virtual ~StubHolder()
     {
         if (remote_) {
+            LOGD("StubHolder destroyed, descriptor: %{public}s", descriptor.c_str());
             OH_IPCRemoteStub_Destroy(remote_);
+            remote_ = nullptr;
         }
     }
 

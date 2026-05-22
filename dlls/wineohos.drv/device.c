@@ -73,6 +73,7 @@ static HWND get_hwnd_by_widget_id( const int widget_id )
         if (data_map[i] && data_map[i]->widget_id == widget_id)
             return data_map[i]->hwnd;
     }
+    WARN( "unknown widget_id %d\n", widget_id );
     return NULL;
 }
 
@@ -153,6 +154,12 @@ static int get_owner_window_id( HWND hwnd )
     widget_id = owner_win->widget_id;
 
 done:
+    if (widget_id <= 0)
+    {
+        WARN( "failed to get owner window, using current focus window instead, win %p\n", hwnd );
+        widget_id = GetFocusWindow();
+    }
+    TRACE( "get owner window %d, win %p\n", widget_id, hwnd );
     release_win_data( data );
     return widget_id;
 }
@@ -614,7 +621,6 @@ void distribute_input_event_callback( const input_event* event )
 
 static ohos_window create_window( HWND hwnd, int window_type, const struct window_bounds *bounds )
 {
-    int ret;
     ohos_window window;
     struct window_param param;
     struct native_win_data *win_data;
@@ -717,7 +723,7 @@ void create_native_window( struct ohos_win_data *data )
     else if (((style & WS_OVERLAPPEDWINDOW) == WS_OVERLAPPEDWINDOW || (ex_style & WS_EX_APPWINDOW)))
         window_type = MAIN_WINDOW;
     else
-        WARN("The popup window style is used by default.");
+        WARN("The popup window style is used by default.\n");
 
     TRACE( "hwnd %p style %08x ex_style %08x\n", data->hwnd, style, ex_style );
 

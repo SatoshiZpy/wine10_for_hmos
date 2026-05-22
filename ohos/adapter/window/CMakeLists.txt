@@ -3,6 +3,7 @@ target_sources(adapter PRIVATE
     adapter/sub_window_adapter.cc
     adapter/system_floating_window_adapter.cc
     window_common.cc
+    wine_fake_window.cc
     wine_float_window.cc
     wine_popup_window.cc
     wine_toplevel_window.cc

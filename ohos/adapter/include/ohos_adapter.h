@@ -52,7 +52,8 @@ ADAPTER_API void SetWindowAlpha(int widget_id, float opacity);
 ADAPTER_API void SetWindowTitle(int widget_id, const char* title);
 ADAPTER_API void SetWindowVisible(int widget_id, int visible);
 ADAPTER_API struct window_bounds GetInitialBounds(void);
-ADAPTER_API ohos_native_window GetNativeWindow(ohos_window* w);
+ADAPTER_API ohos_native_window GetNativeWindow(ohos_window w);
+ADAPTER_API int GetFocusWindow(void);
 
 /* process */
 ADAPTER_API int StartNativeProcess(int argc, char **argv, const struct launch_options *options);
@@ -84,7 +85,7 @@ ADAPTER_API void RegisterIMEEventCallBack(const ime_event_callback callback);
 ADAPTER_API void IMEAttachTextInput(bool show_keyboard,
                                     const struct ime_text_config* text_config,
                                     int32_t request_keyboard_reason);
-ADAPTER_API void IMEDetachTextInput();
+ADAPTER_API void IMEDetachTextInput(void);
 ADAPTER_API void IMEUpdateAttribute(const struct ime_input_attribute input_attribute);
 ADAPTER_API void IMENotifyCursorUpdate(const struct ime_cursor_info* cursor_info);
 

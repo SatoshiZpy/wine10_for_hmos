@@ -24,6 +24,7 @@
 #include "ohos/adapter/xcomponent/adapter/input_event_callback_adapter.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
 #include "ohos/adapter/xcomponent/event/window_event_common.h"
+#include "ohos/adapter/xcomponent/xcomponent_manager.h"
 
 static constexpr int32_t USER_DEFAULT_SCREEN_DPI = 96;
 
@@ -325,7 +326,7 @@ struct window_bounds GetInitialBounds()
     return bounds;
 }
 
-ohos_native_window GetNativeWindow(ohos_window* w)
+ohos_native_window GetNativeWindow(ohos_window w)
 {
     if (!IsMainProcess()) {
         // todo: Implement function in a child process
@@ -338,6 +339,16 @@ ohos_native_window GetNativeWindow(ohos_window* w)
         return nullptr;
     }
     return window->GetNativeWindow();
+}
+
+int GetFocusWindow()
+{
+    if (!IsMainProcess()) {
+        // todo: Implement function in a child process
+        LOGW("performed in a child process is not supported");
+        return -1;
+    }
+    return XComponentManager::GetInstance()->GetActivateWindow();
 }
 
 struct window_bounds GetDisplayAvailArea()
@@ -402,7 +413,7 @@ void KillNativeProcess(int exitcode, int force)
     if (pid != main_pid) {
         LOGW("pid not match main pid:(%{public}d,%{public}d)", pid, main_pid);
     }
-    LOGI("pid %{public}d, exitcode %{public}d", pid, exitcode);
+    LOGI("pid %{public}d, exitcode %{public}#x", pid, exitcode);
 }
 
 int IsMainProcess()
