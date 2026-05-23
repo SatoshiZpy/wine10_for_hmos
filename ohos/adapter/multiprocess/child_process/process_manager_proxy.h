@@ -170,6 +170,20 @@ public:
         reply.Read(ret);
         return ret;        
     }
+
+    int OpenUrl(const std::string& url) override
+    {
+        NativeIpcParcel data;
+        data.Write(url);
+        NativeIpcParcel reply;
+        int result = SendRequest(COMMAND_OPEN_URL, data, reply);
+        if (result != ERR_OK) {
+            return result;
+        }
+        int ret = 0;
+        reply.Read(ret);
+        return ret;
+    }
 };
 } // namespace ohos::adapter::multiprocess
 #endif // OHOS_ADAPTER_MULTIPROCESS_CHILD_PROCESS_PROCESS_MANAGER_PROXY_H_

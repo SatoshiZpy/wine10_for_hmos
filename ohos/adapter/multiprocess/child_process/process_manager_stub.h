@@ -121,6 +121,13 @@ public:
                 reply.Write(ret);
                 return ERR_OK;
             }
+            case COMMAND_OPEN_URL: {
+                std::string url;
+                data.Read(url);
+                int ret = OpenUrl(url);
+                reply.Write(ret);
+                return ERR_OK;
+            }
         }
         return ERR_OK;
     }
@@ -163,6 +170,11 @@ public:
     int GetDisplay(ipc::DisplayParam& param) override
     {
         return ChildProcessHelper::GetDisplay(param);
+    }
+
+    int OpenUrl(const std::string& url) override
+    {
+        return ChildProcessHelper::OpenUrl(url);
     }
 };
 } // namespace ohos::adapter::multiprocess

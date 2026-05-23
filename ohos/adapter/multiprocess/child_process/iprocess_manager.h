@@ -50,6 +50,7 @@ public:
     virtual int SetWindowVisible(int widget_id, int visible) = 0;
     virtual int CloseWindow(int32_t widget_id) = 0;
     virtual int GetDisplay(ipc::DisplayParam& display) = 0;
+    virtual int OpenUrl(const std::string& url) = 0;
 };
 
 enum IProcessManagerIpcCode : uint32_t {
@@ -61,6 +62,7 @@ enum IProcessManagerIpcCode : uint32_t {
     COMMAND_UPDATE_WINDOW,
     COMMAND_CLOSE_WINDOW,
     COMMAND_GET_DISPLAY,
+    COMMAND_OPEN_URL,
 };
 } // namespace ohos::adapter::multiprocess
 #endif //OHOS_ADAPTER_MULTIPROCESS_CHILD_PROCESS_IPROCESS_H_

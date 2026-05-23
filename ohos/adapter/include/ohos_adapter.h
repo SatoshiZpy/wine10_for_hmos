@@ -92,6 +92,9 @@ ADAPTER_API void IMENotifyCursorUpdate(const struct ime_cursor_info* cursor_info
 /* screenlock */
 ADAPTER_API void StartListeningForScreenlock(screenlock_event_callback callback);
 
+/* url */
+ADAPTER_API int OpenNativeUrl(const char *url);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */
