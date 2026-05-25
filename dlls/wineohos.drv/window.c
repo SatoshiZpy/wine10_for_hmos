@@ -215,6 +215,8 @@ static void set_window_properties(struct ohos_win_data *data)
 
     if (state.minimized != data->minimized)
         data->minimized = state.minimized;
+
+    release_win_data( owner_data );
 }
 
 static void sync_window_opacity(struct ohos_win_data *data, BYTE alpha,
