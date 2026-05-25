@@ -22,6 +22,7 @@
 #include "ntuser.h"
 
 #include "ohos.h"
+#include "surface_lut.h"
 #include "wine/server.h"
 #include "wine/debug.h"
 
@@ -606,13 +607,24 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
             else if (alpha == 255)
                 for (x = 0; x < width; x++) dst[x] = src[x] | 0xff000000;
             else
-                for (x = 0; x < width; x++)
-                    dst[x] = ((alpha << 24) |
-                              (((BYTE)(src[x] >> 16) * alpha / 255) << 16) |
-                              (((BYTE)(src[x] >> 8) * alpha / 255) <<  8) |
-                              (((BYTE)src[x] * alpha / 255)));
+            {
+#ifdef __ARM_NEON
+                alpha_blend_neon_batch(dst, src, alpha, width);
+#else
+                for (x = 0; x < width; x++) {
+                    DWORD blended = alpha_blend_lut_pixel(src[x], alpha);
+                    if (color_key != CLR_INVALID && (src[x] & 0xffffff) == color_key)
+                        blended = 0;
+                    dst[x] = blended;
+                }
+#endif
+            }
 
-            if (color_key != CLR_INVALID)
+            if (color_key != CLR_INVALID && !alpha_mask && alpha != 255)
+            {
+                /* color_key already handled in LUT/NEON path above */
+            }
+            else if (color_key != CLR_INVALID)
                 for (x = 0; x < width; x++)
                     if ((src[x] & 0xffffff) == color_key)
                         dst[x] = 0;
