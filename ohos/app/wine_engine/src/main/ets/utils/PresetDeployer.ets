@@ -14,15 +14,13 @@ const TAG: string = 'PresetDeployer';
  * - rawDir：相对 entry/src/main/resources/rawfile/ 的子路径，例如 'preset/sap'。
  *   本工程把 SAP GUI 部署包按 sap/add/modify/regs/root 五块放在 'preset/' 下。
  * - destAbsDir：HarmonyOS 沙箱内的绝对目标路径，例如 ${prefixDir}/dosdevices/c:/sap。
- * - mergeChildren：决定"展开方式"：
- *     true  → 把 rawDir 里的每个孩子拷到 destAbsDir 下（孩子并入目标目录）；
- *     false → 同上（当前两个分支实现相同；保留旗标是为日后区分语义留接口）。
- *   现阶段 WineWindow / WineWindowNode 全部传 true。
+ *
+ * 展开语义：把 rawDir 的每个直接孩子拷到 destAbsDir 下，rawDir 自身的目录名不出现在最终路径里。
+ * 例：rawDir='preset/sap'、destAbsDir='.../c:/sap'，结果是 '.../c:/sap/SAPGUI/...'。
  */
 interface PresetMapping {
   rawDir: string;
   destAbsDir: string;
-  mergeChildren: boolean;
 }
 
 /**
@@ -39,8 +37,16 @@ export class PresetDeployer {
   /**
    * 入口：判断是否需要部署，需要就按 mappings 顺序执行；不需要就直接返回。
    *
+   * 并发保护：主进程（WineWindow）和渲染子进程（WineWindowNode）会几乎同时
+   * 调到这里。如果只判 marker 后就开拷贝，两边可能同时进入循环，对同一目标
+   * 文件并行 fs.openSync(... TRUNC)，造成互相截断、零字节文件等坏结果。
+   * 这里在 prefixDir 下用 fs.mkdirSync(lockDir, false) 原子创建一个 .deploy.lock
+   * 目录——HarmonyOS @ohos.file.fs 的 OpenMode 没有 POSIX 的 EXCL 标志，但
+   * mkdirSync 在目标已存在时会抛 13900015，与 O_CREAT|O_EXCL 在原子语义上等价。
+   * 后到的进程拿不到锁直接返回，让先到的进程独占完成部署。
+   *
    * @param resourceManager HarmonyOS 资源管理器，用于读取 rawfile
-   * @param prefixDir       Wine prefix 绝对路径（也是 marker 写入位置）
+   * @param prefixDir       Wine prefix 绝对路径（也是 marker / 锁目录落盘位置）
    * @param markerName      部署完成标记文件名（带版本号方便后续强制重置）
    * @param mappings        要执行的映射列表，按数组顺序串行执行
    */
@@ -57,45 +63,54 @@ export class PresetDeployer {
     }
 
     LogUtil.info(TAG, `start preset deploy, prefix=${prefixDir}`);
-    // 先把 prefix 自身建出来（首次启动时 prefixDir 可能还不存在）
+    // 先把 prefix 自身建出来（首次启动时 prefixDir 可能还不存在），
+    // 锁目录随后要落到这个目录里
     PresetDeployer.ensureDir(prefixDir);
 
-    for (let i = 0; i < mappings.length; i++) {
-      const m = mappings[i];
-      LogUtil.info(TAG, `deploy ${m.rawDir} -> ${m.destAbsDir}, mergeChildren=${m.mergeChildren}`);
-      // 每条 mapping 的目标根目录都先确保存在（destAbsDir 上层链可能不存在，例如 .../dosdevices/c:/users/100）
-      PresetDeployer.ensureDir(m.destAbsDir);
-      if (m.mergeChildren) {
-        await PresetDeployer.copyChildrenToDir(resourceManager, m.rawDir, m.destAbsDir);
-      } else {
-        await PresetDeployer.copyDirToDir(resourceManager, m.rawDir, m.destAbsDir);
-      }
+    const lockDir = `${prefixDir}/.deploy.lock`;
+    // 陈旧锁回收：上一次部署进程崩溃时来不及释放，会留下锁目录让 mkdir 永远失败。
+    // 取锁前先看锁目录存在多久（mtime 是秒级 Unix 时间戳），超过 STALE_LOCK_TIMEOUT
+    // 就当作崩溃残留删掉。阈值取 10 分钟：SAP 部署包实测 1~3 分钟，留足慢设备
+    // 余量；同时远短于"用户重启 App 的最短间隔"，避免误删另一进程进行中的部署。
+    PresetDeployer.reclaimStaleLock(lockDir);
+
+    try {
+      // 用"创建目录"作为原子取锁原语：HarmonyOS @ohos.file.fs 的 OpenMode 没有 EXCL，
+      // 但 mkdirSync(path, false) 在目标已存在时会抛 13900015 (File exists)，
+      // 与 POSIX O_CREAT|O_EXCL 在原子语义上等价（mkdir 在 VFS 层就是原子操作）。
+      fs.mkdirSync(lockDir, false);
+    } catch (err) {
+      // 锁已被另一进程持有：让它独占完成部署，本进程不重复跑
+      LogUtil.info(TAG, `deploy lock busy, skip: ${JSON.stringify(err)}`);
+      return;
     }
 
-    // 全量映射成功才写 marker。中途异常已经在 copyRawFile 内被吞掉，这里仍会写 marker，
-    // 这是有意的——丢失个别文件比每次启动重复展开几百兆 SAPGUI 资源代价低；如果发现
-    // 部署不完整，删 marker 文件即可触发再来一次。
-    PresetDeployer.touchMarker(markerPath);
-    LogUtil.info(TAG, `preset deploy done, marker=${markerPath}`);
-  }
+    try {
+      // 持锁后再 double-check marker：另一进程可能在我们拿锁前刚刚完成并释放
+      if (fs.accessSync(markerPath)) {
+        return;
+      }
 
-  /**
-   * 把 rawDir 的每个直接孩子拷到 destAbsDir 下。
-   *
-   * 注意当前实现与 copyChildrenToDir 完全一致；保留独立函数是为日后区分
-   * "整棵树拷贝过去并多套一层 rawDir 名"和"展开孩子"两种语义留接口。
-   */
-  private static async copyDirToDir(
-    resourceManager: resmgr.ResourceManager,
-    rawDir: string,
-    destAbsDir: string
-  ): Promise<void> {
-    const entries = PresetDeployer.listRawDir(resourceManager, rawDir);
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      const childRaw = `${rawDir}/${entry}`;
-      const childDest = `${destAbsDir}/${entry}`;
-      await PresetDeployer.copyEntry(resourceManager, childRaw, childDest);
+      for (let i = 0; i < mappings.length; i++) {
+        const m = mappings[i];
+        LogUtil.info(TAG, `deploy ${m.rawDir} -> ${m.destAbsDir}`);
+        // 每条 mapping 的目标根目录都先确保存在（destAbsDir 上层链可能不存在，例如 .../dosdevices/c:/users/100）
+        PresetDeployer.ensureDir(m.destAbsDir);
+        await PresetDeployer.copyChildrenToDir(resourceManager, m.rawDir, m.destAbsDir);
+      }
+
+      // 全量映射结束才写 marker。中途单文件异常已经在 copyRawFile 内被吞掉，这里仍会写 marker，
+      // 这是有意的——丢失个别非关键文件比每次启动重复展开几百兆 SAPGUI 资源代价低；如果发现
+      // 部署不完整，删 marker 文件即可触发再来一次。
+      PresetDeployer.touchMarker(markerPath);
+      LogUtil.info(TAG, `preset deploy done, marker=${markerPath}`);
+    } finally {
+      // 不论成功失败都要释放锁：删掉锁目录，避免下次启动 mkdir 永远拿不到
+      try {
+        fs.rmdirSync(lockDir);
+      } catch (err) {
+        LogUtil.error(TAG, `rmdir lock failed: ${lockDir}, err=${JSON.stringify(err)}`);
+      }
     }
   }
 
@@ -121,26 +136,30 @@ export class PresetDeployer {
   /**
    * 拷贝 rawfile 下任意条目（文件或目录）。
    *
-   * rawfile 是一个被打进 HAP 的只读资源树；这里通过 isRawDir 判断它是不是子目录，
-   * 是的话就递归处理孩子，是文件就走 copyRawFile → 沙箱真实路径。
+   * rawfile 是一个被打进 HAP 的只读资源树；HarmonyOS 的 ResourceManager 没有直接的
+   * isDir API，只能借用 getRawFileListSync 的返回值：文件返回空数组、目录返回非空
+   * 数组。空目录会被当成文件——但 rawfile 打包时空目录本身不会进 HAP，所以这里
+   * 不会遇到 "目录但 list 为空" 的情况。
+   *
+   * 用 listRawDir 一次取列表后按长度分流，避免 isDir 判断和取孩子各调一次 native。
    */
   private static async copyEntry(
     resourceManager: resmgr.ResourceManager,
     rawPath: string,
     destAbsPath: string
   ): Promise<void> {
-    if (PresetDeployer.isRawDir(resourceManager, rawPath)) {
-      // 目录：在目标侧建出来再深入孩子
-      PresetDeployer.ensureDir(destAbsPath);
-      const children = PresetDeployer.listRawDir(resourceManager, rawPath);
-      for (let i = 0; i < children.length; i++) {
-        const child = children[i];
-        await PresetDeployer.copyEntry(resourceManager, `${rawPath}/${child}`, `${destAbsPath}/${child}`);
-      }
+    const children = PresetDeployer.listRawDir(resourceManager, rawPath);
+    if (children.length === 0) {
+      // 文件：转成沙箱真实路径
+      await PresetDeployer.copyRawFile(resourceManager, rawPath, destAbsPath);
       return;
     }
-    // 文件：转成沙箱真实路径
-    await PresetDeployer.copyRawFile(resourceManager, rawPath, destAbsPath);
+    // 目录：在目标侧建出来再深入孩子
+    PresetDeployer.ensureDir(destAbsPath);
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      await PresetDeployer.copyEntry(resourceManager, `${rawPath}/${child}`, `${destAbsPath}/${child}`);
+    }
   }
 
   /**
@@ -204,30 +223,39 @@ export class PresetDeployer {
 
   /**
    * 列出 rawfile 中某个路径的直接孩子。
-   * 失败或非目录返回空数组（让上层把它当文件处理）。
+   *
+   * 同时承担"是不是目录"的判断：返回非空数组即目录、空数组即文件或不存在。
+   * 调用方（copyEntry）按 length 分流，避免重复 native 调用。
    */
   private static listRawDir(resourceManager: resmgr.ResourceManager, rawPath: string): string[] {
     try {
-      const list = resourceManager.getRawFileListSync(rawPath);
-      return list ?? [];
+      return resourceManager.getRawFileListSync(rawPath) ?? [];
     } catch (err) {
       return [];
     }
   }
 
   /**
-   * 判断 rawPath 是不是目录。
+   * 陈旧锁回收：锁目录存活超过阈值时，视为上次部署进程崩溃残留并删除。
+   * 阈值 10 分钟（600 秒）覆盖 SAP 部署包正常拷贝时长（实测 1~3 分钟）。
    *
-   * HarmonyOS 的 ResourceManager 没有直接的 isDir API，只能借用：
-   * 文件返回空数组、目录返回非空数组。空目录会被当成文件——但 rawfile 打包时
-   * 空目录本身不会进 HAP，所以这里不会遇到 "目录但 list 为空" 的状况。
+   * fs.Stat.mtime 是秒级 Unix 时间戳；Date.now() 返回毫秒，所以这里换算到秒比对。
+   * 任何异常一律静默吞掉——回收只是优化，失败时让 mkdirSync 走原路径报错即可。
    */
-  private static isRawDir(resourceManager: resmgr.ResourceManager, rawPath: string): boolean {
+  private static reclaimStaleLock(lockDir: string): void {
+    const STALE_LOCK_TIMEOUT_SEC = 600;
     try {
-      const list = resourceManager.getRawFileListSync(rawPath);
-      return list !== undefined && list !== null && list.length > 0;
+      if (!fs.accessSync(lockDir)) {
+        return;
+      }
+      const stat = fs.statSync(lockDir);
+      const ageSec = Math.floor(Date.now() / 1000) - stat.mtime;
+      if (ageSec > STALE_LOCK_TIMEOUT_SEC) {
+        LogUtil.info(TAG, `reclaim stale deploy lock: ${lockDir}, ageSec=${ageSec}`);
+        fs.rmdirSync(lockDir);
+      }
     } catch (err) {
-      return false;
+      LogUtil.error(TAG, `reclaimStaleLock failed: ${lockDir}, err=${JSON.stringify(err)}`);
     }
   }
 

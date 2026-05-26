@@ -269,8 +269,8 @@ export struct WineWindow {
    *   5) root   → ${prefix}/dosdevices/c:/users/100                用户 AppData，目录名用 100
    *      与 user.reg 中 USERNAME=100、HOMEPATH=\\users\\100 保持一致
    *
-   * 所有 mergeChildren=true 表示"把 rawDir 里的孩子合并进 destAbsDir"，而不是
-   * 在 destAbsDir 下再嵌套一层 rawDir 名。例如 preset/sap 里只有一个 SAPGUI/，
+   * 每条 mapping 的展开语义是"把 rawDir 里的孩子合并进 destAbsDir"，而不是在
+   * destAbsDir 下再嵌套一层 rawDir 名。例如 preset/sap 里只有一个 SAPGUI/，
    * 合并后就形成 c:/sap/SAPGUI/saplogon.exe，正好对得上启动命令。
    *
    * 用 .preset_sap_deployed_v1 作为部署完成标记。后续如需重新预置（比如换了
@@ -286,12 +286,12 @@ export struct WineWindow {
     const userDir = `${cDriveDir}/users/100`;
 
     const mappings: PresetMapping[] = [
-      { rawDir: 'preset/regs', destAbsDir: prefixDir, mergeChildren: true },
-      { rawDir: 'preset/sap', destAbsDir: sapDir, mergeChildren: true },
-      { rawDir: 'preset/add', destAbsDir: system32Dir, mergeChildren: true },
+      { rawDir: 'preset/regs', destAbsDir: prefixDir },
+      { rawDir: 'preset/sap', destAbsDir: sapDir },
+      { rawDir: 'preset/add', destAbsDir: system32Dir },
       // modify 放在 add 之后，让覆盖性 DLL 覆盖掉 add 中的同名文件（实际两边没重名，按工程规约保序更安全）
-      { rawDir: 'preset/modify', destAbsDir: system32Dir, mergeChildren: true },
-      { rawDir: 'preset/root', destAbsDir: userDir, mergeChildren: true }
+      { rawDir: 'preset/modify', destAbsDir: system32Dir },
+      { rawDir: 'preset/root', destAbsDir: userDir }
     ];
 
     try {
