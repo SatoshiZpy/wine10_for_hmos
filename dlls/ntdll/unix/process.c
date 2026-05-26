@@ -56,6 +56,9 @@
 # include <libprocstat.h>
 #endif
 #include <unistd.h>
+#ifdef __OHOS__
+# include "ohos_adapter.h"
+#endif
 #ifdef HAVE_MACH_MACH_H
 # include <mach/mach.h>
 #endif
@@ -490,6 +493,60 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
 /***********************************************************************
  *           __wine_unix_spawnvp
  */
+#ifdef __OHOS__
+static int is_default_browser_cmd( const char *cmd )
+{
+    static const char *const browser_cmds[] =
+    {
+        "xdg-open",
+        "open",
+        "firefox",
+        "konqueror",
+        "mozilla",
+        "opera",
+        "dillo",
+        NULL
+    };
+    const char *basename;
+    const char *const *p;
+
+    if (!cmd) return 0;
+
+    basename = strrchr( cmd, '/' );
+    if (basename) cmd = basename + 1;
+
+    for (p = browser_cmds; *p; ++p)
+    {
+        if (!strcmp( cmd, *p )) return 1;
+    }
+
+    return 0;
+}
+
+NTSTATUS WINAPI __wine_unix_spawnvp( char * const argv[], int wait )
+{
+    int last = 0;
+
+    if (!argv || !argv[0]) return STATUS_INVALID_PARAMETER;
+
+    while (argv[last + 1]) last++;
+
+    if (is_default_browser_cmd( argv[0] ))
+    {
+        if (OpenNativeUrl( argv[last] ) == 0)
+            return STATUS_SUCCESS;
+
+        ERR( "__wine_unix_spawnvp: OpenNativeUrl failed for %s\n", argv[last] );
+        return STATUS_NOT_SUPPORTED;
+    }
+    else
+    {
+        ERR( "__wine_unix_spawnvp: OHOS has no adapter for %s\n", argv[0] );
+        return STATUS_NOT_SUPPORTED;
+    }
+}
+
+#else
 NTSTATUS WINAPI __wine_unix_spawnvp( char * const argv[], int wait )
 {
     pid_t pid, wret;
@@ -538,6 +595,7 @@ NTSTATUS WINAPI __wine_unix_spawnvp( char * const argv[], int wait )
     close( fd[0] );
     return err;
 }
+#endif /* __OHOS__ */
 
 
 /***********************************************************************

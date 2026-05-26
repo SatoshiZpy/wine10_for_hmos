@@ -15,8 +15,10 @@
 #include "winbase.h"
 #include "winreg.h"
 #include "ohos.h"
+#include "surface_lut.h"
 #include "wine/server.h"
 #include "wine/debug.h"
+
 #include "ohos_adapter.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(ohos);
@@ -327,6 +329,8 @@ static HRESULT ohos_init( void *arg )
     pthread_mutex_init( &win_data_mutex, &attr );
     pthread_mutex_init( &ime_mutex, &attr );
     pthread_mutexattr_destroy( &attr );
+
+    init_alpha_blend_lut();
 
     if (IsMainProcess())  /* running under arkui */
     {

@@ -73,7 +73,6 @@ static HWND get_hwnd_by_widget_id( const int widget_id )
         if (data_map[i] && data_map[i]->widget_id == widget_id)
             return data_map[i]->hwnd;
     }
-    WARN( "unknown widget_id %d\n", widget_id );
     return NULL;
 }
 

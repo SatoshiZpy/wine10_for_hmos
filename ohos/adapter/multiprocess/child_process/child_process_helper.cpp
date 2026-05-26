@@ -38,6 +38,7 @@
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/common/mutex.h"
 #include "ohos/adapter/common/trace.h"
+#include "ohos/adapter/external_protocol/external_protocol_adapter.h"
 #include "ohos/adapter/multiprocess/child_process/child_process_host.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/multiprocess/isolate_process/native_child_process_configs_wrapper.h"
@@ -228,6 +229,12 @@ int ChildProcessHelper::GetDisplay(ipc::DisplayParam& param)
     param.width = default_display.avail_area.width;
     param.height = default_display.avail_area.height;
     param.density_dpi = default_display.density_dpi;
+    return 0;
+}
+
+int ChildProcessHelper::OpenUrl(const std::string& url)
+{
+    ohos::adapter::ExternalProtocolAdapter::GetInstance().OpenExternal(url);
     return 0;
 }
 

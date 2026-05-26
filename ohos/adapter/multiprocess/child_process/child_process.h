@@ -48,6 +48,10 @@ public:
         return GetProxy()->GetDisplay(display);
     }
 
+    int OpenUrl(const std::string& url) {
+        return GetProxy()->OpenUrl(url);
+    }
+
     std::shared_ptr<ChildProcessStub> GetChildProcessStub() {
         return childProcessStub;
     }
