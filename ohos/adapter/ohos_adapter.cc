@@ -12,6 +12,7 @@
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/common/mutex.h"
 #include "ohos/adapter/cursor/cursor.h"
+#include "ohos/adapter/external_protocol/external_protocol_adapter.h"
 #include "ohos/adapter/ime_adapter/input_method_adapter.h"
 #include "ohos/adapter/ime_adapter/wine_ime_delegate.h"
 #include "ohos/adapter/life_cycle/lifecycle_init.h"
@@ -556,6 +557,25 @@ void StartListeningForScreenlock(screenlock_event_callback callback)
     return;
   }
   ScreenlockMonitorAdapter::GetInstance().StartListeningForScreenlock(callback);
+}
+
+int OpenNativeUrl(const char *url)
+{
+  LOGI("OpenNativeUrl: url=%{public}s, isMainProcess=%{public}d", url ? url : "(null)", IsMainProcess());
+  if (!url) {
+    LOGE("OpenNativeUrl: url is nullptr");
+    return -1;
+  }
+
+  if (!IsMainProcess()) {
+    LOGI("OpenNativeUrl: forwarding to main process via IPC");
+    int ret = ChildProcess::Instance().OpenUrl(std::string(url));
+    LOGI("OpenNativeUrl: IPC OpenUrl ret=%{public}d", ret);
+    return ret;
+  }
+
+  ohos::adapter::ExternalProtocolAdapter::GetInstance().OpenExternal(std::string(url));
+  return 0;
 }
 
 EXTERN_C_END

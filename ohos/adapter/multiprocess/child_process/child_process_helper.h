@@ -49,6 +49,7 @@ public:
     static int CloseWindow(int32_t widget_id);
     static int SetWindowTitle(int widget_id, const std::string& title);
     static int GetDisplay(ipc::DisplayParam& display);
+    static int OpenUrl(const std::string& url);
 };
 } // namespace ohos::adapter::multiprocess
 #endif // OHOS_ADAPTER_MULTIPROCESS_CHILD_PROCESS_CHILD_PROCESS_HELPER_H_
