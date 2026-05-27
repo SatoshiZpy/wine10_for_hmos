@@ -33,8 +33,8 @@
 #include <IPCKit/ipc_cparcel.h>
 
 #include "ohos/adapter/common/logging.h"
+#include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/multiprocess/child_process/native_window_parcel.h"
-#include "ohos/adapter/xcomponent/adapter/input_event_callback_adapter.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
 
 #include <chrono>
@@ -42,6 +42,8 @@
 #include <memory>
 
 using namespace std::chrono_literals;
+using namespace ohos::adapter::event;
+
 namespace ohos::adapter::multiprocess {
 
 int ChildProcessStub::OnRemoteRequest(uint32_t code, NativeIpcParcel data, NativeIpcParcel reply)
@@ -128,7 +130,7 @@ int ChildProcessStub::SetWindowInfo(int32_t widget_id, void* window)
 
 int ChildProcessStub::SendInputEvent(const input_event& event)
 {
-    xcomponent::InputEventCallbackAdapter::GetInstance().OnInputEventCallBack(event);
+    EventManager::GetInstance().InputDispatcher().Dispatch(event);
     return 0;
 }
 
