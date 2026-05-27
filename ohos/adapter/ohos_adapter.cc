@@ -22,9 +22,7 @@
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/screenlock_monitor/screenlock_monitor_adapter.h"
 #include "ohos/adapter/window/wine_window_manager.h"
-#include "ohos/adapter/xcomponent/adapter/input_event_callback_adapter.h"
-#include "ohos/adapter/xcomponent/adapter/window_adapter.h"
-#include "ohos/adapter/xcomponent/event/window_event_common.h"
+#include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/xcomponent/xcomponent_manager.h"
 
 static constexpr int32_t USER_DEFAULT_SCREEN_DPI = 96;
@@ -36,6 +34,7 @@ using namespace ohos::adapter::life_cycle;
 using namespace ohos::adapter::xcomponent;
 using namespace ohos::adapter::multiprocess;
 using namespace ohos::adapter::window;
+using namespace ohos::adapter::event;
 
 static Mutex mutex;
 
@@ -429,71 +428,12 @@ int GetMainProcessId()
 
 void RegisterInputEventCallBack(input_event_callback callback)
 {
-    if (callback == nullptr) {
-        LOGE("input_event_callback is nullptr!");
-        return;
-    }
-    InputEventCallbackAdapter::GetInstance().RegisterInputEventCallBack(callback);
-}
-
-// 全局窗口事件回调（C 函数指针）
-static input_event_callback g_window_event_callback = nullptr;
-
-// C++ 到 C 的窗口事件适配器
-static void GlobalWindowEventCallbackAdapter(int32_t widget_id, std::shared_ptr<Event> event)
-{
-    if (g_window_event_callback == nullptr) {
-        return;
-    }
-
-    input_event c_event;
-    
-    // 处理窗口矩形变化事件
-    if (event->type() == EventType::ET_WINDOW_RECT_CHANGE) {
-        auto rect_event = std::static_pointer_cast<WindowRectChangeEvent>(event);
-        if (rect_event == nullptr || rect_event->reason != RectChangeReason::DRAG_END) {
-            return;
-        }
-
-        c_event.type = OHOS_WINDOW_RECT_CHANGE_EVENT;
-        c_event.widget_id = widget_id;
-        c_event.data.window_rect_change_event.left = rect_event->left;
-        c_event.data.window_rect_change_event.top = rect_event->top;
-        c_event.data.window_rect_change_event.width = static_cast<int32_t>(rect_event->width);
-        c_event.data.window_rect_change_event.height = static_cast<int32_t>(rect_event->height);
-
-        g_window_event_callback(&c_event);
-        return;
-    }
-    
-    // 处理窗口获得焦点事件
-    if (event->type() == EventType::ET_SURFACE_FOCUS) {
-        c_event.type = OHOS_WINDOW_FOCUS_EVENT;
-        c_event.widget_id = widget_id;
-        c_event.data.window_focus_event.widget_id = widget_id;
-        g_window_event_callback(&c_event);
-        return;
-    }
-    
-    // 处理窗口失去焦点事件
-    if (event->type() == EventType::ET_SURFACE_BLUR) {
-        c_event.type = OHOS_WINDOW_BLUR_EVENT;
-        c_event.widget_id = widget_id;
-        c_event.data.window_focus_event.widget_id = widget_id;
-        g_window_event_callback(&c_event);
-        return;
-    }
+    EventManager::GetInstance().RegisterInputEventCallBack(callback);
 }
 
 void RegisterWindowEventCallBack(input_event_callback callback)
 {
-    if (callback == nullptr) {
-        LOGE("window_event_callback is nullptr!");
-        return;
-    }
-    g_window_event_callback = callback;
-    // 注册 C++ 适配器到 WindowAdapter
-    WindowAdapter::GetInstance().RegisterGlobalWindowEvent(GlobalWindowEventCallbackAdapter);
+    EventManager::GetInstance().RegisterWindowEventCallBack(callback);
 }
 
 void RegisterIMEEventCallBack(ime_event_callback callback)

@@ -2,19 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "input_event_callback_adapter.h"
+#include "ohos/adapter/event/input_event_dispatcher.h"
 
 #include <stdint.h>
 #include <unistd.h>
 
+#include <ace/xcomponent/native_interface_xcomponent.h>
+#include <ace/xcomponent/native_xcomponent_key_event.h>
+#include <multimodalinput/oh_input_manager.h>
+
 #include "ohos/adapter/common/logging.h"
+#include "ohos/adapter/drag_drop/drag_drop_ohos_adapter.h"
+#include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/multiprocess/child_process/child_process_host.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
-#include "ohos/adapter/xcomponent/xcomponent_manager.h"
+
+namespace ohos::adapter::event {
 
 using namespace ohos::adapter::multiprocess;
-
-namespace ohos::adapter::xcomponent {
+using namespace ohos::adapter::xcomponent;
 
 void ConvertToInputEventUnion(input_event& event,
                               const input_event_type type,
@@ -128,37 +134,8 @@ void ConvertToInputEventUnion(input_event& event,
     event.data.mouse_event.button = static_cast<int>(OH_NATIVEXCOMPONENT_LEFT_BUTTON);
 }
 
-void DoCallback(const input_event& event)
-{
-    auto callback = InputEventCallbackAdapter::GetInstance().GetInputEventCallBack();
-    if (!callback) {
-        LOGW("input_event_callback is nullptr!");
-        return;
-    }
-    callback(&event);
-}
-
-void ForwardCallback(const input_event& event)
-{
-    int owner_pid = WindowAdapter::GetInstance().GetOwnerPid(event.widget_id);
-    if (owner_pid == -1) {
-        LOGE("not found owner_pid, widget_id : %{public}d", event.widget_id);
-        return;
-    }
-    ChildProcessHost::Instance().SendInputEvent(owner_pid, event);
-}
-
-void ExecuteCallback(const input_event& event)
-{
-    bool need_process = InputEventCallbackAdapter::GetInstance().IsHandleInCurrentProcess(event.widget_id);
-    if (need_process) {
-        DoCallback(event);
-    } else {
-        ForwardCallback(event);
-    }
-}
-
-void MouseEventCallback(const int32_t widget_id, const OH_NativeXComponent_MouseEvent& mouse_event)
+static void MouseEventCallback(const int32_t widget_id,
+                               const OH_NativeXComponent_MouseEvent& mouse_event)
 {
     if (widget_id <= 0) {
         LOGE("invalid widget_id");
@@ -171,15 +148,15 @@ void MouseEventCallback(const int32_t widget_id, const OH_NativeXComponent_Mouse
 
     input_event event;
     ConvertToInputEventUnion(event, OHOS_MOUSE_EVENT, widget_id, mouse_event);
-    ExecuteCallback(event);
+    EventManager::GetInstance().InputDispatcher().ExecuteCallback(event);
 }
 
-void MouseHoverEventCallback(const int32_t widget_id, const bool is_hover)
+static void MouseHoverEventCallback(const int32_t widget_id, const bool is_hover)
 {
 
 }
 
-void KeyEventCallback(const int32_t widget_id, OH_NativeXComponent_KeyEvent& key_event)
+static void KeyEventCallback(const int32_t widget_id, OH_NativeXComponent_KeyEvent& key_event)
 {
     if (widget_id <= 0) {
         LOGE("invalid widget_id");
@@ -191,11 +168,13 @@ void KeyEventCallback(const int32_t widget_id, OH_NativeXComponent_KeyEvent& key
         LOGW("unknown action!");
         return;
     }
-    ExecuteCallback(event);
+    EventManager::GetInstance().InputDispatcher().ExecuteCallback(event);
 }
 
-void TouchEventCallback(const int32_t widget_id, const OH_NativeXComponent_TouchEvent& touch_event,
-    const OH_NativeXComponent_TouchPointToolType touch_point_tool_type, const TouchPointCoordinate& coordinate)
+static void TouchEventCallback(const int32_t widget_id,
+                               const OH_NativeXComponent_TouchEvent& touch_event,
+                               const OH_NativeXComponent_TouchPointToolType touch_point_tool_type,
+                               const TouchPointCoordinate& coordinate)
 {
     if (widget_id <= 0) {
         LOGE("invalid widget_id");
@@ -203,10 +182,12 @@ void TouchEventCallback(const int32_t widget_id, const OH_NativeXComponent_Touch
     }
     input_event event;
     ConvertToInputEventUnion(event, OHOS_MOUSE_EVENT, widget_id, touch_event, coordinate);
-    ExecuteCallback(event);
+    EventManager::GetInstance().InputDispatcher().ExecuteCallback(event);
 }
 
-void PanEventCallback(const PanAction action, const int32_t widget_id, const PanEvent& event)
+static void PanEventCallback(const PanAction action,
+                             const int32_t widget_id,
+                             const PanEvent& pan_event)
 {
     if (widget_id <= 0) {
         LOGW("invalid widget_id");
@@ -216,105 +197,103 @@ void PanEventCallback(const PanAction action, const int32_t widget_id, const Pan
         return;
     }
 
-    input_event input;
-    ConvertToInputEventUnion(input, OHOS_MOUSE_EVENT, widget_id, event);
-    ExecuteCallback(input);
+    input_event event;
+    ConvertToInputEventUnion(event, OHOS_MOUSE_EVENT, widget_id, pan_event);
+    EventManager::GetInstance().InputDispatcher().ExecuteCallback(event);
 }
 
-void PinchEventCallback(const std::string& pinch_step, const int32_t widget_id, const PinchEvent& event)
+static void PinchEventCallback(const std::string& pinch_step,
+                               const int32_t widget_id,
+                               const PinchEvent& pinch_event)
 {
 
 }
 
-void DoubleTapEventCallback(const int32_t widget_id, const TapEvent& event)
+static void DoubleTapEventCallback(const int32_t widget_id, const TapEvent& event)
 {
 
 }
 
-void DragEnterEventCallback(const int32_t widget_id, const ohos::adapter::OhosDragInfo& ohos_drag_info)
+static void DragEnterEventCallback(const int32_t widget_id,
+                                   const OhosDragInfo& drag_info)
 {
 
 }
 
-void DragLeaveEventCallback(const int32_t widget_id)
+static void DragLeaveEventCallback(const int32_t widget_id)
 {
 
 }
 
-void DropEventCallback(const int32_t widget_id, const ohos::adapter::OhosDragInfo& ohos_drag_info)
+static void DropEventCallback(const int32_t widget_id,
+                              const OhosDragInfo& drag_info)
 {
 
 }
 
-void DragEndEventCallback(const int32_t widget_id)
+static void DragEndEventCallback(const int32_t widget_id)
 {
 
 }
 
-void DragMoveEventCallback(const int32_t widget_id, const float window_x, const float window_y)
+static void DragMoveEventCallback(const int32_t widget_id,
+                                  const float window_x,
+                                  const float window_y)
 {
 
 }
 
-void SendWindowMouseEventForTabDragCallback(const int32_t widget_id, Input_MouseEvent* window_mouse_event)
+static void SendWindowMouseEventForTabDragCallback(const int32_t widget_id,
+                                                   Input_MouseEvent* mouse_event)
 {
 
 }
 
-InputEventCallbackAdapter::InputEventCallbackAdapter()
+InputEventDispatcher::InputEventDispatcher()
 {
-    pid = getpid();
-    callback_ = std::make_shared<InputEventCallBack>();
-    callback_->mouseEventCallback = &MouseEventCallback;
-    callback_->keyEventCallback = &KeyEventCallback;
-    callback_->touchEventCallback = &TouchEventCallback;
-    callback_->pan_event_callback = &PanEventCallback;
-    callback_->pinch_event_callback = &PinchEventCallback;
-    callback_->double_tap_event_callback = &DoubleTapEventCallback;
-    callback_->dragEnterEventCallback = &DragEnterEventCallback;
-    callback_->dragLeaveEventCallback = &DragLeaveEventCallback;
-    callback_->dragMoveEventCallback = &DragMoveEventCallback;
-    callback_->dropEventCallback = &DropEventCallback;
-    callback_->dragEndEventCallback = &DragEndEventCallback;
-    callback_->mouse_hover_event_callback = &MouseHoverEventCallback;
-    callback_->sendWindowMouseEventForTabDragCallback = &SendWindowMouseEventForTabDragCallback;
+    pid_ = getpid();
+    xcomponent_callback_ = std::make_shared<InputEventCallBack>();
+    xcomponent_callback_->mouseEventCallback = &MouseEventCallback;
+    xcomponent_callback_->keyEventCallback = &KeyEventCallback;
+    xcomponent_callback_->touchEventCallback = &TouchEventCallback;
+    xcomponent_callback_->pan_event_callback = &PanEventCallback;
+    xcomponent_callback_->pinch_event_callback = &PinchEventCallback;
+    xcomponent_callback_->double_tap_event_callback = &DoubleTapEventCallback;
+    xcomponent_callback_->dragEnterEventCallback = &DragEnterEventCallback;
+    xcomponent_callback_->dragLeaveEventCallback = &DragLeaveEventCallback;
+    xcomponent_callback_->dragMoveEventCallback = &DragMoveEventCallback;
+    xcomponent_callback_->dropEventCallback = &DropEventCallback;
+    xcomponent_callback_->dragEndEventCallback = &DragEndEventCallback;
+    xcomponent_callback_->mouse_hover_event_callback = &MouseHoverEventCallback;
+    xcomponent_callback_->sendWindowMouseEventForTabDragCallback = &SendWindowMouseEventForTabDragCallback;
 }
 
-InputEventCallbackAdapter::~InputEventCallbackAdapter()
+void InputEventDispatcher::RegisterCallBack(input_event_callback callback)
 {
-    callback_ = nullptr;
-    input_event_callback_ = nullptr;
+    callback_ = callback;
 }
 
-InputEventCallbackAdapter& InputEventCallbackAdapter::GetInstance()
+void InputEventDispatcher::Dispatch(const input_event& event)
 {
-    static InputEventCallbackAdapter instance;
-    return instance;
+    if (callback_ == nullptr) {
+        return;
+    }
+    callback_(&event);
 }
 
-std::shared_ptr<InputEventCallBack> InputEventCallbackAdapter::GetCallBack()
+void InputEventDispatcher::ExecuteCallback(const input_event& event)
 {
-    return callback_;
+    int owner_pid = WindowAdapter::GetInstance().GetOwnerPid(event.widget_id);
+    if (owner_pid <= 0) {
+        LOGE("not found owner_pid, widget_id: %{public}d", event.widget_id);
+        return;
+    }
+    bool need_process = (owner_pid == pid_);
+    if (need_process) {
+        Dispatch(event);
+    } else {
+        ChildProcessHost::Instance().SendInputEvent(owner_pid, event);
+    }
 }
 
-void InputEventCallbackAdapter::RegisterInputEventCallBack(input_event_callback callback)
-{
-    input_event_callback_ = callback;
-}
-
-const input_event_callback InputEventCallbackAdapter::GetInputEventCallBack()
-{
-    return input_event_callback_;
-}
-
-bool InputEventCallbackAdapter::IsHandleInCurrentProcess(const int32_t widget_id)
-{
-    int window_pid = WindowAdapter::GetInstance().GetOwnerPid(widget_id);
-    return window_pid == pid;
-}
-
-void InputEventCallbackAdapter::OnInputEventCallBack(const input_event& event)
-{
-    DoCallback(event);
-}
-}  // namespace ohos::adapter::xcomponent
+}  // namespace ohos::adapter::event
