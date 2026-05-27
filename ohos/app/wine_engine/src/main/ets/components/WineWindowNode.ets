@@ -184,10 +184,12 @@ class WindowNodeController extends NodeController {
     this.ensureDir(prefixDir);
     this.ensureFile(logPath);
 
-    // 首次启动时把 SAP GUI 部署包从 rawfile/preset 一次性展开到 prefix。
-    // PresetDeployer 内部用标记文件去重，已经部署过会直接 return，不会重复拷贝。
-    // 必须在 nativeContext.runWine 之前完成，否则 Wine 起来时找不到 saplogon.exe。
-    await this.deploySapPreset(prefixDir, hostContext.resourceManager);
+    // 只有打包了 rawfile/preset 的 SAP 工程才进入 SAP 预置部署；复用 Wine 底座的普通工程完全跳过这条链路。
+    if (PresetDeployer.hasSapPreset(hostContext.resourceManager)) {
+      await this.deploySapPreset(prefixDir, hostContext.resourceManager);
+    } else {
+      LogUtil.info(TAG, 'rawfile/preset not found, skip deploySapPreset');
+    }
 
     const environ = new Map<string, string>();
     this.setEnv(environ, 'WINERESPATH', resDir);

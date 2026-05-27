@@ -35,6 +35,20 @@ interface PresetMapping {
  */
 export class PresetDeployer {
   /**
+   * 判断当前 HAP 是否实际打包了 rawfile/preset 目录内容。
+   *
+   * 调用点用它来决定是否需要进入 deploySapPreset；目录不存在、目录为空或资源不可枚举
+   * 对外都等价于"没有 SAP 预置资源"，统一返回 false 即可。
+   */
+  static hasSapPreset(resourceManager: resmgr.ResourceManager): boolean {
+    try {
+      return (resourceManager.getRawFileListSync('preset') ?? []).length > 0;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /**
    * 入口：判断是否需要部署，需要就按 mappings 顺序执行；不需要就直接返回。
    *
    * 并发保护：主进程（WineWindow）和渲染子进程（WineWindowNode）会几乎同时
