@@ -29,7 +29,7 @@ JSBIND_CLASS(WindowStyle) {
   JSBIND_PROPERTY(is_modal);
   JSBIND_PROPERTY(focusable);
   JSBIND_PROPERTY(touchable);
-  JSBIND_PROPERTY(show_widow);
+  JSBIND_PROPERTY(show_window);
 }
 
 JSBIND_CLASS(NewWindowParam) {

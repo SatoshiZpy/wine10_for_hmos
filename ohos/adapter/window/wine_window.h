@@ -60,7 +60,9 @@ class WineWindow {
     WineWindow* child_window() const { return child_window_.get(); }
 
     WindowInitType type() const { return type_; }
-    
+    int32_t hwnd() const { return hwnd_; }
+    int32_t owner_pid() const { return owner_pid_; }
+
     void SetSurfaceId(uint64_t surface_id) { surface_id_ = surface_id; }
     uint64_t GetSurfaceId() const { return surface_id_; }
     
@@ -118,6 +120,7 @@ class WineWindow {
     WindowInitType type_ = WindowInitType::kWindow;
     int64_t features_;
     int64_t window_state_;
+    int32_t hwnd_;
     int32_t owner_pid_;
     
     uint64_t surface_id_;

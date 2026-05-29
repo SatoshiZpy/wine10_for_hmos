@@ -101,6 +101,12 @@
       },
       {
         "name": "ohos.permission.GYROSCOPE"
+      },
+      {
+        "name": "ohos.permission.SET_WINDOW_TRANSPARENT"
+      },
+      {
+        "name": "ohos.permission.WINDOW_TOPMOST"
       }
     ],
     "definePermissions": [

@@ -12,8 +12,8 @@ import Inject from '../common/InjectModule';
 import { NativeContext, WindowStyles } from '../interface/CommonInterface';
 import { CommandType, ConfigData, ContextType } from '../common/Constants';
 import { WineProxy, dwStyles } from '../interface/WineProxy';
-import { common } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
+import { deviceInfo, BusinessError } from '@kit.BasicServicesKit';
 import { WindowStyle } from '../common/WindowStyle';
 
 const TAG: string = 'WineBaseAbility';
@@ -27,6 +27,8 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
   protected originWindowId: number = -1;
   protected styles: WindowStyles = dwStyles;
   protected ownerPid: number = -1;
+  protected exePath: string = '';
+  protected args: string = '';
 
   private initParameters(want: Want) {
     if (want && want.parameters) {
@@ -39,8 +41,14 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
         let window_state = want.parameters['window_state'] as number;
         this.styles = Inject.get(WindowStyle).buildWindowStyles(features, window_state);
       }
-      if (want.parameters["ownerPid"] !== undefined) {
+      if (want.parameters['ownerPid'] !== undefined) {
         this.ownerPid = want.parameters['ownerPid'] as number;
+      }
+      if (want.parameters['wineExePath'] !== undefined) {
+        this.exePath = want.parameters['wineExePath'] as string;
+      }
+      if (want.parameters['wineArgs'] !== undefined) {
+        this.args = want.parameters['wineArgs'] as string;
       }
     }
 
@@ -53,6 +61,46 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
 
   protected getContentPath(): string {
     return 'pages/Index';
+  }
+
+  protected computeWindowStyles(windowClass: window.Window, styles: WindowStyles) {
+    try {
+      windowClass.setWindowDecorVisible(!styles.hide_title_bar);
+      if (deviceInfo.sdkApiVersion >= 14) {
+        windowClass.setWindowTitleButtonVisible(styles.maximizable, styles.minimizable, styles.closable);
+        if (styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
+          let buttonStyle: window.DecorButtonStyle = {
+            colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+          };
+          windowClass.setDecorButtonStyle(buttonStyle);
+        }
+        windowClass.setWindowTitleMoveEnabled(!styles.hide_title_bar);
+        windowClass.setWindowTopmost(styles.always_on_top)
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to setTopmost. Cause:' + JSON.stringify(err));
+          });
+        windowClass.setResizeByDragEnabled(styles.resizable)
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
+          });
+        windowClass.setWindowFocusable(styles.focusable)
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to setFocusable. Cause:' + JSON.stringify(err));
+          });
+        windowClass.setWindowTouchable(styles.touchable)
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to setTouchable. Cause:' + JSON.stringify(err));
+          });
+      }
+      if (deviceInfo.sdkApiVersion >= 20) {
+        windowClass.setWindowShadowEnabled(styles.has_shadow)
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to setShadowEnabled. Cause:' + JSON.stringify(err));
+          });
+      }
+    } catch (err) {
+      LogUtil.error(TAG, 'Failed to compute window styles. Cause:' + JSON.stringify(err));
+    }
   }
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam) {

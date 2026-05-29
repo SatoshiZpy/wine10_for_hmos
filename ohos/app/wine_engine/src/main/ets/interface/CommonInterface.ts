@@ -92,7 +92,7 @@ export interface NativeContext {
 
   OnNotificationClickCallback: (id: number) => void;
   OnNotificationCloseCallback: (id: number) => void;
-  OnNotificationButtonClickCallback: (id: number, buttonIndex) => void;
+  OnNotificationButtonClickCallback: (id: number, buttonIndex: number) => void;
 
   OnDisplayChangeCallback: (even: string, id: number) => void;
   OnFontSizeChangeCallback:(fontSizeZoom :number) => void;
@@ -304,7 +304,8 @@ export class WindowStyles {
   resizable: boolean;
   focusable: boolean;
   touchable: boolean;
-  show_widow: boolean;
+  show_window: boolean;
+  has_shadow: boolean;
 }
 
 export interface NewWindowParam {

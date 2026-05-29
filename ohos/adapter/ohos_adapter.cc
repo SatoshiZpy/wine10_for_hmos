@@ -12,6 +12,7 @@
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/common/mutex.h"
 #include "ohos/adapter/cursor/cursor.h"
+#include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/external_protocol/external_protocol_adapter.h"
 #include "ohos/adapter/ime_adapter/input_method_adapter.h"
 #include "ohos/adapter/ime_adapter/wine_ime_delegate.h"
@@ -22,7 +23,6 @@
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/screenlock_monitor/screenlock_monitor_adapter.h"
 #include "ohos/adapter/window/wine_window_manager.h"
-#include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/xcomponent/xcomponent_manager.h"
 
 static constexpr int32_t USER_DEFAULT_SCREEN_DPI = 96;
@@ -42,8 +42,9 @@ static window_features_mask get_features_mask(const struct window_features* feat
 {
     window_features_mask mask = 0;
 
-    if (features && features->title_bar)
+    if (features && features->title_bar) {
         mask |= features_mask_for_type(WindowFeatures::WINDOW_TITLE_BAR);
+    }
 
     if (features && features->close_button) {
         mask |= features_mask_for_type(WindowFeatures::WINDOW_CLOSE_BUTTON);
@@ -81,6 +82,7 @@ static window_features_mask get_features_mask(const struct window_features* feat
         mask |= features_mask_for_type(WindowFeatures::USE_DARK_MODE);
     }
 
+    LOGD("get_features_mask: %{public}#lx", mask);
     return mask;
 }
 
@@ -88,8 +90,9 @@ static window_state_mask get_window_state_mask(const struct window_state* state)
 {
     window_state_mask mask = 0;
 
-    if (state && state->disabled)
+    if (state && state->disabled) {
         mask |= state_mask_for_type(WindowState::WINDOW_DISABLED);
+    }
 
     if (state && state->no_foreground) {
         mask |= state_mask_for_type(WindowState::WINDOW_NO_FOREGROUND);
@@ -123,6 +126,7 @@ static window_state_mask get_window_state_mask(const struct window_state* state)
         mask |= state_mask_for_type(WindowState::WINDOW_VISIBLE);
     }
 
+    LOGD("get_window_state_mask: %{public}#lx", mask);
     return mask;
 }
 
@@ -208,6 +212,7 @@ int StartNativeProcess(int argc, char** argv, const struct launch_options* optio
         LOGE("invalid launch_options");
         return -1;
     }
+    LOGI("launch process type %{public}d", options->type);
     std::vector<std::string> command;
     for (int i = 0; i < argc && argv[i] != nullptr; ++i) {
         command.emplace_back(argv[i]);
@@ -438,84 +443,84 @@ void RegisterWindowEventCallBack(input_event_callback callback)
 
 void RegisterIMEEventCallBack(ime_event_callback callback)
 {
-  if (callback == nullptr) {
-    LOGE("ime_event_callback is nullptr!");
-    return;
-  }
-  WineIMEDelegate::GetInstance().RegisterIMEEventCallBack(callback);
+    if (callback == nullptr) {
+        LOGE("ime_event_callback is nullptr!");
+        return;
+    }
+    WineIMEDelegate::GetInstance().RegisterIMEEventCallBack(callback);
 }
 
 void IMEAttachTextInput(bool show_keyboard, const struct ime_text_config* text_config, int32_t request_keyboard_reason)
 {
-  if (text_config == nullptr) {
-    LOGE("text_config is nullptr!");
-    return;
-  }
-  ohos::adapter::IMFAdapterTextConfig config;
-  config.inputAttribute.inputPattern = text_config->input_attribute.input_pattern;
-  config.inputAttribute.enterKeyType = text_config->input_attribute.enter_key_type;
-  config.cursorInfo.left = text_config->cursor_info.left;
-  config.cursorInfo.top = text_config->cursor_info.top;
-  config.cursorInfo.width = text_config->cursor_info.width;
-  config.cursorInfo.height = text_config->cursor_info.height;
-  config.range.start = text_config->range.start;
-  config.range.end = text_config->range.end;
-  InputMethodAdapter::GetInstance().AttachTextInput(show_keyboard, config, request_keyboard_reason);
+    if (text_config == nullptr) {
+        LOGE("text_config is nullptr!");
+        return;
+    }
+    ohos::adapter::IMFAdapterTextConfig config;
+    config.inputAttribute.inputPattern = text_config->input_attribute.input_pattern;
+    config.inputAttribute.enterKeyType = text_config->input_attribute.enter_key_type;
+    config.cursorInfo.left = text_config->cursor_info.left;
+    config.cursorInfo.top = text_config->cursor_info.top;
+    config.cursorInfo.width = text_config->cursor_info.width;
+    config.cursorInfo.height = text_config->cursor_info.height;
+    config.range.start = text_config->range.start;
+    config.range.end = text_config->range.end;
+    InputMethodAdapter::GetInstance().AttachTextInput(show_keyboard, config, request_keyboard_reason);
 }
 
 void IMEDetachTextInput()
 {
-  InputMethodAdapter::GetInstance().DetachTextInput();
+    InputMethodAdapter::GetInstance().DetachTextInput();
 }
 
 void IMEUpdateAttribute(const struct ime_input_attribute input_attribute)
 {
-  IMFAdapterInputAttribute attribute;
-  attribute.inputPattern = input_attribute.input_pattern;
-  attribute.enterKeyType = input_attribute.enter_key_type;
-  InputMethodAdapter::GetInstance().UpdateAttribute(attribute);
+    IMFAdapterInputAttribute attribute;
+    attribute.inputPattern = input_attribute.input_pattern;
+    attribute.enterKeyType = input_attribute.enter_key_type;
+    InputMethodAdapter::GetInstance().UpdateAttribute(attribute);
 }
 
 void IMENotifyCursorUpdate(const struct ime_cursor_info* cursor_info)
 {
-  if (cursor_info == nullptr) {
-    LOGE("cursor_info is nullptr!");
-    return;
-  }
-  ohos::adapter::IMFAdapterCursorInfo info;
-  info.left = cursor_info->left;
-  info.top = cursor_info->top;
-  info.width = cursor_info->width;
-  info.height = cursor_info->height;
-  InputMethodAdapter::GetInstance().NotifyCursorUpdate(info);
+    if (cursor_info == nullptr) {
+        LOGE("cursor_info is nullptr!");
+        return;
+    }
+    ohos::adapter::IMFAdapterCursorInfo info;
+    info.left = cursor_info->left;
+    info.top = cursor_info->top;
+    info.width = cursor_info->width;
+    info.height = cursor_info->height;
+    InputMethodAdapter::GetInstance().NotifyCursorUpdate(info);
 }
 
 void StartListeningForScreenlock(screenlock_event_callback callback)
 {
-  if (callback == nullptr) {
-    LOGE("screenlock_event_callback is nullptr!");
-    return;
-  }
-  ScreenlockMonitorAdapter::GetInstance().StartListeningForScreenlock(callback);
+    if (callback == nullptr) {
+        LOGE("screenlock_event_callback is nullptr!");
+        return;
+    }
+    ScreenlockMonitorAdapter::GetInstance().StartListeningForScreenlock(callback);
 }
 
 int OpenNativeUrl(const char *url)
 {
-  LOGI("OpenNativeUrl: url=%{public}s, isMainProcess=%{public}d", url ? url : "(null)", IsMainProcess());
-  if (!url) {
-    LOGE("OpenNativeUrl: url is nullptr");
-    return -1;
-  }
+    LOGI("OpenNativeUrl: url=%{public}s, isMainProcess=%{public}d", url ? url : "(null)", IsMainProcess());
+    if (!url) {
+        LOGE("OpenNativeUrl: url is nullptr");
+        return -1;
+    }
 
-  if (!IsMainProcess()) {
-    LOGI("OpenNativeUrl: forwarding to main process via IPC");
-    int ret = ChildProcess::Instance().OpenUrl(std::string(url));
-    LOGI("OpenNativeUrl: IPC OpenUrl ret=%{public}d", ret);
-    return ret;
-  }
+    if (!IsMainProcess()) {
+        LOGI("OpenNativeUrl: forwarding to main process via IPC");
+        int ret = ChildProcess::Instance().OpenUrl(std::string(url));
+        LOGI("OpenNativeUrl: IPC OpenUrl ret=%{public}d", ret);
+        return ret;
+    }
 
-  ohos::adapter::ExternalProtocolAdapter::GetInstance().OpenExternal(std::string(url));
-  return 0;
+    ohos::adapter::ExternalProtocolAdapter::GetInstance().OpenExternal(std::string(url));
+    return 0;
 }
 
 EXTERN_C_END

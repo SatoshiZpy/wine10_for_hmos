@@ -38,7 +38,7 @@ WindowStyle WineWindow::BuilderStyle(const ipc::WindowParam& param) {
   styles.resizable = is_enable && has_feature(WindowFeatures::WINDOW_RESIZABLE, param.features);
   styles.focusable = is_enable && !has_feature(WindowFeatures::WINDOW_NO_ACTIVATION, param.features);
   styles.touchable = is_enable && has_feature(WindowFeatures::WINDOW_TOUCHABLE, param.features);
-  styles.show_widow = is_state(WindowState::WINDOW_VISIBLE, param.window_state);
+  styles.show_window = is_state(WindowState::WINDOW_VISIBLE, param.window_state);
   return styles;
 }
 
@@ -63,6 +63,7 @@ bool WineWindow::Initialize(const ipc::WindowParam& param)
   type_ = (WindowInitType)param.window_type;
   features_ = param.features;
   window_state_ = param.window_state;
+  hwnd_ = param.hwnd;
   owner_pid_ = param.owner_pid;
   newParam_ = BuilderParam(param);
 
@@ -160,7 +161,7 @@ bool WineWindow::InitSurface()
   uint64_t surface_id;
   window_ =  WindowAdapter::GetInstance().GetWindow(GetWidget());
   if (!window_) {
-      LOGE("window is not exists, windowId: %{public}d", GetWidget());
+      LOGW("window is not exists, windowId: %{public}d", GetWidget());
       return false;
   }
 

@@ -170,6 +170,6 @@ export class AppWindowAdapterBind {
     JsBindingUtils.bindFunction("AppWindow.GetOriginWindowIds", getOriginWindowIds);
     JsBindingUtils.bindFunction("AppWindow.SetWindowModal", setWindowModal);
     JsBindingUtils.bindFunction("AppWindow.SetFocusable", setFocusable);
-    JsBindingUtils.bindFunction("AppWindow.setParent", setParent);
+    JsBindingUtils.bindFunction("AppWindow.SetParent", setParent);
   }
 }

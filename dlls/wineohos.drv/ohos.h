@@ -30,6 +30,7 @@ struct ohos_win_data
     unsigned int        layered;       /* is window layered and with valid attributes? */
     unsigned int        minimized;     /* is window minimized? */
     unsigned int        lazy_created;
+    unsigned int        ignored;
 };
 
 struct ohos_client_surface
@@ -85,6 +86,7 @@ extern unsigned int screen_width;
 extern unsigned int screen_height;
 extern RECT virtual_screen_rect;
 extern MONITORINFOEXW default_monitor;
+extern BOOL in_child_process;
 
 enum ohos_window_messages
 {

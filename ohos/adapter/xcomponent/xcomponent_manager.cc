@@ -10,15 +10,17 @@
 #include "ohos/adapter/aki_hook/aki_hook.h"
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/common/trace.h"
-#include "ohos/adapter/xcomponent/adapter/input_event_callback_adapter.h"
+#include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/xcomponent/xcomponent_utils.h"
 
 namespace ohos::adapter::xcomponent {
 
+using namespace ohos::adapter::event;
+
 XComponentManager* XComponentManager::manager_ = nullptr;
 
 XComponentManager::XComponentManager() {
-  callback_ = InputEventCallbackAdapter::GetInstance().GetCallBack();
+  callback_ = EventManager::GetInstance().InputDispatcher().GetCallBack();
 }
 
 XComponentManager* XComponentManager::GetInstance() {
@@ -32,8 +34,7 @@ XComponentManager::~XComponentManager() {
   render_map_.clear();
 }
 
-std::shared_ptr<InputEventCallBack> XComponentManager::GetCallBack()
-{
+std::shared_ptr<InputEventCallBack> XComponentManager::GetCallBack() {
     return callback_;
 }
 
@@ -53,7 +54,7 @@ void XComponentManager::Initialize(napi_env env, napi_value exports) {
   OH_NativeXComponent* native_xcomponent = nullptr;
   if (napi_unwrap(env, export_instance,
                   reinterpret_cast<void**>(&native_xcomponent)) != napi_ok) {
-    LOGE("XComponentManager::Initialize napi_unwrap fail");
+    LOGW("XComponentManager::Initialize napi_unwrap fail");
     return;
   }
 

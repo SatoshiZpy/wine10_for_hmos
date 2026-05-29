@@ -11,32 +11,32 @@ function implSubWindowAdapter(): SubWindowAdapter {
   return Inject.getOrCreate(SubWindowAdapter);
 }
 
-function createSubWindow(param: NewWindowParam, callback: (id: number) => void) {
-  implSubWindowAdapter().createSubWindow(param, callback)
+function createWindow(param: NewWindowParam, callback: (id: number) => void) {
+  implSubWindowAdapter().createWindow(param, callback)
 }
 
-function showSubWindow(id: number) {
-  implSubWindowAdapter().showSubWindow(id);
+function showWindow(id: number) {
+  implSubWindowAdapter().showWindow(id);
 }
 
-function hideSubWindow(id: number) {
-  implSubWindowAdapter().hideSubWindow(id);
+function hideWindow(id: number) {
+  implSubWindowAdapter().hideWindow(id);
 }
 
-function closeSubWindow(id: number) {
-  implSubWindowAdapter().closeSubWindow(id);
+function closeWindow(id: number) {
+  implSubWindowAdapter().closeWindow(id);
 }
 
-function setSubWindowBounds(id: number, r: WindowBound) {
-  implSubWindowAdapter().setSubWindowBounds(id, r);
+function setBounds(id: number, bounds: WindowBound) {
+  implSubWindowAdapter().setBounds(id, bounds);
 }
 
 export class SubWindowAdapterBind {
   static bind() {
-    JsBindingUtils.bindFunction("SubWindow.Create", createSubWindow);
-    JsBindingUtils.bindFunction("SubWindow.Show", showSubWindow);
-    JsBindingUtils.bindFunction("SubWindow.Hide", hideSubWindow);
-    JsBindingUtils.bindFunction("SubWindow.Close", closeSubWindow);
-    JsBindingUtils.bindFunction("SubWindow.SetBounds", setSubWindowBounds);
+    JsBindingUtils.bindFunction("SubWindow.CreateWindow", createWindow);
+    JsBindingUtils.bindFunction("SubWindow.ShowWindow", showWindow);
+    JsBindingUtils.bindFunction("SubWindow.HideWindow", hideWindow);
+    JsBindingUtils.bindFunction("SubWindow.CloseWindow", closeWindow);
+    JsBindingUtils.bindFunction("SubWindow.SetBounds", setBounds);
   }
 }

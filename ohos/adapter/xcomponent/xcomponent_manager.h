@@ -27,7 +27,6 @@ class ADAPTER_EXPORT_API XComponentManager final : public XComponentDelegate {
   XComponentManager(XComponentManager& other) = delete;
   void operator=(const XComponentManager&) = delete;
   static XComponentManager* GetInstance();
-  std::shared_ptr<InputEventCallBack> GetCallBack();
 
   void Initialize(napi_env env, napi_value exports);
 
@@ -48,6 +47,7 @@ class ADAPTER_EXPORT_API XComponentManager final : public XComponentDelegate {
   std::shared_ptr<XComponentImpl> CreateXComponent(int32_t widget_id,
                                                    const XComponentInfo& info);
   void SetActivateWindow(int32_t widget_id);
+  std::shared_ptr<InputEventCallBack> GetCallBack();
 
   static XComponentManager* manager_;
   std::unordered_map<int32_t, std::shared_ptr<XComponentImpl>> render_map_;

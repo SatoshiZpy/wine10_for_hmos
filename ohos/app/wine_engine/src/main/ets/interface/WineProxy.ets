@@ -32,7 +32,8 @@ export const dwStyles: WindowStyles = {
   resizable: true,
   focusable: true,
   touchable: true,
-  show_widow: false,
+  show_window: false,
+  has_shadow: false,
 };
 
 export class FakeWineProxy implements WineProxy {

@@ -165,7 +165,10 @@ struct window_features get_window_features_for_style(DWORD style, DWORD ex_style
 {
     struct window_features wf = {0};
 
-    if (ex_style & WS_EX_NOACTIVATE) wf.prevents_app_activation = TRUE;
+    if ((ex_style & WS_EX_NOACTIVATE) || (style & WS_CAPTION) != WS_CAPTION)
+    {
+        wf.prevents_app_activation = TRUE;
+    }
 
     if ((style & WS_CAPTION) == WS_CAPTION && !(ex_style & WS_EX_LAYERED))
     {
@@ -183,6 +186,7 @@ struct window_features get_window_features_for_style(DWORD style, DWORD ex_style
     else if (ex_style & WS_EX_DLGMODALFRAME) wf.shadow = TRUE;
     else if ((style & (WS_DLGFRAME | WS_BORDER)) == WS_DLGFRAME) wf.shadow = TRUE;
 
+    wf.touchable = TRUE;
     wf.use_floating_window = FALSE;
     wf.use_dark_mode = FALSE;
     return wf;
@@ -428,6 +432,7 @@ static int process_events( DWORD mask )
                 }
                 SERVER_END_REQ;
             }
+            TRACE("MOUSEMOVE hwnd %p capture %p\n", event->data.motion.hwnd, capture);
             NtUserSendHardwareInput(capture ? capture : event->data.motion.hwnd, 0, &event->data.motion.input, 0);
         } break;
         case KEYBOARD_EVENT:
@@ -1067,13 +1072,24 @@ static struct ohos_win_data *create_win_data( HWND hwnd, const struct window_rec
 
     data->parent = (parent == NtUserGetDesktopWindow()) ? 0 : parent;
     data->rects = *rects;
+    data->ignored = in_child_process;
 
     if (parent == NtUserGetDesktopWindow())
     {
-        create_native_window( data );
-        TRACE("win %p/%p %p window %s whole %s client %s\n",
-               hwnd, parent, data->window, wine_dbgstr_rect( &data->rects.window ),
-               wine_dbgstr_rect( &data->rects.visible ), wine_dbgstr_rect( &data->rects.client));
+        if (data->ignored)
+        {
+            data->window = NULL;
+            FIXME("win %p/%p window %s whole %s client %s in child process\n",
+                hwnd, parent, wine_dbgstr_rect(&data->rects.window),
+                wine_dbgstr_rect(&data->rects.visible), wine_dbgstr_rect(&data->rects.client));
+        }
+        else
+        {
+            create_native_window( data );
+            TRACE("win %p/%p %p window %s whole %s client %s\n",
+                hwnd, parent, data->window, wine_dbgstr_rect( &data->rects.window ),
+                wine_dbgstr_rect( &data->rects.visible ), wine_dbgstr_rect( &data->rects.client));
+        }
     }
     else
     {
@@ -1379,6 +1395,12 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
     if (parent == old_parent) return;
     if (!(data = get_win_data( hwnd ))) return;
 
+    if (data->ignored)
+    {
+        FIXME("hwnd %p parent %p -> %p in child process\n", data->hwnd, old_parent, parent);
+        goto done;
+    }
+
     style = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
     ex_style = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
 
@@ -1398,6 +1420,7 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
         create_native_window(data);
     }
 
+done:
     data->parent = (parent == NtUserGetDesktopWindow()) ? 0 : parent;
     release_win_data(data);
 }

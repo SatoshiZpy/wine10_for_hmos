@@ -27,7 +27,7 @@ int32_t SubWindowAdapter::Create(const NewWindowParam& param) {
       promise->set_value(reply_id);
     };
 
-  if (auto func = ohos::adapter::GetJSFunction("SubWindow.Create")) {
+  if (auto func = ohos::adapter::GetJSFunction("SubWindow.CreateWindow")) {
     func->Invoke<void>(param, callback);
     auto future = promise->get_future();
     auto status = future.wait_for(std::chrono::seconds(3));
@@ -42,19 +42,19 @@ int32_t SubWindowAdapter::Create(const NewWindowParam& param) {
 }
 
 void SubWindowAdapter::Close(int32_t id) {
-  if (auto func = ohos::adapter::GetJSFunction("SubWindow.Close")) {
+  if (auto func = ohos::adapter::GetJSFunction("SubWindow.CloseWindow")) {
     func->Invoke<void>(id);
   }
 }
 
 void SubWindowAdapter::Show(int32_t id) {
-  if (auto func = ohos::adapter::GetJSFunction("SubWindow.Show")) {
+  if (auto func = ohos::adapter::GetJSFunction("SubWindow.ShowWindow")) {
     func->Invoke<void>(id);
   }
 }
 
 void SubWindowAdapter::Hide(int32_t id) {
-  if (auto func = ohos::adapter::GetJSFunction("SubWindow.Hide")) {
+  if (auto func = ohos::adapter::GetJSFunction("SubWindow.HideWindow")) {
     func->Invoke<void>(id);
   }
 }

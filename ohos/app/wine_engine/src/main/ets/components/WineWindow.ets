@@ -18,6 +18,7 @@ import resmgr from '@ohos.resourceManager';
 // PresetDeployer：把 rawfile/preset 下的 SAP GUI 部署包一次性展开到 Wine prefix 的工具
 // PresetMapping：单条 rawDir → destAbsDir 的映射定义，详见 PresetDeployer.ets
 import { PresetDeployer, PresetMapping } from '../utils/PresetDeployer';
+import CheckEmptyUtils from '../utils/CheckEmptyUtils';
 
 @Component
 export struct WineWindow {
@@ -28,6 +29,8 @@ export struct WineWindow {
   @LocalStorageLink('statusBarHeight') statusBarHeight: number = 0;
   @LocalStorageLink('useDarkMode') useDarkMode: boolean = false;
   @LocalStorageLink('ownerPid') ownerPid: number = -1;
+  @LocalStorageLink('wineExePath') exePath: string = '';
+  @LocalStorageLink('wineArgs') args: string = '';
   private LIBRARY_NAME: string = 'adapter';
   private XCOMPONENT_NAME: string = 'xcomponent';
   private MODULE_NAME: string = this.widgetId + ':' + this.XCOMPONENT_NAME + ':' + this.ownerPid;
@@ -192,13 +195,12 @@ export struct WineWindow {
     const resDir = hostContext.resourceDir ?? '';
     const dataDir = hostContext.filesDir ?? '';
     const cacheDir = hostContext.cacheDir ?? '';
-    const preferencedir = hostContext.preferencesDir ?? '';
+    const preferenceDir = hostContext.preferencesDir ?? '';
 
-    if (!bundleDir || !resDir || !dataDir || !cacheDir || !preferencedir) {
-      LogUtil.error(
-        WineWindow.TAG,
-        `invalid path, bundleDir=${bundleDir}, resDir=${resDir}, dataDir=${dataDir}, cacheDir=${cacheDir}, preferencedir=${preferencedir}`
-      );
+    if (!bundleDir || !resDir || !dataDir || !cacheDir || !preferenceDir) {
+      LogUtil.error(WineWindow.TAG,
+        `invalid path, bundleDir=${bundleDir}, resDir=${resDir}, dataDir=${dataDir},
+        cacheDir=${cacheDir}, preferenceDir=${preferenceDir}`);
       return;
     }
 
@@ -225,12 +227,12 @@ export struct WineWindow {
 
     this.setEnv(environ, 'XDG_DATA_HOME', dataDir);
     this.setEnv(environ, 'XDG_CACHE_HOME', cacheDir);
-    this.setEnv(environ, 'XDG_CONFIG_HOME', preferencedir);
+    this.setEnv(environ, 'XDG_CONFIG_HOME', preferenceDir);
 
     this.setEnv(environ, 'WINELOADER', loader);
     this.setEnv(environ, 'WINEDLLPATH', dllDir);
     this.setEnv(environ, 'WINEPREFIX', prefixDir);
-    let wineDebug = '+err,+warn';
+    let wineDebug = '';
     this.setEnv(environ, 'WINEDEBUG', wineDebug);
     this.setEnv(environ, 'WINEDEBUGLOG', logPath);
 
@@ -244,14 +246,16 @@ export struct WineWindow {
       env.push(key, value);
     });
 
+    let exePath = CheckEmptyUtils.checkStrIsEmpty(this.exePath) ?
+      'c:\\windows\\system32\\notepad.exe' : this.exePath;
     const cmd: string[] = [
       loader,
-      'c:\\sap\\SAPGUI\\saplogon.exe'
+      exePath
     ];
 
-    LogUtil.info(WineWindow.TAG, `loader=${loader}`);
-    LogUtil.info(WineWindow.TAG, `prefixDir=${prefixDir}`);
-    LogUtil.info(WineWindow.TAG, `logPath=${logPath}`);
+    LogUtil.debug(WineWindow.TAG, `
+      exePath=${exePath}, env=${env.toString()}, loader=${loader},
+      prefixDir=${prefixDir}, logPath=${logPath}`);
 
     this.nativeContext.runWine(cmd, env);
   }

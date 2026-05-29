@@ -57,7 +57,7 @@ struct WindowStyle {
   bool is_modal = false;
   bool focusable = true;
   bool touchable = true;
-  bool show_widow = false;
+  bool show_window = false;
 };
 
 struct NewWindowParam {

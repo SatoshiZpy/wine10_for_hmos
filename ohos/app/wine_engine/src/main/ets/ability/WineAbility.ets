@@ -61,9 +61,6 @@ export class WineAbility extends WineBaseAbility {
 
     this.abilityManager?.addProxy(this);
 
-    if (deviceInfo.sdkApiVersion >= 14) {
-      windowStage.setWindowRectAutoSave(true);
-    }
     windowStage.getMainWindow((err, data) => {
       if (err.code) {
         LogUtil.error(TAG, 'Failed to obtain the main window: ' + JSON.stringify(err));
@@ -151,6 +148,8 @@ export class WineAbility extends WineBaseAbility {
       'window': windowStage.getMainWindowSync(),
       'useDarkMode': this.needDarkMode(),
       'ownerPid': this.ownerPid,
+      'wineExePath': this.exePath,
+      'wineArgs': this.args,
     };
     let storage: LocalStorage = new LocalStorage(para);
     windowStage.loadContent(this.getContentPath(), storage, (err, data) => {
@@ -159,26 +158,11 @@ export class WineAbility extends WineBaseAbility {
         return;
       }
 
+      let windowClass: window.Window = windowStage.getMainWindowSync();
       LogUtil.info(TAG, 'loadContent styles:' + JSON.stringify(this.styles));
 
-      let windowClass: window.Window = windowStage.getMainWindowSync();
-
-      // hide title bar
-      windowClass.setWindowDecorVisible(!this.styles.hide_title_bar);
-      if (deviceInfo.sdkApiVersion >= 14) {
-        windowClass.setWindowTitleButtonVisible(this.styles.maximizable,
-          this.styles.minimizable,
-          this.styles.closable);
-        if (this.styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
-          let buttonStyle: window.DecorButtonStyle = {
-            colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
-          };
-          windowClass.setDecorButtonStyle(buttonStyle);
-        }
-        windowClass.setWindowTitleMoveEnabled(!this.styles.hide_title_bar);
-        windowClass.setWindowTopmost(this.styles.always_on_top);
-        windowClass.setResizeByDragEnabled(this.styles.resizable);
-      }
+      // compute Window Styles
+      this.computeWindowStyles(windowClass, this.styles);
 
       // window title button rect change callback must registered after loadContent/setUIContent
       try {

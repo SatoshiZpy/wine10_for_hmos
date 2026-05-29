@@ -8,13 +8,14 @@ import { IParams,
   ISubWindowInfo,
   NewWindowParam,
   WindowBound,
-  WindowState} from '../interface/CommonInterface';
+  WindowState,
+  WindowStyles} from '../interface/CommonInterface';
 import { AbilityManager } from '../common/AbilityManager';
 import { BaseAdapter } from '../common/BaseAdapter';
 import LogUtil from '../utils/LogUtil';
 import LogMethod from '../common/LogDecorator';
-import { BusinessError } from '@kit.BasicServicesKit';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { ConfigurationConstant } from '@kit.AbilityKit';
+import { deviceInfo, BusinessError } from '@kit.BasicServicesKit';
 import { SystemFloatingWindowManager } from '../common/SystemFloatingWindowManager';
 import StringUtil from '../utils/StringUtil';
 import { WineProxy } from '../interface/WineProxy';
@@ -31,7 +32,7 @@ export class SubWindowAdapter extends BaseAdapter {
   private systemFloatingWindowManager: SystemFloatingWindowManager;
   private ctxAdapter: ContextAdapter;
   private subWindowList: (ISubWindowInfo)[] = [];
-  private reusableSubWindow: Map<number, (ISubWindowInfo)[]> =
+  private reuseSubWindowMap: Map<number, (ISubWindowInfo)[]> =
     new Map<number, (ISubWindowInfo)[]>();
   private globalCache: (ISubWindowInfo)[] = [];
   private windowStyle: WindowStyle;
@@ -50,45 +51,52 @@ export class SubWindowAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  createSubWindow(param: NewWindowParam, callback: (id: number) => void) {
+  createWindow(param: NewWindowParam, callback: (id: number) => void) {
     let parentId = this.getParentWindowId(param.parent_id);
-    let visibility = this.windowStyle.hasValue(WindowState.WINDOW_VISIBLE, param.window_state_mask);
-    let fixedBounds = this.adjustBounds(parentId, param.bounds);
-    LogUtil.info(TAG, 'createSubWindow widget_id:' + param.widget_id + ',parentId:' + param.parent_id +
-      ',proxyId:' + parentId + ',visibility:' + visibility);
+    let bounds = this.adjustBounds(parentId, param.bounds);
+    LogUtil.info(TAG, `createWindow widget_id: ${param.widget_id},
+      parentId: ${param.parent_id} --> ${parentId},
+      bounds: (${bounds.left}, ${bounds.top}, ${bounds.width}, ${bounds.height})`);
 
-    const reusableWindow =
-      this.findReuseableSubWindow(parentId, fixedBounds.width, fixedBounds.height);
-    if (reusableWindow) {
-      try {
-        let paramsLink: SubscribedAbstractProperty<IParams> =
-          reusableWindow.localStorage.link('subWindowParams');
-        let lastParams = paramsLink.get();
-        lastParams.initColorRgb = param.init_color_argb;
-        paramsLink.set(lastParams);
-        this.resizeSubWindow(reusableWindow.subWindow, fixedBounds.width, fixedBounds.height);
-        this.moveSubWindow(reusableWindow.subWindow, fixedBounds.left, fixedBounds.top, parentId);
-        visibility && reusableWindow.subWindow.showWindow()
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to reuseSubWindow: ' + reusableWindow.id + ',err:' + JSON.stringify(err));
-            return;
-          });
-        callback(reusableWindow.id);
-        return;
-      } catch (e) {
-        LogUtil.error(TAG,'reuseSubWindow error' + reusableWindow.id);
-      }
+    const item = this.findReuseWindow(parentId, bounds);
+    if (item) {
+      this.reuseSubWindow(item, param, bounds, parentId, callback);
+    } else {
+      this.createSubWindow(param, bounds, parentId, callback);
     }
-    const para: Record<string, IParams> = {
-      'subWindowParams': {
-        id: param.widget_id,
-        size: [fixedBounds.width, fixedBounds.height],
-        initColorRgb: param.init_color_argb,
-        ownerPid: param.owner_pid,
-      }
-    };
-    let subStorage: LocalStorage = new LocalStorage(para);
-    this.createNewWindow(parentId, param.widget_id, fixedBounds, subStorage, visibility, callback);
+  }
+
+  private reuseSubWindow(item: ISubWindowInfo,
+    param: NewWindowParam,
+    bounds: WindowBound,
+    parentId: number,
+    callback: (id: number) => void) {
+    try {
+      let windowClass: window.Window = item.subWindow;
+      let paramsLink: SubscribedAbstractProperty<IParams> = item.localStorage.link('subWindowParams');
+      let lastParams = paramsLink.get();
+      lastParams.initColorRgb = param.init_color_argb;
+      paramsLink.set(lastParams);
+      this.resizeSubWindow(windowClass, bounds.width, bounds.height);
+      this.moveSubWindow(windowClass, bounds.left, bounds.top, parentId);
+
+      let styles = this.windowStyle.buildWindowStyles(param.feature_mask, param.window_state_mask);
+      LogUtil.info(TAG, 'reuseSubWindow loadContent styles:' + JSON.stringify(styles));
+
+      // compute Window Styles
+      this.computeWindowStyles(windowClass, styles);
+
+      styles.show_window && windowClass.showWindow()
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to reuseSubWindow: ' + item.id + ',err:' + JSON.stringify(err));
+          callback(-1);
+          return;
+        });
+      callback(item.id);
+    } catch (err) {
+      LogUtil.error(TAG,'reuseSubWindow: ' + item.id + ',err: ' + JSON.stringify(err));
+      callback(-1);
+    }
   }
 
   private getParentProxy(parentId: number): WineProxy {
@@ -138,69 +146,76 @@ export class SubWindowAdapter extends BaseAdapter {
     return undefined;
   }
 
-  private findReuseableSubWindow(parentId: number, width: number, height: number)
+  private findReuseWindow(parentId: number, bounds: WindowBound)
     : ISubWindowInfo | undefined {
-    let reusableSubWindowList = this.reusableSubWindow.get(parentId);
-    if (!reusableSubWindowList) {
+    let reuseWindowList = this.reuseSubWindowMap.get(parentId);
+    if (!reuseWindowList) {
       return undefined;
     }
-    for (let i = 0; i < reusableSubWindowList.length; i++) {
-      const reusableWindow = reusableSubWindowList[i];
-      if (!reusableWindow) {
+    for (let i = 0; i < reuseWindowList.length; i++) {
+      const item = reuseWindowList[i];
+      if (!item) {
         continue;
       }
-      const rect = reusableWindow.subWindow.getWindowProperties().windowRect;
+      const rect = item.subWindow.getWindowProperties().windowRect;
       const maxDistance:number = 2;
-      if (Math.abs(rect.width - width) <= maxDistance &&
-        Math.abs(rect.height - height) <= maxDistance) {
-        reusableSubWindowList.splice(i, 1);
+      if (Math.abs(rect.width - bounds.width) <= maxDistance &&
+        Math.abs(rect.height - bounds.height) <= maxDistance) {
+        reuseWindowList.splice(i, 1);
         let found = false;
         for (let j = 0; j < this.globalCache.length; j++) {
-          if (this.globalCache[j].parentId === reusableWindow.parentId &&
-              this.globalCache[j].id === reusableWindow.id) {
+          if (this.globalCache[j].parentId === item.parentId &&
+            this.globalCache[j].id === item.id) {
             found = true;
             this.globalCache.splice(j, 1);
             break;
           }
         }
         if (!found) {
-          LogUtil.error(TAG, 'Global cache is inconsistent with cache of ' + reusableWindow.parentId);
+          LogUtil.error(TAG, 'Global cache is inconsistent with cache of ' + item.parentId);
         }
-        LogUtil.info(TAG, `reusableWindow ${reusableWindow.id} size ${reusableSubWindowList.length}`);
-        this.subWindowList.push(reusableWindow);
-        return reusableWindow;
+        LogUtil.info(TAG, `find reuse window: ${item.id}, parentId: ${parentId}, size: ${reuseWindowList.length}`);
+        this.subWindowList.push(item);
+        return item;
       }
     }
     return undefined;
   }
 
-  private createNewWindow(parentId: number,
-                          id: number,
-                          bounds: WindowBound,
-                          subStorage: LocalStorage,
-                          visibility: boolean,
-                          callback: (id: number) => void) {
+  private createSubWindow(param: NewWindowParam,
+    bounds: WindowBound,
+    parentId: number,
+    callback: (id: number) => void) {
+    const para: Record<string, IParams> = {
+      'subWindowParams': {
+        id: param.widget_id,
+        size: [bounds.width, bounds.height],
+        initColorRgb: param.init_color_argb,
+        ownerPid: param.owner_pid,
+      }
+    };
+    let subStorage: LocalStorage = new LocalStorage(para);
     let proxy = this.getParentProxy(parentId);
-    proxy?.createSubWindow(StringUtil.widgetConvert(id))
+    proxy?.createSubWindow(StringUtil.widgetConvert(param.widget_id))
       .then((data: window.Window) => {
-        this.initSubWindow(data, parentId, id, bounds, subStorage, visibility);
-        callback(id);
+        this.initSubWindow(data, parentId, param, bounds, subStorage);
+        callback(param.widget_id);
       }).catch((error: BusinessError) => {
       LogUtil.error(TAG, 'Failed to create the subWindow. Cause: ' + JSON.stringify(error));
+      callback(-1);
     });
   }
 
   private initSubWindow(data: window.Window,
-                        parentId: number,
-                        id: number,
-                        bounds: WindowBound,
-                        subStorage: LocalStorage,
-                        visibility: boolean) {
+    parentId: number,
+    param: NewWindowParam,
+    bounds: WindowBound,
+    subStorage: LocalStorage) {
     try {
       let windowClass = data;
       windowClass.keepKeyboardOnFocus(true);
       this.subWindowList.push({
-        id: id,
+        id: param.widget_id,
         parentId: parentId,
         subWindow: windowClass,
         localStorage: subStorage
@@ -208,36 +223,80 @@ export class SubWindowAdapter extends BaseAdapter {
 
       windowClass.on('windowSizeChange', (size) => {
         const prop = data.getWindowProperties();
-        let windowBound: WindowBound = {
+        let change_bounds: WindowBound = {
           left: prop.windowRect.left,
           top: prop.windowRect.top,
           width: size.width,
           height: size.height
         };
-        this.nativeContext.OnWindowSizeChange(id, windowBound);
+        this.nativeContext.OnWindowSizeChange(param.widget_id, change_bounds);
       });
 
       this.moveSubWindow(windowClass, bounds.left, bounds.top, parentId);
       if (bounds.width > 0 && bounds.height > 0) {
         this.resizeSubWindow(windowClass, bounds.width, bounds.height);
       }
+
       windowClass.loadContent('pages/SubWindow', subStorage, (err) => {
         if (err.code) {
           LogUtil.error(TAG, 'Failed to load the content. Cause:' + JSON.stringify(err));
           return;
         }
-        windowClass.setWindowFocusable(false)
-          .then(() => {
-            visibility && windowClass.showWindow()
-              .catch((err: BusinessError) => {
-                LogUtil.error(TAG, 'Failed to show SubWindow. Cause: ' + JSON.stringify(err));
-              });
-          }).catch(() => {
-          LogUtil.error(TAG, 'set focusable false failed')
-        });
+
+        let styles = this.windowStyle.buildWindowStyles(param.feature_mask, param.window_state_mask);
+        LogUtil.info(TAG, 'initSubWindow loadContent styles:' + JSON.stringify(styles) +
+          ',feature_mask:' + param.feature_mask + ',window_state_mask:' + param.window_state_mask);
+
+        // compute Window Styles
+        this.computeWindowStyles(windowClass, styles);
+
+        styles.show_window && windowClass.showWindow()
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to show SubWindow. Cause: ' + JSON.stringify(err));
+          });
       });
-    } catch (exception) {
-      LogUtil.error(TAG,'Failed to create sub window. Cause: ' + JSON.stringify(exception));
+    } catch (err) {
+      LogUtil.error(TAG,'Failed to create sub window. Cause: ' + JSON.stringify(err));
+    }
+  }
+
+  private computeWindowStyles(windowClass: window.Window, styles: WindowStyles) {
+    try {
+      windowClass.setWindowDecorVisible(!styles.hide_title_bar);
+      if (deviceInfo.sdkApiVersion >= 14) {
+        if (!styles.hide_title_bar) {
+          windowClass.setWindowTitleButtonVisible(styles.maximizable, styles.minimizable, styles.closable);
+        }
+        if (styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
+          let buttonStyle: window.DecorButtonStyle = {
+            colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+          };
+          windowClass.setDecorButtonStyle(buttonStyle);
+        }
+        windowClass.setWindowTitleMoveEnabled(!styles.hide_title_bar);
+        if (styles.always_on_top) {
+          windowClass.raiseToAppTop()
+            .catch((err: BusinessError) => {
+              LogUtil.error(TAG, 'Failed to setTopmost. Cause:' + JSON.stringify(err));
+            });
+        }
+        if (!styles.hide_title_bar) {
+          windowClass.setResizeByDragEnabled(styles.resizable)
+            .catch((err: BusinessError) => {
+              LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
+            });
+        }
+        windowClass.setWindowFocusable(styles.focusable)
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to setFocusable. Cause:' + JSON.stringify(err));
+          });
+        windowClass.setWindowTouchable(styles.touchable)
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to setTouchable. Cause:' + JSON.stringify(err));
+          });
+      }
+    } catch (err) {
+      LogUtil.error(TAG, 'Failed to compute window styles. Cause:' + JSON.stringify(err));
     }
   }
 
@@ -283,7 +342,7 @@ export class SubWindowAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  closeSubWindow(id: number) {
+  closeWindow(id: number) {
     for (let i = 0; i < this.subWindowList.length; i++) {
       const item = this.subWindowList[i];
       if (item && item.id === id) {
@@ -301,16 +360,16 @@ export class SubWindowAdapter extends BaseAdapter {
     }
     let total = this.getTotalSubWindowNum();
     this.globalCache.push(item);
-    let reuseWindowList = this.reusableSubWindow.get(item.parentId);
+    let reuseWindowList = this.reuseSubWindowMap.get(item.parentId);
     if (reuseWindowList) {
       reuseWindowList.push(item);
     } else {
-      this.reusableSubWindow.set(item.parentId, [item]);
+      this.reuseSubWindowMap.set(item.parentId, [item]);
     }
     if (total > MAX_TOTAL_SUB_WINDOW_NUM) {
       let oldest = this.globalCache.shift();
       if (oldest) {
-        let target = this.reusableSubWindow.get(oldest.parentId);
+        let target = this.reuseSubWindowMap.get(oldest.parentId);
         if (!target) {
           LogUtil.error(TAG, 'Global cache is inconsistent with cache of ' + oldest.parentId);
         } else {
@@ -340,7 +399,7 @@ export class SubWindowAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  hideSubWindow(id: number) {
+  hideWindow(id: number) {
     const item = this.findSubWindow(id);
     item?.subWindow.minimize().catch((err: BusinessError) => {
       LogUtil.error(TAG, 'Failed to hide SubWindow. Cause: ' + JSON.stringify(err));
@@ -348,7 +407,7 @@ export class SubWindowAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  showSubWindow(id: number) {
+  showWindow(id: number) {
     const item = this.findSubWindow(id);
     item?.subWindow.showWindow().catch((err: BusinessError) => {
       LogUtil.error(TAG, 'Failed to show SubWindow. Cause: ' + JSON.stringify(err));
@@ -356,16 +415,16 @@ export class SubWindowAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  setSubWindowBounds(id: number, r: WindowBound) {
+  setBounds(id: number, bounds: WindowBound) {
     try {
       let windowClass = window.findWindow(StringUtil.widgetConvert(id));
-      windowClass?.resize(r.width, r.height, (err) => {
+      windowClass?.resize(bounds.width, bounds.height, (err) => {
         if (err.code) {
           LogUtil.error(TAG, 'Failed to change the subWindow size. Cause:' + JSON.stringify(err));
           return;
         }
       });
-      windowClass?.moveWindowTo(r.left, r.top, (err) => {
+      windowClass?.moveWindowTo(bounds.left, bounds.top, (err) => {
         if (err.code) {
           LogUtil.error(TAG, 'Failed to move the subwindow. Cause:' + JSON.stringify(err));
           return;
