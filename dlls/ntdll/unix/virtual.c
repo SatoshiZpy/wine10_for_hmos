@@ -1940,11 +1940,26 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
     {
         TRACE( "forcing exec permission on %p-%p\n", base, (char *)base + size - 1 );
         if (!mprotect( base, size, unix_prot | PROT_EXEC )) return 0;
+#ifdef __OHOS__
+        /* HarmonyOS W^X policy restricts PROT_EXEC changes */
+        if (errno == EACCES || errno == EPERM) return 0;
+#endif
         /* exec + write may legitimately fail, in that case fall back to write only */
         if (!(unix_prot & PROT_WRITE)) return -1;
     }
 
+#ifdef __OHOS__
+    /* HarmonyOS W^X policy may block PROT_EXEC changes */
+    if (mprotect( base, size, unix_prot ) < 0)
+    {
+        if ((errno == EACCES || errno == EPERM) && (unix_prot & PROT_EXEC))
+            return 0;
+        return -1;
+    }
+    return 0;
+#else
     return mprotect( base, size, unix_prot );
+#endif
 }
 
 
@@ -2388,34 +2403,50 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
        and if alignment is correct */
     if ((!removable || (flags & MAP_SHARED)) && host_addr == map_addr && host_size == map_size)
     {
-        if (mmap( host_addr, host_size, prot, flags, fd, offset ) != MAP_FAILED)
-            return STATUS_SUCCESS;
-
-        switch (errno)
+#ifdef __OHOS__
+        if (prot & PROT_EXEC)
         {
-        case EINVAL:  /* file offset is not page-aligned, fall back to read() */
-            break;
-        case ENOEXEC:
-        case ENODEV:  /* filesystem doesn't support mmap(), fall back to read() */
-            if (vprot & VPROT_WRITE)
+            /* HarmonyOS W^X policy: use anonymous mmap when EXEC is needed */
+            if (mmap( map_addr, map_size, prot, MAP_FIXED | MAP_ANON | MAP_PRIVATE,
+                      -1, 0 ) != MAP_FAILED)
             {
-                ERR( "shared writable mmap not supported, broken filesystem?\n" );
-                return STATUS_NOT_SUPPORTED;
+                pread( fd, map_addr, size, offset );
+                return STATUS_SUCCESS;
             }
-            break;
-        case EACCES:
-        case EPERM:  /* noexec filesystem, fall back to read() */
-            if (vprot & VPROT_WRITE)
+        }
+        else
+#endif
+        {
+            /* try file-backed mmap for mappings without PROT_EXEC */
+            if (mmap( host_addr, host_size, prot, flags, fd, offset ) != MAP_FAILED)
+                return STATUS_SUCCESS;
+
+            switch (errno)
             {
-                if (prot & PROT_EXEC) ERR( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
-                return STATUS_ACCESS_DENIED;
+            case EINVAL:  /* file offset is not page-aligned, fall back to read() */
+                break;
+            case ENOEXEC:
+            case ENODEV:  /* filesystem doesn't support mmap(), fall back to read() */
+                if (vprot & VPROT_WRITE)
+                {
+                    ERR( "shared writable mmap not supported, broken filesystem?\n" );
+                    return STATUS_NOT_SUPPORTED;
+                }
+                break;
+            case EACCES:
+            case EPERM:  /* noexec filesystem, fall back to read() */
+                if (vprot & VPROT_WRITE)
+                {
+                    if (prot & PROT_EXEC) ERR( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
+                    return STATUS_ACCESS_DENIED;
+                }
+                if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
+                break;
+            default:
+                ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",
+                     strerror(errno), map_addr, map_addr + map_size, prot );
+                return STATUS_NO_MEMORY;
             }
-            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
-            break;
-        default:
-            ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",
-                 strerror(errno), map_addr, map_addr + map_size, prot );
-            return STATUS_NO_MEMORY;
         }
     }
 
@@ -2425,9 +2456,18 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
         return STATUS_INVALID_PARAMETER;
     }
 
+#ifdef __OHOS__
+    /* HarmonyOS: use anonymous mmap as fallback for all mapping types */
+    if (mmap( map_addr, map_size, prot, MAP_FIXED | MAP_ANON | MAP_PRIVATE,
+              -1, 0 ) == MAP_FAILED)
+        return STATUS_NO_MEMORY;
+    pread( fd, map_addr, size, offset );
+    return STATUS_SUCCESS;
+#else
     mprotect( map_addr, map_size, PROT_READ | PROT_WRITE );
     pread( fd, map_addr, size, offset );
     return STATUS_SUCCESS;
+#endif
 }
 
 
@@ -2746,12 +2786,24 @@ static NTSTATUS map_pe_header( void *ptr, size_t size, size_t map_size, int fd, 
 
     if (!*removable && map_size)
     {
+#ifdef __OHOS__
+        /* HarmonyOS kernel doesn't allow mapping files as RWX, use anonymous memory instead */
+        if (mmap( ptr, map_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                  MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0 ) != MAP_FAILED)
+        {
+            pread( fd, ptr, map_size, 0 );
+            if (size > map_size) pread( fd, (char *)ptr + map_size, size - map_size, map_size );
+            return STATUS_SUCCESS;
+        }
+        ERR( "OHOS: map_pe_header anonymous mmap failed: %s\n", strerror(errno) );
+#else
         if (mmap( ptr, map_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                   MAP_FIXED | MAP_PRIVATE, fd, 0 ) != MAP_FAILED)
         {
             if (size > map_size) pread( fd, (char *)ptr + map_size, size - map_size, map_size );
             return STATUS_SUCCESS;
         }
+#endif
         switch (errno)
         {
         case EPERM:
@@ -3184,15 +3236,31 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
         end = file_start + file_size;
         if (sec[i].PointerToRawData >= st.st_size ||
             end > ((st.st_size + sector_align) & ~sector_align) ||
+#ifdef __OHOS__
+            end < file_start)
+#else
             end < file_start ||
-            map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
-                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
+            map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start, 
+                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY, 
                                 removable ) != STATUS_SUCCESS)
+#endif
         {
             ERR_(module)( "Could not map %s section %.8s, file probably truncated\n",
                           debugstr_w(filename), sec[i].Name );
             goto done;
         }
+#ifdef __OHOS__
+        if (map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
+                                (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) ?
+                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY | VPROT_EXEC :
+                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY, 
+                                removable ) != STATUS_SUCCESS)
+        {
+            ERR_(module)( "Could not map %s section %.8s\n",
+                            debugstr_w(filename), sec[i].Name );
+            goto done;
+        }
+#endif
 
         if (file_size & align_mask)
         {
