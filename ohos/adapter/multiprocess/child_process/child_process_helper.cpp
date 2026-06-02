@@ -229,6 +229,8 @@ int ChildProcessHelper::GetDisplay(ipc::DisplayParam& param)
     param.width = default_display.avail_area.width;
     param.height = default_display.avail_area.height;
     param.density_dpi = default_display.density_dpi;
+    param.x_dpi = default_display.x_dpi;
+    param.y_dpi = default_display.y_dpi;
     return 0;
 }
 

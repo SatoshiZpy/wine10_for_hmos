@@ -25,8 +25,6 @@
 #include "ohos/adapter/window/wine_window_manager.h"
 #include "ohos/adapter/xcomponent/xcomponent_manager.h"
 
-static constexpr int32_t USER_DEFAULT_SCREEN_DPI = 96;
-
 EXTERN_C_START
 
 using namespace ohos::adapter;
@@ -367,26 +365,51 @@ struct window_bounds GetDisplayAvailArea()
 int GetSystemDpi()
 {
     auto display = GetDisplay();
-    if (display.density_dpi <= 0) {
-        LOGE("get display info error");
-        return USER_DEFAULT_SCREEN_DPI;
+    if (display.width <= 0 || display.height <= 0) {
+        LOGE("get display physical size error");
+        return 96;
     }
 
-    LOGI("get display info: %{public}f, (%{public}d,%{public}d)", display.density_dpi, display.width, display.height);
-    double width_inch = display.width / display.density_dpi;
-    double height_inch = display.height / display.density_dpi;
+    LOGI("get display info: x_dpi=%{public}f, y_dpi=%{public}f, (%{public}d,%{public}d)",
+        display.x_dpi, display.y_dpi, display.width, display.height);
+
+    // Calculate physical size (in inches)
+    double width_inch = display.width / display.x_dpi;
+    double height_inch = display.height / display.y_dpi;
     double diag_inch = std::sqrt(width_inch * width_inch + height_inch * height_inch);
     double diag_px = std::sqrt(display.width * display.width + display.height * display.height);
-    double dpi_double = diag_px / diag_inch;
-    int dpi = static_cast<int>(std::round(dpi_double));
+
+    // Calculate physical PPI
+    double physical_ppi = diag_px / diag_inch;
+
+    // Determine usage scenario based on screen size and apply correction factor
+    double correction_factor = 1.0;
+    if (diag_inch <= 15.6) {
+        // Laptop screens (12-15.6 inches): scale at 60-70% of physical PPI
+        correction_factor = 0.65;
+    } else if (diag_inch <= 27) {
+        // Desktop monitors (21-27 inches): scale at 80-90% of physical PPI
+        correction_factor = 0.85;
+    } else {
+        // Large-screen TVs (32 inches+): scale at 100% of physical PPI
+        correction_factor = 1.0;
+    }
+
+    // Calculate effective target DPI (considering viewing distance)
+    double effective_target_dpi = physical_ppi * correction_factor;
+    int dpi = static_cast<int>(std::round(effective_target_dpi));
     dpi = std::max(96, std::min(240, dpi));
-    
-    if (dpi > 96 && dpi <= 108) dpi = 96;
-    else if (dpi > 108 && dpi <= 120) dpi = 120;
-    else if (dpi > 120 && dpi <= 144) dpi = 144;
-    else if (dpi > 144 && dpi <= 168) dpi = 168;
-    else if (dpi > 168 && dpi <= 192) dpi = 192;
-    LOGI("calc screen dpi: %{public}d", dpi);
+
+    LOGI("physical PPI: %{public}.2f, size: %{public}.1f inch, factor: %{public}.2f, effective DPI: %{public}d",
+        physical_ppi, diag_inch, correction_factor, dpi);
+
+    // Map to Windows standard DPI scaling levels
+    if (dpi > 96 && dpi <= 108) dpi = 96;           // 100%
+    else if (dpi > 108 && dpi <= 120) dpi = 120;    // 125%
+    else if (dpi > 120 && dpi <= 144) dpi = 144;    // 150%
+    else if (dpi > 144 && dpi <= 168) dpi = 168;    // 175%
+    else if (dpi > 168 && dpi <= 192) dpi = 192;    // 200%
+    LOGI("recommended DPI: %{public}d (scale: %{public}.0f%%)", dpi, (dpi * 100.0 / 96));
 
     return dpi;
 }

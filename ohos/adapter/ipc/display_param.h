@@ -42,6 +42,8 @@ struct DisplayParam {
     int32_t width = 0;
     int32_t height = 0;
     float density_dpi = 0.0;
+    float x_dpi = 0.0;
+    float y_dpi = 0.0;
 
     static DisplayParam FromParcel(const multiprocess::NativeIpcParcel& parcel) {
         DisplayParam param;
@@ -52,6 +54,8 @@ struct DisplayParam {
         parcel.Read(param.width);
         parcel.Read(param.height);
         parcel.Read(param.density_dpi);
+        parcel.Read(param.x_dpi);
+        parcel.Read(param.y_dpi);
         return param;
     }
 
@@ -63,6 +67,8 @@ struct DisplayParam {
         parcel.Write(width);
         parcel.Write(height);
         parcel.Write(density_dpi);
+        parcel.Write(x_dpi);
+        parcel.Write(y_dpi);
         return true;
     }
 };
