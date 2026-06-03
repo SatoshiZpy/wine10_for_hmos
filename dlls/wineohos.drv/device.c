@@ -502,13 +502,15 @@ void mouse_event_callback( const input_event* event )
             data.motion.input.mi.dy = last_mouse_screen_y;
             float wheel_x = event->data.mouse_event.wheel_x;
             float wheel_y = event->data.mouse_event.wheel_y;
-            if (wheel_y != 0) {
-                data.motion.input.mi.mouseData = (DWORD)(wheel_y * 6.0f);
+            if (wheel_y)
+            {
+                data.motion.input.mi.mouseData = wheel_y < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
                 data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_WHEEL;
                 send_event(&data);
             }
-            if (wheel_x != 0) {
-                data.motion.input.mi.mouseData = (DWORD)(wheel_x * 6.0f);
+            if (wheel_x)
+            {
+                data.motion.input.mi.mouseData = wheel_x < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
                 data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_HWHEEL;
                 send_event(&data);
             }
