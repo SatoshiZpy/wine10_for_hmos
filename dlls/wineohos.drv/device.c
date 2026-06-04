@@ -637,8 +637,8 @@ static ohos_window create_window( HWND hwnd, int window_type, const struct windo
     param.pid = getpid();
     param.bounds = *bounds;
 
-    if (window_type == POPUP_WINDOW)
-        param.parent_id = get_owner_window_id(hwnd);
+    param.parent_id = (window_type == POPUP_WINDOW) ?
+        get_owner_window_id(hwnd) : 0;
 
     param.features = get_window_features(hwnd);
     param.state = get_window_state(hwnd);
@@ -717,10 +717,12 @@ void create_native_window( struct ohos_win_data *data )
     style = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
     ex_style = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
 
+    if ((style & (WS_POPUP | WS_CHILD)) == WS_CHILD)
+        WARN("A top-level window that has the WS_CHILD style (which is usually invalid/inconsistent).\n");
+
     if ((style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME) || (ex_style & WS_EX_TOOLWINDOW))
         window_type = POPUP_WINDOW;
-    else if ((style & WS_OVERLAPPEDWINDOW) == WS_OVERLAPPEDWINDOW ||
-             (ex_style & WS_EX_APPWINDOW) || (ex_style & WS_EX_OVERLAPPEDWINDOW))
+    else if ((style & WS_OVERLAPPEDWINDOW) == WS_OVERLAPPEDWINDOW || (style & WS_CAPTION) == WS_CAPTION)
         window_type = MAIN_WINDOW;
     else
         WARN("The popup window style is used by default.\n");

@@ -126,8 +126,8 @@ export class PresetDeployerAdapter extends BaseAdapter {
   ): Promise<void> {
     let rawFd: resmgr.RawFileDescriptor | undefined = undefined;
     let dest: fs.File | undefined = undefined;
+    const context = this.ctxAdapter.getContext();
     try {
-      const context = this.ctxAdapter.getContext();
       rawFd = await context.resourceManager.getRawFd(rawPath);
       dest = fs.openSync(destAbsPath, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
       const chunkSize = 256 * 1024;
