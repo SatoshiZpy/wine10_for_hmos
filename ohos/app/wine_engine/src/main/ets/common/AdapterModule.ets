@@ -13,6 +13,7 @@ import lazy { MultiInputAdapter } from '../adapter/MultiInputAdapter';
 import lazy { NativeThemeAdapter } from '../adapter/NativeThemeAdapter';
 import lazy { PermissionManagerAdapter } from '../adapter/PermissionManagerAdapter';
 import lazy { DeviceInfoAdapter } from '../adapter/DeviceInfoAdapter';
+import lazy { PresetDeployerAdapter } from '../adapter/PresetDeployerAdapter';
 
 // Only the adapters which used in WineAbility or WineWindow should be added here.
 export const adapterModule = new ContainerModule((bind) => {
@@ -24,4 +25,5 @@ export const adapterModule = new ContainerModule((bind) => {
   bind(ContextPathAdapter).toSelf();
   bind(PermissionManagerAdapter).toSelf();
   bind(DeviceInfoAdapter).toSelf();
+  bind(PresetDeployerAdapter).toSelf();
 });

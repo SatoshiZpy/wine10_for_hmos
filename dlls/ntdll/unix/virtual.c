@@ -3236,31 +3236,21 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
         end = file_start + file_size;
         if (sec[i].PointerToRawData >= st.st_size ||
             end > ((st.st_size + sector_align) & ~sector_align) ||
-#ifdef __OHOS__
-            end < file_start)
-#else
             end < file_start ||
-            map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start, 
-                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY, 
-                                removable ) != STATUS_SUCCESS)
+            map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
+#ifdef __OHOS__
+                                (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) ?
+                                    VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY | VPROT_EXEC :
+                                    VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
+#else
+                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
 #endif
+                                removable ) != STATUS_SUCCESS)
         {
             ERR_(module)( "Could not map %s section %.8s, file probably truncated\n",
                           debugstr_w(filename), sec[i].Name );
             goto done;
         }
-#ifdef __OHOS__
-        if (map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
-                                (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) ?
-                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY | VPROT_EXEC :
-                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY, 
-                                removable ) != STATUS_SUCCESS)
-        {
-            ERR_(module)( "Could not map %s section %.8s\n",
-                            debugstr_w(filename), sec[i].Name );
-            goto done;
-        }
-#endif
 
         if (file_size & align_mask)
         {
