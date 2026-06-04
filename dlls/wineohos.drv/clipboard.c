@@ -56,8 +56,9 @@ typedef struct _WINE_CLIPFORMAT
  *              Forward Function Declarations
  **************************************************************************/
 static void *import_utf8_to_unicodetext(OH_UdmfData* data, size_t *ret_size);
-
 static OH_UdmfData* export_unicodetext_to_utf8(void *data, size_t size);
+static WINE_CLIPFORMAT* format_for_type(const char *type);
+static WINE_CLIPFORMAT* natural_format_for_format(UINT format_id);
 
 
  /**************************************************************************
@@ -71,6 +72,8 @@ static struct list format_list = LIST_INIT(format_list);
 
 static HWND clipboard_hwnd;
 static BOOL is_clipboard_owner;
+static volatile LONG pasteboard_notify_flag;   /* set by observer callback, cleared by clipboard thread */
+static volatile LONG exporting_to_ohos;        /* guard: TRUE while Win32->OHOS push is in flight */
 static OH_Pasteboard* OHOS_pasteboard;
 static OH_PasteboardObserver* OHOS_observer;
 static WINE_CLIPFORMAT **current_ohos_formats;
@@ -140,26 +143,41 @@ static const char *debugstr_format(UINT id)
 
 /**************************************************************************
  *              set_win32_clipboard_formats_from_ohos_pasteboard
+ *
+ * Given a list of MIME type strings from the OHOS pasteboard, look up
+ * each one in format_list and set the corresponding Win32 clipboard format
+ * via deferred rendering (WM_RENDERFORMAT).  The actual data retrieval
+ * happens later in render_format().
  */
 static void set_win32_clipboard_formats_from_ohos_pasteboard(char** types, int count)
 {
-    WINE_CLIPFORMAT** formats;
-    UINT i;
+    WINE_CLIPFORMAT **new_formats = NULL;
+    UINT i, format_idx = 0;
 
-    formats = types;
-    if (!formats)
-        return;
+    if (!types || count <= 0) return;
+
+    new_formats = calloc(count, sizeof(WINE_CLIPFORMAT*));
+    if (!new_formats) return;
 
     for (i = 0; i < count; i++)
     {
         struct set_clipboard_params params = { 0 };
-        TRACE("adding format %s\n", debugstr_format(formats[i]->format_id));
-        NtUserSetClipboardData(formats[i]->format_id, 0, &params);
+        WINE_CLIPFORMAT *fmt = format_for_type(types[i]);
+
+        if (!fmt)
+        {
+            TRACE("no handler for type %s, skipping\n", types[i]);
+            continue;
+        }
+
+        TRACE("adding format %s\n", debugstr_format(fmt->format_id));
+        NtUserSetClipboardData(fmt->format_id, 0, &params);
+        new_formats[format_idx++] = fmt;
     }
 
     free(current_ohos_formats);
-    current_ohos_formats = formats;
-    nb_current_ohos_formats = count;
+    current_ohos_formats = new_formats;
+    nb_current_ohos_formats = format_idx;
 }
 
 
@@ -211,22 +229,21 @@ static void grab_win32_clipboard(void)
     if (!types)
     {
         WARN("Failed to copy pasteboard types\n");
+        OH_UdmfData_Destroy(udmfData);
         return;
     }
 
-    // if (!macdrv_has_pasteboard_changed() && last_types && CFEqual(types, last_types))
-    // if (last_types && CFEqual(types, last_types))
-        // return;
-
-    // last_types = types; /* takes ownership */
-
-    if (!NtUserOpenClipboard(clipboard_hwnd, 0)) return;
+    if (!NtUserOpenClipboard(clipboard_hwnd, 0))
+    {
+        OH_UdmfData_Destroy(udmfData);
+        return;
+    }
     NtUserEmptyClipboard();
     is_clipboard_owner = TRUE;
     last_clipboard_update = NtGetTickCount();
     set_win32_clipboard_formats_from_ohos_pasteboard(types, count);
     NtUserCloseClipboard();
-    NtUserSetTimer(clipboard_hwnd, 1, CLIPBOARD_UPDATE_DELAY, NULL, TIMERV_DEFAULT_COALESCING);
+    OH_UdmfData_Destroy(udmfData);
 }
 
 /**************************************************************************
@@ -466,7 +483,14 @@ static OH_UdmfData* export_unicodetext_to_utf8(void *data, size_t size)
  */
 static void PasteboardNotifyImpl(void* context, Pasteboard_NotifyType type)
 {
-    TRACE("Pasteboard_NotifyType, type: %d", type);
+    TRACE("Pasteboard_NotifyType, type: %d\n", type);
+
+    /* If we are currently exporting data from Win32 to OHOS,
+     * ignore the notification to avoid a feedback loop. */
+    if (InterlockedCompareExchange(&exporting_to_ohos, 0, 0)) return;
+
+    /* Signal the clipboard thread to pull OHOS data into Win32 */
+    InterlockedExchange(&pasteboard_notify_flag, 1);
 }
 
 
@@ -577,40 +601,81 @@ static void update_clipboard(void)
         if (NtGetTickCount() - last_clipboard_update > CLIPBOARD_UPDATE_DELAY)
             grab_win32_clipboard();
     }
-    // else if (!macdrv_is_pasteboard_owner(clipboard_cocoa_window))
-    //     grab_win32_clipboard();
+    else if (InterlockedExchange(&pasteboard_notify_flag, 0))
+    {
+        /* external OHOS app changed the pasteboard -- pull data into Win32 */
+        grab_win32_clipboard();
+    }
 
     updating = FALSE;
 }
 
 
 /**************************************************************************
+ *              init_ohos_pasteboard
+ *
+ * Create the OHOS pasteboard and observer on the calling thread.
+ * Called from ohos_init() during driver startup (UI thread).
+ */
+BOOL init_ohos_pasteboard(void)
+{
+    if (OHOS_pasteboard) return TRUE;  /* already initialized */
+
+    OHOS_pasteboard = OH_Pasteboard_Create();
+    if (!OHOS_pasteboard)
+    {
+        ERR("Failed to create pasteboard instance\n");
+        return FALSE;
+    }
+
+    OHOS_observer = OH_PasteboardObserver_Create();
+    if (!OHOS_observer)
+    {
+        ERR("Failed to create pasteboard observer\n");
+        return FALSE;
+    }
+
+    OH_PasteboardObserver_SetData(OHOS_observer, (void*)OHOS_pasteboard,
+                                   PasteboardNotifyImpl, PasteboardFinalizeImpl);
+    TRACE("pasteboard and observer created\n");
+    return TRUE;
+}
+
+
+/**************************************************************************
  *              init_clipboard
  *
- * init_clipboard.
- * 初始化剪贴板。
+ * Initialize the clipboard manager window.  Called from WM_NCCREATE.
+ * The pasteboard and observer must already exist from init_ohos_pasteboard().
  */
 static BOOL init_clipboard(HWND hwnd)
 {
+    static BOOL initialized = FALSE;
+
+    /* re-entrant guard: WM_NCCREATE may fire more than once */
+    if (initialized) return TRUE;
+    initialized = TRUE;
+
+    if (!OHOS_pasteboard)
+    {
+        ERR("pasteboard not initialized -- init_ohos_pasteboard() must be called first\n");
+        return FALSE;
+    }
 
     clipboard_hwnd = hwnd;
     clipboard_thread_id = GetCurrentThreadId();
     NtUserAddClipboardFormatListener(clipboard_hwnd);
 
-    // 1. 创建剪贴板实例
-    OHOS_pasteboard = OH_Pasteboard_Create();
-    if (OHOS_pasteboard == NULL) {
-        WARN("Failed to create pasteboard instance. \n");
-    };
-    // 2. 创建剪贴板数据变更观察者实例
-    OHOS_observer = OH_PasteboardObserver_Create();
-    // 3. 将两个回调函数设置到观察者实例
-    OH_PasteboardObserver_SetData(OHOS_observer, (void*)OHOS_pasteboard, PasteboardNotifyImpl, PasteboardFinalizeImpl);
-    // 4. 设置对剪贴板本端数据变化的订阅
+    /* subscribe to OHOS pasteboard data change notifications */
     OH_Pasteboard_Subscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
-    // 5. 对齐类型
+
+    /* register builtin format mappings (CF_UNICODETEXT <-> "text/plain") */
     register_builtin_formats();
-    // 6. 同步一次数据
+
+    /* start periodic sync timer -- always on so we can detect external changes */
+    NtUserSetTimer(clipboard_hwnd, 1, CLIPBOARD_UPDATE_DELAY, NULL, TIMERV_DEFAULT_COALESCING);
+
+    /* initial sync: pull data from OHOS pasteboard into Win32 clipboard */
     grab_win32_clipboard();
 
     TRACE("clipboard thread %04x running\n", clipboard_thread_id);
@@ -631,18 +696,25 @@ LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_NCCREATE:
             return init_clipboard(hwnd);
         case WM_CLIPBOARDUPDATE:
+        {
+            /* Don't push our own changes back to OHOS (avoid echo loop). */
+            if (is_clipboard_owner) break;
+            /* Push Win32 clipboard data to OHOS pasteboard. */
+            {
+                UINT i;
+                for (i = 0; i < ARRAY_SIZE(builtin_format_ids); i++)
+                    query_pasteboard_data(hwnd, builtin_format_ids[i].type);
+            }
             break;
+        }
         case WM_RENDERFORMAT:
             render_format(wp);
             break;
         case WM_TIMER:
-            if (!is_clipboard_owner) break;
-            grab_win32_clipboard();
+            update_clipboard();
             break;
         case WM_DESTROYCLIPBOARD:
-            TRACE("WM_DESTROYCLIPBOARD: lost ownership\n");
             is_clipboard_owner = FALSE;
-            NtUserKillTimer(hwnd, 1);
             break;
         case WM_USER:
             update_clipboard();
@@ -700,6 +772,9 @@ void OHOS_UpdateClipboard(void)
 
  /**************************************************************************
  *              query_pasteboard_data
+ *
+ * Read Win32 clipboard for a given OHOS paste type and push it to the
+ * OHOS pasteboard.  Used by WM_CLIPBOARDUPDATE handler.
  */
 BOOL query_pasteboard_data(HWND hwnd, OHOS_PasteType type)
 {
@@ -728,12 +803,23 @@ BOOL query_pasteboard_data(HWND hwnd, OHOS_PasteType type)
             if ((data = format->export_func(params.data, params.size)))
             {
                 int ErrCode;
+
+                /* Set guard before calling OH_Pasteboard_SetData so the
+                 * observer callback knows to skip this change (we caused it). */
+                InterlockedExchange(&exporting_to_ohos, 1);
+
                 ErrCode = OH_Pasteboard_SetData(OHOS_pasteboard, data);
-                if (ErrCode == 0) {
+
+                /* Clear guard and any flag the observer may have set */
+                InterlockedExchange(&exporting_to_ohos, 0);
+                InterlockedExchange(&pasteboard_notify_flag, 0);
+
+                if (ErrCode == 0)
                     ret = TRUE;
-                } else {
-                  WARN("OH_Pasteboard_SetData Error %n\n", ErrCode);
-                }
+                else
+                    WARN("OH_Pasteboard_SetData error %d\n", ErrCode);
+
+                OH_UdmfData_Destroy(data);
             }
             free(params.data);
             break;

@@ -75,6 +75,7 @@ extern void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent );
 extern void OHOS_SetCapture( HWND hwnd, UINT flags );
 extern UINT OHOS_ShowWindow( HWND hwnd, INT cmd, RECT *rect, UINT swp );
 extern LRESULT OHOS_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp );
+extern BOOL init_ohos_pasteboard(void);
 extern void OHOS_UpdateClipboard(void);
 extern LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 extern BOOL OHOS_WindowPosChanging( HWND hwnd, UINT swp_flags, BOOL shaped, const struct window_rects *rects );
