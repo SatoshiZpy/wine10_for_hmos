@@ -14,6 +14,8 @@ ARM64EC_BUILD_DIR=${ROOT_DIR}/arm64ecbuild
 ARM64EC_INSTALL_DIR=${ROOT_DIR}/out-arm64ec
 
 OHOS_SDK=${ROOT_DIR}/ohos_sdk/command-line-tools/sdk/default/openharmony
+OHOS_SYSROOT=${OHOS_SDK}/native/sysroot
+OHOS_TOOLCHAIN=${OHOS_SDK}/native/llvm
 CMAKE_PATH=${OHOS_SDK}/native/build-tools/cmake/bin/cmake
 NINJA_PATH=${OHOS_SDK}/native/build-tools/cmake/bin/ninja
 CMAKE_FILE_PATH=${OHOS_SDK}/native/build/cmake/ohos.toolchain.cmake
@@ -113,6 +115,13 @@ source ${ROOT_DIR}/ohos/script/build_adapter.sh
 # Build third_party freetype
 source ${ROOT_DIR}/ohos/script/build_freetype.sh
 
+# Build third_party krb5
+KRB5_INSTALL_DIR=${ROOT_DIR}/third_party/krb5/out
+export KRB5_CONFIG=${KRB5_INSTALL_DIR}/bin
+export KRB5_CFLAGS="-I${KRB5_INSTALL_DIR}/include/"
+export KRB5_LIBS="-L${KRB5_INSTALL_DIR}/lib -lkrb5 -lk5crypto -lcom_err"
+source ${ROOT_DIR}/ohos/script/build_krb5.sh
+
 # Build wine dll for arm64ec and wow64 mode
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     source ${ROOT_DIR}/ohos/script/build_arm64ec.sh
@@ -150,8 +159,8 @@ else
     export CFLAGS="-fPIC -D__MUSL__=1"
     export CXXFLAGS="-fPIC -D__MUSL__=1"
 fi
-export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include"
-export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build ${GSTREAMER_LIBS}"
+export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include ${KRB5_CFLAGS}"
+export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build ${GSTREAMER_LIBS} ${KRB5_LIBS}"
 export PATH=${OHOS_SDK}/native/llvm/bin:$PATH
 
 time_start_for_build=$(date +%s)
@@ -209,6 +218,16 @@ fi
 #     echo "copying GStreamer plugins"
 #     cp -r ${GSTREAMER_INSTALL_DIR}/lib/gstreamer-1.0/*.so* ${APP_DIR}/wine_engine/libs/arm64-v8a/gstreamer-1.0/ 2>/dev/null
 # fi
+
+# Copy krb5 lib
+if [ -d "${KRB5_INSTALL_DIR}" ]; then
+    echo "copying krb5 libraries"
+    mkdir -p ${APP_DIR}/wine_engine/libs/arm64-v8a/krb5/
+    cp -r ${KRB5_INSTALL_DIR}/lib/*.so* ${APP_DIR}/wine_engine/libs/arm64-v8a/
+    # Copy krb5 plugins
+    echo "copying krb5 plugins"
+    cp -r ${KRB5_INSTALL_DIR}/lib/krb5/plugins ${APP_DIR}/wine_engine/libs/arm64-v8a/krb5/ 2>/dev/null
+fi
 
 if [ "${COMPILE_HAP}" -eq 1 ]; then
     echo "compile hap"
