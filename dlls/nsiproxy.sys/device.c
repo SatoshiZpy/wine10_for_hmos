@@ -19,6 +19,7 @@
  */
 
 #include <stdarg.h>
+#include <stdlib.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -50,6 +51,7 @@ DECLARE_CRITICAL_SECTION( nsiproxy_cs );
 #define LIST_ENTRY_INIT( list )  { .Flink = &(list), .Blink = &(list) }
 static LIST_ENTRY request_queue = LIST_ENTRY_INIT( request_queue );
 static LIST_ENTRY notification_queue = LIST_ENTRY_INIT( notification_queue );
+static NTSTATUS notification_status;
 
 struct notification_data
 {
@@ -298,6 +300,14 @@ static NTSTATUS nsiproxy_change_notification( IRP *irp )
     /* FIXME: validate module and table. */
 
     EnterCriticalSection( &nsiproxy_cs );
+    if (notification_status)
+    {
+        NTSTATUS status = notification_status;
+
+        LeaveCriticalSection( &nsiproxy_cs );
+        free( data );
+        return status;
+    }
     IoSetCancelRoutine( irp, change_notification_cancel );
     if (irp->Cancel && !IoSetCancelRoutine( irp, NULL ))
     {
@@ -499,26 +509,54 @@ static DWORD WINAPI notification_thread_proc( void *arg )
             struct notification_data *data = irp->Tail.Overlay.DriverContext[0];
 
             next = entry->Flink;
-            if(irp->Cancel)
+            if (irp->Cancel)
             {
-                /* Cancel routine should care of freeing data and completing IRP. */
+                /* Cancel routine will free data and complete IRP. */
                 TRACE( "irp %p canceled.\n", irp );
                 continue;
             }
-            if (!NmrIsEqualNpiModuleId( &data->module, &params.module ) || data->table != params.table)
+            if (!NmrIsEqualNpiModuleId( &data->module, &params.module ) ||
+                data->table != params.table)
+                continue;
+            if (!IoSetCancelRoutine( irp, NULL ))
                 continue;
 
-            irp->IoStatus.Status = 0;
+            irp->IoStatus.Status = STATUS_SUCCESS;
             RemoveEntryList( entry );
             irp->Tail.Overlay.DriverContext[0] = NULL;
             free( data );
-            TRACE("completing irp %p.\n", irp);
+            TRACE( "completing irp %p.\n", irp );
             IoCompleteRequest( irp, IO_NO_INCREMENT );
         }
         LeaveCriticalSection( &nsiproxy_cs );
     }
 
     WARN( "nsi_get_notification failed, status %#lx.\n", status );
+
+    EnterCriticalSection( &nsiproxy_cs );
+    notification_status = status;
+    for (entry = notification_queue.Flink; entry != &notification_queue; entry = next)
+    {
+        IRP *irp = CONTAINING_RECORD( entry, IRP, Tail.Overlay.ListEntry );
+        struct notification_data *data = irp->Tail.Overlay.DriverContext[0];
+
+        next = entry->Flink;
+        if (irp->Cancel)
+        {
+            TRACE( "irp %p canceled.\n", irp );
+            continue;
+        }
+        if (!IoSetCancelRoutine( irp, NULL ))
+            continue;
+
+        RemoveEntryList( entry );
+        irp->IoStatus.Status = status;
+        irp->Tail.Overlay.DriverContext[0] = NULL;
+        free( data );
+        IoCompleteRequest( irp, IO_NO_INCREMENT );
+    }
+    LeaveCriticalSection( &nsiproxy_cs );
+
     return 0;
 }
 

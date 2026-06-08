@@ -200,7 +200,7 @@ cd ${ROOT_DIR}/
 rm -rf ${APP_DIR}/wine_engine/src/main/resources/resfile/
 mkdir -p ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine
 mkdir -p ${APP_DIR}/wine_engine/src/main/resources/resfile/share
-cp ${INSTALL_DIR}/lib/wine/aarch64-unix/*.so ${APP_DIR}/wine_engine/libs/arm64-v8a
+cp ${INSTALL_DIR}/lib/wine/aarch64-unix/*.so* ${APP_DIR}/wine_engine/libs/arm64-v8a
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp -r ${ARM64EC_INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
     cp -r ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/

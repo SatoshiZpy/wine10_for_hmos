@@ -19,8 +19,8 @@ class ADAPTER_EXPORT_API SystemSettingsAdapter {
   SystemSettingsAdapter& operator=(const SystemSettingsAdapter&) = delete;
   ~SystemSettingsAdapter() = default;
 
-  void ShowSystemsSettings(const std::string& uri,
-                           const std::string& sub_uri = std::string{});
+  void ShowSystemSettings(const std::string& uri,
+                          const std::string& sub_uri = std::string{});
  private:
   SystemSettingsAdapter() = default;
 };

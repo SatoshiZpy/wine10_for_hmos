@@ -1015,7 +1015,7 @@ case $host_os in
   linux-ohos*)
     LIBEXT="so"
     AC_DEFINE(_GNU_SOURCE,1,[Define to 1 to enable GNU extensions on Linux])
-    AC_DEFINE(__OHOS__,1,[Define for openharmong systems])
+    AC_DEFINE(__OHOS__,1,[Define for OpenHarmony systems])
     DLLFLAGS="$DLLFLAGS -fPIC"
     LDDLLFLAGS="-fPIC"
     LDEXECFLAGS="-Wl,-pie"
@@ -1023,6 +1023,7 @@ case $host_os in
     dnl declare needed libs
     AC_SUBST(OHOS_LIBS,"-lhilog_ndk.z -lnative_window -ludmf -lpasteboard -lace_ndk.z")
     AC_SUBST(ADAPTER_LIBS,"-ladapter")
+    AC_SUBST(OHOS_NETCONN_LIBS,"-lnet_connection")
     WINE_TRY_CFLAGS([-Wl,-z,defs],[UNIXLDFLAGS="$UNIXLDFLAGS -Wl,-z,defs"])
     WINE_TRY_CFLAGS([-fPIC -Wl,--export-dynamic],[WINELOADER_LDFLAGS="-Wl,--export-dynamic"])
     WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"

@@ -3,8 +3,6 @@
 // found in the LICENSE file.
 
 import { inject, injectable } from 'inversify';
-import connection from '@ohos.net.connection';
-import { BusinessError } from '@ohos.base';
 import Want from '@ohos.app.ability.Want';
 
 import { BaseAdapter } from '../common/BaseAdapter';
@@ -12,7 +10,6 @@ import LogUtil from '../utils/LogUtil';
 import LogMethod from '../common/LogDecorator';
 import LaunchHelper from '../utils/LaunchHelper';
 import { ContextAdapter } from './ContextAdapter';
-import CommonEventManager from '@ohos.commonEventManager';
 
 const TAG: string = 'net';
 

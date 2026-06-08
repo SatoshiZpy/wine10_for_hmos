@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#ifdef HAVE_RESOLV
+#if defined(HAVE_RESOLV) && !defined(__OHOS__)
 #include <stdarg.h>
 #include <string.h>
 #include <stdio.h>
@@ -426,4 +426,4 @@ C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
 
 #endif  /* _WIN64 */
 
-#endif /* HAVE_RESOLV */
+#endif /* HAVE_RESOLV && !__OHOS__ */
