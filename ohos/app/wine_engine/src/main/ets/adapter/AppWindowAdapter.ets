@@ -105,6 +105,9 @@ export class AppWindowAdapter extends BaseAdapter {
     let visibility = this.windowStyle.hasValue(WindowState.WINDOW_VISIBLE, param.window_state_mask);
     let useDarkMode = this.windowStyle.hasValue(WindowFeatures.USE_DARK_MODE, param.window_state_mask);
     let options: StartOptions = {
+      processMode: contextConstant.ProcessMode.ATTACH_TO_STATUS_BAR_ITEM,
+      startupVisibility: visibility ? contextConstant.StartupVisibility.STARTUP_SHOW :
+        contextConstant.StartupVisibility.STARTUP_HIDE,
       windowLeft: param.bounds.left - xComBorder,
       windowTop: param.bounds.top - xComTop,
       windowWidth: param.bounds.width + xComBorder + xComBorder,

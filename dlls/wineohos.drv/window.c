@@ -1211,11 +1211,15 @@ BOOL OHOS_WindowPosChanging( HWND hwnd, UINT swp_flags, BOOL shaped, const struc
 
     if (!data && !(data = create_win_data( hwnd, rects ))) return FALSE; /* use default surface */
 
-    if (!IsRectEmpty(&rects->window) && data->lazy_created && !data->window) {
-        data->rects = *rects;
-        data->lazy_created = FALSE;
-        create_native_window( data );
-        TRACE("lazy create win %p %p window_rects %s\n", hwnd, data->window, debugstr_window_rects( &data->rects ));
+    // Defer window creation for the top-level window until needed
+    if (!data->parent)
+    {
+        if (!IsRectEmpty(&rects->window) && data->lazy_created && !data->window) {
+            data->rects = *rects;
+            data->lazy_created = FALSE;
+            create_native_window( data );
+            TRACE("lazy create win %p %p window_rects %s\n", hwnd, data->window, debugstr_window_rects( &data->rects ));
+        }
     }
 
     ret = !!data->window;
@@ -1407,6 +1411,7 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
     TRACE( "hwnd %p parent %p -> %p style %08x ex_style %08x window_rects %s\n",
         data->hwnd, old_parent, parent, style, ex_style, debugstr_window_rects(&data->rects) );
 
+    data->parent = (parent == NtUserGetDesktopWindow()) ? 0 : parent;
     if (parent != NtUserGetDesktopWindow()) /* a child window */
     {
         if (old_parent == NtUserGetDesktopWindow())
@@ -1421,7 +1426,6 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
     }
 
 done:
-    data->parent = (parent == NtUserGetDesktopWindow()) ? 0 : parent;
     release_win_data(data);
 }
 
