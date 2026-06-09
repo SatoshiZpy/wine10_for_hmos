@@ -619,6 +619,8 @@ static void update_clipboard(void)
  */
 BOOL init_ohos_pasteboard(void)
 {
+    int ret;
+
     if (OHOS_pasteboard) return TRUE;  /* already initialized */
 
     OHOS_pasteboard = OH_Pasteboard_Create();
@@ -632,13 +634,55 @@ BOOL init_ohos_pasteboard(void)
     if (!OHOS_observer)
     {
         ERR("Failed to create pasteboard observer\n");
+        OH_Pasteboard_Destroy(OHOS_pasteboard);
+        OHOS_pasteboard = NULL;
         return FALSE;
     }
 
-    OH_PasteboardObserver_SetData(OHOS_observer, (void*)OHOS_pasteboard,
-                                   PasteboardNotifyImpl, PasteboardFinalizeImpl);
+    ret = OH_PasteboardObserver_SetData(OHOS_observer, (void*)OHOS_pasteboard,
+                                        PasteboardNotifyImpl, PasteboardFinalizeImpl);
+    if (ret != 0)
+    {
+        ERR("Failed to set pasteboard observer data, ret=%d\n", ret);
+        OH_PasteboardObserver_Destroy(OHOS_observer);
+        OHOS_observer = NULL;
+        OH_Pasteboard_Destroy(OHOS_pasteboard);
+        OHOS_pasteboard = NULL;
+        return FALSE;
+    }
+
     TRACE("pasteboard and observer created\n");
     return TRUE;
+}
+
+
+/**************************************************************************
+ *              cleanup_pasteboard
+ *
+ * Unsubscribe and destroy the OHOS pasteboard and observer.
+ * Called from WM_DESTROY when the clipboard manager window is destroyed.
+ */
+static void cleanup_pasteboard(void)
+{
+    if (OHOS_pasteboard && OHOS_observer)
+    {
+        OH_Pasteboard_Unsubscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
+        TRACE("pasteboard unsubscribed\n");
+    }
+
+    if (OHOS_observer)
+    {
+        OH_PasteboardObserver_Destroy(OHOS_observer);
+        OHOS_observer = NULL;
+    }
+
+    if (OHOS_pasteboard)
+    {
+        OH_Pasteboard_Destroy(OHOS_pasteboard);
+        OHOS_pasteboard = NULL;
+    }
+
+    TRACE("pasteboard cleaned up\n");
 }
 
 
@@ -654,8 +698,7 @@ static BOOL init_clipboard(HWND hwnd)
 
     /* re-entrant guard: WM_NCCREATE may fire more than once */
     if (initialized) return TRUE;
-    initialized = TRUE;
-
+    
     if (!OHOS_pasteboard)
     {
         ERR("pasteboard not initialized -- init_ohos_pasteboard() must be called first\n");
@@ -667,7 +710,11 @@ static BOOL init_clipboard(HWND hwnd)
     NtUserAddClipboardFormatListener(clipboard_hwnd);
 
     /* subscribe to OHOS pasteboard data change notifications */
-    OH_Pasteboard_Subscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
+    {
+        int ret = OH_Pasteboard_Subscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
+        if (ret != 0)
+            WARN("Failed to subscribe to pasteboard notifications, ret=%d\n", ret);
+    }
 
     /* register builtin format mappings (CF_UNICODETEXT <-> "text/plain") */
     register_builtin_formats();
@@ -679,6 +726,7 @@ static BOOL init_clipboard(HWND hwnd)
     grab_win32_clipboard();
 
     TRACE("clipboard thread %04x running\n", clipboard_thread_id);
+    initialized = TRUE;
     return TRUE;
 }
 
@@ -715,6 +763,10 @@ LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             break;
         case WM_DESTROYCLIPBOARD:
             is_clipboard_owner = FALSE;
+            break;
+        case WM_DESTROY:
+            NtUserKillTimer(hwnd, 1);
+            cleanup_pasteboard();
             break;
         case WM_USER:
             update_clipboard();
