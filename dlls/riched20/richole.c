@@ -4201,16 +4201,172 @@ static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT
                                                LONG Flags, LONG CodePage)
 {
     struct text_services *services = impl_from_ITextDocument2Old(iface);
-    FIXME("stub %p\n", services);
-    return E_NOTIMPL;
+    ITextRange *range;
+    HANDLE file;
+    DWORD file_size, read;
+    WCHAR *filename = NULL;
+    char *buffer = NULL;
+    WCHAR *wide_buffer = NULL;
+    int wide_len;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p, %ld, %ld)\n", iface, pVar, Flags, CodePage);
+
+    if (!pVar)
+        return E_INVALIDARG;
+
+    if (V_VT(pVar) == VT_BSTR)
+        filename = V_BSTR(pVar);
+    else if (V_VT(pVar) == (VT_BSTR | VT_BYREF))
+        filename = *V_BSTRREF(pVar);
+    else
+    {
+        FIXME("unsupported variant type %d\n", V_VT(pVar));
+        return E_NOTIMPL;
+    }
+
+    if (!filename || !*filename)
+        return E_INVALIDARG;
+
+    /* Open the file for reading */
+    file = CreateFileW(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        return E_FAIL;
+
+    /* Get file size */
+    file_size = GetFileSize(file, NULL);
+    if (file_size == INVALID_FILE_SIZE || file_size == 0)
+    {
+        CloseHandle(file);
+        return file_size == 0 ? S_OK : E_FAIL;
+    }
+
+    /* Read file content */
+    buffer = HeapAlloc(GetProcessHeap(), 0, file_size);
+    if (!buffer)
+    {
+        CloseHandle(file);
+        return E_OUTOFMEMORY;
+    }
+
+    if (!ReadFile(file, buffer, file_size, &read, NULL) || read != file_size)
+    {
+        HeapFree(GetProcessHeap(), 0, buffer);
+        CloseHandle(file);
+        return E_FAIL;
+    }
+
+    CloseHandle(file);
+
+    /* Default to UTF-8 if codepage is 0 or CP_ACP */
+    if (CodePage == 0 || CodePage == CP_ACP)
+        CodePage = CP_UTF8;
+
+    /* Convert from target codepage to UTF-16 */
+    wide_len = MultiByteToWideChar(CodePage, 0, buffer, read, NULL, 0);
+    if (wide_len > 0)
+    {
+        wide_buffer = HeapAlloc(GetProcessHeap(), 0, wide_len * sizeof(WCHAR));
+        if (wide_buffer)
+        {
+            MultiByteToWideChar(CodePage, 0, buffer, read, wide_buffer, wide_len);
+
+            /* Get a range covering the entire document and set the text */
+            hr = ITextDocument2Old_Range(iface, 0, ME_GetTextLength(services->editor), &range);
+            if (SUCCEEDED(hr))
+            {
+                ITextRange_fnSetText(range, wide_buffer);
+                ITextRange_Release(range);
+            }
+            HeapFree(GetProcessHeap(), 0, wide_buffer);
+        }
+    }
+
+    HeapFree(GetProcessHeap(), 0, buffer);
+    return S_OK;
 }
 
 static HRESULT WINAPI ITextDocument2Old_fnSave(ITextDocument2Old *iface, VARIANT *pVar,
                                                LONG Flags, LONG CodePage)
 {
     struct text_services *services = impl_from_ITextDocument2Old(iface);
-    FIXME("stub %p\n", services);
-    return E_NOTIMPL;
+    ITextRange *range;
+    BSTR text = NULL;
+    HANDLE file;
+    DWORD written;
+    WCHAR *filename = NULL;
+    char *buffer;
+    int len;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p, %ld, %ld)\n", iface, pVar, Flags, CodePage);
+
+    if (!pVar)
+        return E_INVALIDARG;
+
+    if (V_VT(pVar) == VT_BSTR)
+        filename = V_BSTR(pVar);
+    else if (V_VT(pVar) == (VT_BSTR | VT_BYREF))
+        filename = *V_BSTRREF(pVar);
+    else
+    {
+        FIXME("unsupported variant type %d\n", V_VT(pVar));
+        return E_NOTIMPL;
+    }
+
+    if (!filename || !*filename)
+        return E_INVALIDARG;
+
+    /* Create a range covering the entire document */
+    hr = ITextDocument2Old_Range(iface, 0, ME_GetTextLength(services->editor), &range);
+    if (FAILED(hr))
+        return hr;
+
+    /* Get the text */
+    hr = ITextRange_fnGetText(range, &text);
+    ITextRange_Release(range);
+    if (FAILED(hr))
+        return hr;
+
+    if (!text)
+        return S_OK;  /* Empty document, save succeeds */
+
+    /* Create the file */
+    file = CreateFileW(filename, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        SysFreeString(text);
+        return E_FAIL;
+    }
+
+    /* Default to UTF-8 if codepage is 0 or CP_ACP */
+    if (CodePage == 0 || CodePage == CP_ACP)
+        CodePage = CP_UTF8;
+
+    /* Convert to target codepage */
+    len = WideCharToMultiByte(CodePage, 0, text, -1, NULL, 0, NULL, NULL);
+    if (len > 0)
+    {
+        buffer = HeapAlloc(GetProcessHeap(), 0, len);
+        if (buffer)
+        {
+            WideCharToMultiByte(CodePage, 0, text, -1, buffer, len, NULL, NULL);
+            /* -1 to exclude null terminator */
+            WriteFile(file, buffer, len - 1, &written, NULL);
+            HeapFree(GetProcessHeap(), 0, buffer);
+        }
+    }
+    else
+    {
+        /* Fallback: write UTF-16 directly */
+        WriteFile(file, text, SysStringLen(text) * sizeof(WCHAR), &written, NULL);
+    }
+
+    CloseHandle(file);
+    SysFreeString(text);
+    return S_OK;
 }
 
 static HRESULT WINAPI ITextDocument2Old_fnFreeze(ITextDocument2Old *iface, LONG *pCount)
