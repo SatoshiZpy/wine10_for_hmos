@@ -270,17 +270,32 @@ static NTSTATUS ohos_get_serverlist( void *args )
 static NTSTATUS ohos_set_serverlist( void *args )
 {
     /* NetworkKit can report DNS servers but does not expose a per-query override. */
-    return args ? DNS_ERROR_RCODE_NOT_IMPLEMENTED : ERROR_SUCCESS;
+    if (args)
+    {
+        TRACE( "setting DNS server list is not supported by OHOS NetworkKit\n" );
+        return DNS_ERROR_RCODE_NOT_IMPLEMENTED;
+    }
+    return ERROR_SUCCESS;
 }
 
 static const void *addrinfo_rdata( const struct addrinfo *ai, const struct query_type *qtype )
 {
     if (ai->ai_family != qtype->family) return NULL;
+    if (!ai->ai_addr) return NULL;
     if (qtype->type == DNS_TYPE_A && ai->ai_addrlen >= sizeof(struct sockaddr_in))
         return &((const struct sockaddr_in *)ai->ai_addr)->sin_addr;
     if (qtype->type == DNS_TYPE_AAAA && ai->ai_addrlen >= sizeof(struct sockaddr_in6))
         return &((const struct sockaddr_in6 *)ai->ai_addr)->sin6_addr;
     return NULL;
+}
+
+static BOOL invalid_addrinfo_rdata( const struct addrinfo *ai, const struct query_type *qtype )
+{
+    if (ai->ai_family != qtype->family) return FALSE;
+    if (!ai->ai_addr) return TRUE;
+    if (qtype->type == DNS_TYPE_A) return ai->ai_addrlen < sizeof(struct sockaddr_in);
+    if (qtype->type == DNS_TYPE_AAAA) return ai->ai_addrlen < sizeof(struct sockaddr_in6);
+    return TRUE;
 }
 
 static size_t wire_name_size( const char *name )
@@ -366,12 +381,22 @@ static DNS_STATUS build_response( const char *name, const struct query_type *qty
     needed = sizeof(DNS_HEADER) + qname_len + 2 * sizeof(WORD);
     for (ai = res; ai; ai = ai->ai_next)
     {
-        if (!addrinfo_rdata( ai, qtype )) continue;
+        if (!addrinfo_rdata( ai, qtype ))
+        {
+            if (invalid_addrinfo_rdata( ai, qtype ))
+                WARN( "skipping invalid DNS addrinfo for %s type %u, family %d addrlen %u\n",
+                      debugstr_a(name), qtype->type, ai->ai_family, (unsigned int)ai->ai_addrlen );
+            continue;
+        }
         needed += sizeof(compressed_name) + 2 * sizeof(WORD) + sizeof(DWORD) +
                   sizeof(WORD) + qtype->len;
         count++;
     }
-    if (!count) return DNS_ERROR_RCODE_NAME_ERROR;
+    if (!count)
+    {
+        TRACE( "no DNS answers for %s type %u\n", debugstr_a(name), qtype->type );
+        return DNS_ERROR_RCODE_NAME_ERROR;
+    }
     if (*len < needed)
     {
         *len = needed;
@@ -386,7 +411,10 @@ static DNS_STATUS build_response( const char *name, const struct query_type *qty
     buffer->MessageHead.AnswerCount = htons( count );
     if (!write_name( &pos, end, name ) || !write_word( &pos, end, qtype->type ) ||
         !write_word( &pos, end, 1 ))
+    {
+        WARN( "failed to write DNS question for %s type %u\n", debugstr_a(name), qtype->type );
         return DNS_ERROR_BAD_PACKET;
+    }
 
     for (ai = res; ai; ai = ai->ai_next)
     {
@@ -419,6 +447,8 @@ static NTSTATUS ohos_query( void *args )
     if (!qtype)
     {
         /* OHOS NetworkKit exposes addrinfo DNS only; arbitrary RR queries are unsupported. */
+        TRACE( "DNS query type %u for %s is unsupported by OHOS NetworkKit\n",
+               params->type, debugstr_a(params->name) );
         return DNS_ERROR_RCODE_NOT_IMPLEMENTED;
     }
 
@@ -433,6 +463,12 @@ static NTSTATUS ohos_query( void *args )
     }
 
     status = build_response( params->name, qtype, res, params->buf, params->len );
+    if (!status)
+        TRACE( "returning DNS response for %s type %u, len %u\n",
+               debugstr_a(params->name), params->type, *params->len );
+    else if (status != ERROR_MORE_DATA)
+        TRACE( "DNS query for %s type %u returned status %d\n",
+               debugstr_a(params->name), params->type, status );
     if (res) OH_NetConn_FreeDnsResult( res );
     return status;
 }

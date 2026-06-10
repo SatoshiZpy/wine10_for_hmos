@@ -201,11 +201,6 @@ static unsigned int ohos_netconn_change_count;
 static unsigned int ohos_netconn_callback_id;
 static BOOL ohos_netconn_registered;
 
-static BOOL ohos_netconn_error_is_transient( int error )
-{
-    return error == NETCONN_OPERATION_FAILED || error == NETCONN_INTERNAL_ERROR;
-}
-
 static NTSTATUS ohos_netconn_ntstatus( int error )
 {
     switch (error)
@@ -217,7 +212,6 @@ static NTSTATUS ohos_netconn_ntstatus( int error )
     case NETCONN_PARAMETER_ERROR:
         return STATUS_INVALID_PARAMETER;
     default:
-        WARN( "OHOS network callback registration failed, error %d.\n", error );
         return STATUS_UNSUCCESSFUL;
     }
 }
@@ -273,26 +267,18 @@ static NTSTATUS init_ohos_netconn_notifications( void )
         ohos_netconn_unavailable,
         ohos_netconn_block_status_changed,
     };
-    static int last_retry_error;
+    NTSTATUS status;
     int ret;
 
     if (ohos_netconn_registered) return STATUS_SUCCESS;
 
-    /* NetManager may not be ready when Wine starts; keep the notification
-     * thread alive for transient errors. */
-    for (;;)
+    ret = OH_NetConn_RegisterDefaultNetConnCallback( &netconn_callback,
+                                                     &ohos_netconn_callback_id );
+    if ((status = ohos_netconn_ntstatus( ret )))
     {
-        ret = OH_NetConn_RegisterDefaultNetConnCallback( &netconn_callback,
-                                                         &ohos_netconn_callback_id );
-        if (ret == NETCONN_SUCCESS) break;
-        if (!ohos_netconn_error_is_transient( ret )) return ohos_netconn_ntstatus( ret );
-
-        if (last_retry_error != ret)
-        {
-            WARN( "OHOS network callback registration failed, error %d, retrying.\n", ret );
-            last_retry_error = ret;
-        }
-        sleep( 1 );
+        WARN( "OHOS network callback registration failed, error %d, status %#x.\n",
+              ret, status );
+        return status;
     }
 
     ohos_netconn_registered = TRUE;
