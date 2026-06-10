@@ -44,10 +44,13 @@
 #include "ws2def.h"
 #include "ws2ipdef.h"
 
+#include "wine/debug.h"
 #include "wine/unixlib.h"
 #include "dnsapi.h"
 
 #include <network/netmanager/net_connection.h>
+
+WINE_DEFAULT_DEBUG_CHANNEL(dnsapi);
 
 struct query_type
 {
@@ -106,11 +109,20 @@ static DNS_STATUS get_default_properties( NetConn_ConnectionProperties *properti
     int ret;
 
     ret = OH_NetConn_GetDefaultNet( &net_handle );
-    if ((status = netconn_status( ret ))) return status;
+    if ((status = netconn_status( ret )))
+    {
+        WARN( "OH_NetConn_GetDefaultNet failed, ret %d status %d\n", ret, status );
+        return status;
+    }
 
     memset( properties, 0, sizeof(*properties) );
     ret = OH_NetConn_GetConnectionProperties( &net_handle, properties );
-    return netconn_status( ret );
+    if ((status = netconn_status( ret )))
+    {
+        WARN( "OH_NetConn_GetConnectionProperties failed, ret %d status %d\n", ret, status );
+        return status;
+    }
+    return ERROR_SUCCESS;
 }
 
 static BOOL netaddr_to_sockaddr( const NetConn_NetAddr *netaddr, struct sockaddr_storage *addr )
@@ -126,10 +138,20 @@ static BOOL netaddr_to_sockaddr( const NetConn_NetAddr *netaddr, struct sockaddr
     for (; i < sizeof(netaddr->address) && netaddr->address[i] &&
          !isspace( (unsigned char)netaddr->address[i] ) && netaddr->address[i] != '%'; i++)
     {
-        if (len == sizeof(text) - 1) return FALSE;
+        if (len == sizeof(text) - 1)
+        {
+            WARN( "DNS server address is too long: %s\n",
+                  debugstr_an(netaddr->address, sizeof(netaddr->address)) );
+            return FALSE;
+        }
         text[len++] = netaddr->address[i];
     }
-    if (!len) return FALSE;
+    if (!len)
+    {
+        WARN( "DNS server address is empty: %s\n",
+              debugstr_an(netaddr->address, sizeof(netaddr->address)) );
+        return FALSE;
+    }
     text[len] = 0;
 
     memset( addr, 0, sizeof(*addr) );
@@ -143,6 +165,7 @@ static BOOL netaddr_to_sockaddr( const NetConn_NetAddr *netaddr, struct sockaddr
         in6->sin6_family = AF_INET6;
         return TRUE;
     }
+    WARN( "DNS server address is invalid: %s\n", debugstr_a(text) );
     return FALSE;
 }
 
@@ -197,6 +220,8 @@ static NTSTATUS ohos_get_searchlist( void *args )
     ptr += ntdll_umbstowcs( properties.domain, len, ptr, end - ptr - 1 );
     *ptr++ = 0;
     *ptr = 0;
+    TRACE( "returning search list domain %s, len %u\n",
+           debugstr_an(properties.domain, len), *params->len );
     return ERROR_SUCCESS;
 }
 
@@ -220,7 +245,11 @@ static NTSTATUS ohos_get_serverlist( void *args )
         if (skip_family( addr.ss_family, params->family )) continue;
         servers[count++] = addr;
     }
-    if (!count) return DNS_ERROR_NO_DNS_SERVERS;
+    if (!count)
+    {
+        WARN( "no DNS servers found for family %u\n", params->family );
+        return DNS_ERROR_NO_DNS_SERVERS;
+    }
 
     needed = FIELD_OFFSET(DNS_ADDR_ARRAY, AddrArray[count]);
     if (!addrs || *params->len < needed)
@@ -234,6 +263,7 @@ static NTSTATUS ohos_get_serverlist( void *args )
     *params->len = needed;
     for (i = 0; i < count; i++)
         fill_dns_addr( &addrs->AddrArray[i], &servers[i] );
+    TRACE( "returning %u DNS servers, len %u\n", count, *params->len );
     return ERROR_SUCCESS;
 }
 
@@ -328,7 +358,11 @@ static DNS_STATUS build_response( const char *name, const struct query_type *qty
     unsigned int count = 0;
     size_t needed, qname_len;
 
-    if (!(qname_len = wire_name_size( name ))) return ERROR_INVALID_NAME;
+    if (!(qname_len = wire_name_size( name )))
+    {
+        WARN( "invalid DNS query name %s\n", debugstr_a(name) );
+        return ERROR_INVALID_NAME;
+    }
     needed = sizeof(DNS_HEADER) + qname_len + 2 * sizeof(WORD);
     for (ai = res; ai; ai = ai->ai_next)
     {
@@ -363,7 +397,11 @@ static DNS_STATUS build_response( const char *name, const struct query_type *qty
             !write_word( &pos, end, qtype->type ) || !write_word( &pos, end, 1 ) ||
             !write_dword( &pos, end, 1200 ) || !write_word( &pos, end, qtype->len ) ||
             !write_bytes( &pos, end, rdata, qtype->len ))
+        {
+            WARN( "failed to write DNS response for %s type %u\n",
+                  debugstr_a(name), qtype->type );
             return DNS_ERROR_BAD_PACKET;
+        }
     }
 
     *len = pos - (BYTE *)buf;
@@ -387,7 +425,12 @@ static NTSTATUS ohos_query( void *args )
     hints.ai_family = qtype->family;
     hints.ai_socktype = SOCK_STREAM;
     ret = OH_NetConn_GetAddrInfo( (char *)params->name, NULL, &hints, &res, 0 );
-    if ((status = netconn_status( ret ))) return status;
+    if ((status = netconn_status( ret )))
+    {
+        WARN( "OH_NetConn_GetAddrInfo failed for %s type %u, ret %d status %d\n",
+              debugstr_a(params->name), params->type, ret, status );
+        return status;
+    }
 
     status = build_response( params->name, qtype, res, params->buf, params->len );
     if (res) OH_NetConn_FreeDnsResult( res );
