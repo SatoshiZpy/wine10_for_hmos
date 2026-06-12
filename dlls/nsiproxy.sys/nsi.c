@@ -167,7 +167,7 @@ static NTSTATUS unix_nsi_get_parameter_ex( void *args )
     return nsi_get_parameter_ex( params );
 }
 
-#if defined(__OHOS__) || defined(HAVE_LINUX_RTNETLINK_H) || defined(__APPLE__)
+#if defined(HAVE_LINUX_RTNETLINK_H) || defined(__APPLE__) || defined(__OHOS__)
 static struct
 {
     const NPI_MODULEID *module;

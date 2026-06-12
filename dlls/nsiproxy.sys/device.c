@@ -50,9 +50,6 @@ DECLARE_CRITICAL_SECTION( nsiproxy_cs );
 #define LIST_ENTRY_INIT( list )  { .Flink = &(list), .Blink = &(list) }
 static LIST_ENTRY request_queue = LIST_ENTRY_INIT( request_queue );
 static LIST_ENTRY notification_queue = LIST_ENTRY_INIT( notification_queue );
-#ifdef __OHOS__
-static NTSTATUS notification_status;
-#endif
 
 struct notification_data
 {
@@ -301,16 +298,6 @@ static NTSTATUS nsiproxy_change_notification( IRP *irp )
     /* FIXME: validate module and table. */
 
     EnterCriticalSection( &nsiproxy_cs );
-#ifdef __OHOS__
-    if (notification_status)
-    {
-        NTSTATUS status = notification_status;
-
-        LeaveCriticalSection( &nsiproxy_cs );
-        free( data );
-        return status;
-    }
-#endif
     IoSetCancelRoutine( irp, change_notification_cancel );
     if (irp->Cancel && !IoSetCancelRoutine( irp, NULL ))
     {
@@ -520,10 +507,6 @@ static DWORD WINAPI notification_thread_proc( void *arg )
             }
             if (!NmrIsEqualNpiModuleId( &data->module, &params.module ) || data->table != params.table)
                 continue;
-#ifdef __OHOS__
-            if (!IoSetCancelRoutine( irp, NULL ))
-                continue;
-#endif
 
             irp->IoStatus.Status = 0;
             RemoveEntryList( entry );
@@ -536,33 +519,6 @@ static DWORD WINAPI notification_thread_proc( void *arg )
     }
 
     WARN( "nsi_get_notification failed, status %#lx.\n", status );
-
-#ifdef __OHOS__
-    EnterCriticalSection( &nsiproxy_cs );
-    notification_status = status;
-    for (entry = notification_queue.Flink; entry != &notification_queue; entry = next)
-    {
-        IRP *irp = CONTAINING_RECORD( entry, IRP, Tail.Overlay.ListEntry );
-        struct notification_data *data = irp->Tail.Overlay.DriverContext[0];
-
-        next = entry->Flink;
-        if (irp->Cancel)
-        {
-            TRACE( "irp %p canceled.\n", irp );
-            continue;
-        }
-        if (!IoSetCancelRoutine( irp, NULL ))
-            continue;
-
-        RemoveEntryList( entry );
-        irp->IoStatus.Status = status;
-        irp->Tail.Overlay.DriverContext[0] = NULL;
-        free( data );
-        IoCompleteRequest( irp, IO_NO_INCREMENT );
-    }
-    LeaveCriticalSection( &nsiproxy_cs );
-#endif
-
     return 0;
 }
 

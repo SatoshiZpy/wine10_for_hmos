@@ -27,7 +27,6 @@
 #ifdef __OHOS__
 
 #include <stdarg.h>
-#include <ctype.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -127,45 +126,32 @@ static DNS_STATUS get_default_properties( NetConn_ConnectionProperties *properti
 
 static BOOL netaddr_to_sockaddr( const NetConn_NetAddr *netaddr, struct sockaddr_storage *addr )
 {
-    char text[NETCONN_MAX_STR_LEN];
     struct sockaddr_in *in = (struct sockaddr_in *)addr;
     struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)addr;
-    size_t i, len = 0;
 
-    for (i = 0; i < sizeof(netaddr->address) && isspace( (unsigned char)netaddr->address[i] ); i++)
-        ;
-    /* OHOS does not expose a DNS-server interface index here, so discard IPv6 zone suffixes. */
-    for (; i < sizeof(netaddr->address) && netaddr->address[i] &&
-         !isspace( (unsigned char)netaddr->address[i] ) && netaddr->address[i] != '%'; i++)
+    if (!memchr( netaddr->address, 0, sizeof(netaddr->address) ))
     {
-        if (len == sizeof(text) - 1)
-        {
-            WARN( "DNS server address is too long: %s\n",
-                  debugstr_an(netaddr->address, sizeof(netaddr->address)) );
-            return FALSE;
-        }
-        text[len++] = netaddr->address[i];
-    }
-    if (!len)
-    {
-        WARN( "DNS server address is empty: %s\n",
+        WARN( "DNS server address is not terminated: %s\n",
               debugstr_an(netaddr->address, sizeof(netaddr->address)) );
         return FALSE;
     }
-    text[len] = 0;
 
     memset( addr, 0, sizeof(*addr) );
-    if (inet_pton( AF_INET, text, &in->sin_addr ) == 1)
+    switch (netaddr->family)
     {
+    case AF_INET:
+        if (inet_pton( AF_INET, netaddr->address, &in->sin_addr ) != 1) break;
         in->sin_family = AF_INET;
         return TRUE;
-    }
-    if (inet_pton( AF_INET6, text, &in6->sin6_addr ) == 1)
-    {
+    case AF_INET6:
+        if (inet_pton( AF_INET6, netaddr->address, &in6->sin6_addr ) != 1) break;
         in6->sin6_family = AF_INET6;
         return TRUE;
+    default:
+        break;
     }
-    WARN( "DNS server address is invalid: %s\n", debugstr_a(text) );
+    WARN( "invalid DNS server address %s family %u\n",
+          debugstr_a(netaddr->address), netaddr->family );
     return FALSE;
 }
 
@@ -247,7 +233,7 @@ static NTSTATUS ohos_get_serverlist( void *args )
     }
     if (!count)
     {
-        WARN( "no DNS servers found for family %u\n", params->family );
+        TRACE( "no DNS servers found for family %u\n", params->family );
         return DNS_ERROR_NO_DNS_SERVERS;
     }
 
@@ -287,15 +273,6 @@ static const void *addrinfo_rdata( const struct addrinfo *ai, const struct query
     if (qtype->type == DNS_TYPE_AAAA && ai->ai_addrlen >= sizeof(struct sockaddr_in6))
         return &((const struct sockaddr_in6 *)ai->ai_addr)->sin6_addr;
     return NULL;
-}
-
-static BOOL invalid_addrinfo_rdata( const struct addrinfo *ai, const struct query_type *qtype )
-{
-    if (ai->ai_family != qtype->family) return FALSE;
-    if (!ai->ai_addr) return TRUE;
-    if (qtype->type == DNS_TYPE_A) return ai->ai_addrlen < sizeof(struct sockaddr_in);
-    if (qtype->type == DNS_TYPE_AAAA) return ai->ai_addrlen < sizeof(struct sockaddr_in6);
-    return TRUE;
 }
 
 static size_t wire_name_size( const char *name )
@@ -375,19 +352,13 @@ static DNS_STATUS build_response( const char *name, const struct query_type *qty
 
     if (!(qname_len = wire_name_size( name )))
     {
-        WARN( "invalid DNS query name %s\n", debugstr_a(name) );
+        TRACE( "invalid DNS query name %s\n", debugstr_a(name) );
         return ERROR_INVALID_NAME;
     }
     needed = sizeof(DNS_HEADER) + qname_len + 2 * sizeof(WORD);
     for (ai = res; ai; ai = ai->ai_next)
     {
-        if (!addrinfo_rdata( ai, qtype ))
-        {
-            if (invalid_addrinfo_rdata( ai, qtype ))
-                WARN( "skipping invalid DNS addrinfo for %s type %u, family %d addrlen %u\n",
-                      debugstr_a(name), qtype->type, ai->ai_family, (unsigned int)ai->ai_addrlen );
-            continue;
-        }
+        if (!addrinfo_rdata( ai, qtype )) continue;
         needed += sizeof(compressed_name) + 2 * sizeof(WORD) + sizeof(DWORD) +
                   sizeof(WORD) + qtype->len;
         count++;
@@ -457,8 +428,8 @@ static NTSTATUS ohos_query( void *args )
     ret = OH_NetConn_GetAddrInfo( (char *)params->name, NULL, &hints, &res, 0 );
     if ((status = netconn_status( ret )))
     {
-        WARN( "OH_NetConn_GetAddrInfo failed for %s type %u, ret %d status %d\n",
-              debugstr_a(params->name), params->type, ret, status );
+        TRACE( "OH_NetConn_GetAddrInfo failed for %s type %u, ret %d status %d\n",
+               debugstr_a(params->name), params->type, ret, status );
         return status;
     }
 
