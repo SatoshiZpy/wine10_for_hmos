@@ -36,6 +36,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(richedit);
 
+/* Maximum file size (in bytes) that can be loaded via ITextDocument::Open.
+ * The file is read into memory, then converted to UTF-16 (up to 2x for CJK),
+ * plus the editor keeps its own copy. Set to 1 GB which peaks at ~5 GB. */
+#define RICHOLE_MAX_OPEN_FILE_SIZE (1ULL * 1024 * 1024 * 1024)
+
 /* there is no way to be consistent across different sets of headers - mingw, Wine, Win32 SDK*/
 
 #include "initguid.h"
@@ -4203,7 +4208,8 @@ static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT
     struct text_services *services = impl_from_ITextDocument2Old(iface);
     ITextRange *range;
     HANDLE file;
-    DWORD file_size, read;
+    LARGE_INTEGER file_size;
+    DWORD read;
     WCHAR *filename = NULL;
     char *buffer = NULL;
     WCHAR *wide_buffer = NULL;
@@ -4234,23 +4240,36 @@ static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT
     if (file == INVALID_HANDLE_VALUE)
         return E_FAIL;
 
-    /* Get file size */
-    file_size = GetFileSize(file, NULL);
-    if (file_size == INVALID_FILE_SIZE || file_size == 0)
+    /* Get file size using GetFileSizeEx to support files > 4GB */
+    if (!GetFileSizeEx(file, &file_size))
     {
         CloseHandle(file);
-        return file_size == 0 ? S_OK : E_FAIL;
+        return E_FAIL;
     }
 
-    /* Read file content */
-    buffer = HeapAlloc(GetProcessHeap(), 0, file_size);
+    /* Reject empty files */
+    if (file_size.QuadPart == 0)
+    {
+        CloseHandle(file);
+        return S_OK;
+    }
+
+    /* Limit maximum file size to prevent OOM. */
+    if (file_size.QuadPart > RICHOLE_MAX_OPEN_FILE_SIZE)
+    {
+        CloseHandle(file);
+        return E_OUTOFMEMORY;
+    }
+
+    /* Read file content - size fits in DWORD after limit check */
+    buffer = HeapAlloc(GetProcessHeap(), 0, (DWORD)file_size.QuadPart);
     if (!buffer)
     {
         CloseHandle(file);
         return E_OUTOFMEMORY;
     }
 
-    if (!ReadFile(file, buffer, file_size, &read, NULL) || read != file_size)
+    if (!ReadFile(file, buffer, (DWORD)file_size.QuadPart, &read, NULL) || read != (DWORD)file_size.QuadPart)
     {
         HeapFree(GetProcessHeap(), 0, buffer);
         CloseHandle(file);
@@ -4267,17 +4286,25 @@ static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT
     wide_len = MultiByteToWideChar(CodePage, 0, buffer, read, NULL, 0);
     if (wide_len > 0)
     {
-        wide_buffer = HeapAlloc(GetProcessHeap(), 0, wide_len * sizeof(WCHAR));
+        /* Check for integer overflow in allocation size */
+        if ((size_t)wide_len > SIZE_MAX / sizeof(WCHAR))
+        {
+            HeapFree(GetProcessHeap(), 0, buffer);
+            return E_OUTOFMEMORY;
+        }
+        wide_buffer = HeapAlloc(GetProcessHeap(), 0, (size_t)wide_len * sizeof(WCHAR));
         if (wide_buffer)
         {
-            MultiByteToWideChar(CodePage, 0, buffer, read, wide_buffer, wide_len);
-
-            /* Get a range covering the entire document and set the text */
-            hr = ITextDocument2Old_Range(iface, 0, ME_GetTextLength(services->editor), &range);
-            if (SUCCEEDED(hr))
+            int ret = MultiByteToWideChar(CodePage, 0, buffer, read, wide_buffer, wide_len);
+            if (ret > 0 && ret == wide_len)
             {
-                ITextRange_fnSetText(range, wide_buffer);
-                ITextRange_Release(range);
+                /* Get a range covering the entire document and set the text */
+                hr = ITextDocument2Old_Range(iface, 0, ME_GetTextLength(services->editor), &range);
+                if (SUCCEEDED(hr))
+                {
+                    ITextRange_fnSetText(range, wide_buffer);
+                    ITextRange_Release(range);
+                }
             }
             HeapFree(GetProcessHeap(), 0, wide_buffer);
         }
@@ -4354,14 +4381,26 @@ static HRESULT WINAPI ITextDocument2Old_fnSave(ITextDocument2Old *iface, VARIANT
         {
             WideCharToMultiByte(CodePage, 0, text, -1, buffer, len, NULL, NULL);
             /* -1 to exclude null terminator */
-            WriteFile(file, buffer, len - 1, &written, NULL);
+            if (!WriteFile(file, buffer, len - 1, &written, NULL) || written != len - 1)
+            {
+                HeapFree(GetProcessHeap(), 0, buffer);
+                CloseHandle(file);
+                SysFreeString(text);
+                return E_FAIL;
+            }
             HeapFree(GetProcessHeap(), 0, buffer);
         }
     }
     else
     {
         /* Fallback: write UTF-16 directly */
-        WriteFile(file, text, SysStringLen(text) * sizeof(WCHAR), &written, NULL);
+        DWORD text_size = SysStringLen(text) * sizeof(WCHAR);
+        if (!WriteFile(file, text, text_size, &written, NULL) || written != text_size)
+        {
+            CloseHandle(file);
+            SysFreeString(text);
+            return E_FAIL;
+        }
     }
 
     CloseHandle(file);
