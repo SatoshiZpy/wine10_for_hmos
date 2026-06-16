@@ -330,12 +330,15 @@ BOOL is_tooltips_hwnd(HWND hwnd)
     static const WCHAR tooltips_classnameW[] = {
         't','o','o','l','t','i','p','s','_',
         'c','l','a','s','s','3','2',0 };
+    static const WCHAR sap_tooltips_classnameW[] = {
+        'S','A','P',' ','G','U','I',' ',
+        'T','o','o','l','t','i','p',0 };
     WCHAR buffer[64];
     UNICODE_STRING name = {.Buffer = buffer, .MaximumLength = sizeof(buffer)};
 
     if (!NtUserGetClassName(hwnd, FALSE, &name)) return FALSE;
     TRACE("hwnd: %p, class name: %s\n", hwnd, debugstr_w(buffer));
-    return !wcscmp(buffer, tooltips_classnameW);
+    return !wcscmp(buffer, tooltips_classnameW) || !wcscmp(buffer, sap_tooltips_classnameW);
 }
 
 int perform( HWND hwnd, int operation, ... )

@@ -1284,7 +1284,7 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
 
     if (is_tooltips_hwnd(hwnd) && !EqualRect(&old_rects.window, &new_rects->window))
     {
-        WARN("win %p new_rects %s --> new_rects %s\n", hwnd,
+        WARN("win %p old_rects %s --> new_rects %s\n", hwnd,
             debugstr_window_rects(&old_rects), debugstr_window_rects(new_rects));
         /* destroy the old ohos window */
         destroy_native_window(hwnd);
