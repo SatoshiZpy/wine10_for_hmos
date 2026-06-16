@@ -61,6 +61,7 @@ extern int set_window_features( HWND hwnd, const struct window_features* wf);
 extern int set_window_state( HWND hwnd, const struct window_state* state);
 extern int set_window_visible( HWND hwnd, int visible);
 extern void set_window_title( HWND hwnd, const WCHAR *text);
+extern BOOL is_tooltips_hwnd(HWND hwnd);
 extern int perform( HWND hwnd, int operation, ... );
 
 extern pthread_mutex_t win_data_mutex;

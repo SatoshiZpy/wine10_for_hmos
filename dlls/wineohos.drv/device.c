@@ -325,6 +325,19 @@ static int queueBuffer( HWND hwnd, struct native_buffer *locked_buffer )
     return STATUS_SUCCESS;
 }
 
+BOOL is_tooltips_hwnd(HWND hwnd)
+{
+    static const WCHAR tooltips_classnameW[] = {
+        't','o','o','l','t','i','p','s','_',
+        'c','l','a','s','s','3','2',0 };
+    WCHAR buffer[64];
+    UNICODE_STRING name = {.Buffer = buffer, .MaximumLength = sizeof(buffer)};
+
+    if (!NtUserGetClassName(hwnd, FALSE, &name)) return FALSE;
+    TRACE("hwnd: %p, class name: %s\n", hwnd, debugstr_w(buffer));
+    return !wcscmp(buffer, tooltips_classnameW);
+}
+
 int perform( HWND hwnd, int operation, ... )
 {
     static const char * const names[] =
@@ -637,7 +650,7 @@ static ohos_window create_window( HWND hwnd, int window_type, const struct windo
     param.pid = getpid();
     param.bounds = *bounds;
 
-    param.parent_id = (window_type == POPUP_WINDOW) ?
+    param.parent_id = (window_type != MAIN_WINDOW) ?
         get_owner_window_id(hwnd) : 0;
 
     param.features = get_window_features(hwnd);
@@ -726,6 +739,9 @@ void create_native_window( struct ohos_win_data *data )
         window_type = MAIN_WINDOW;
     else
         WARN("The popup window style is used by default.\n");
+
+    if (is_tooltips_hwnd(data->hwnd))
+        window_type = TOOLTIP;
 
     TRACE( "hwnd %p style %08x ex_style %08x\n", data->hwnd, style, ex_style );
 
