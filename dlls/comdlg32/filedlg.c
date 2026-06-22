@@ -2702,7 +2702,52 @@ BOOL FILEDLG95_OnOpen(HWND hwnd)
 
         /* Attach the file extension with file name*/
         ext = PathFindExtensionW(lpstrPathAndFile);
-        if (! *ext && fodInfos->defext)
+        if (fodInfos->DlgInfos.dwDlgProp & FODPROP_SAVEDLG)
+        {
+            /* For save dialogs, replace existing extension with filter extension */
+            WCHAR *filterExt = NULL;
+            LPWSTR lpstrFilter = NULL;
+
+            lpstrFilter = (LPWSTR) CBGetItemDataPtr(fodInfos->DlgInfos.hwndFileTypeCB,
+                                             fodInfos->ofnInfos->nFilterIndex-1);
+
+            if (lpstrFilter != (LPWSTR)CB_ERR)
+            {
+                WCHAR* filterSearchIndex;
+                filterExt = heap_alloc((lstrlenW(lpstrFilter) + 1) * sizeof(WCHAR));
+                lstrcpyW(filterExt, lpstrFilter);
+
+                filterSearchIndex = wcschr(filterExt, ';');
+                if (filterSearchIndex)
+                    filterSearchIndex[0] = '\0';
+
+                filterSearchIndex = wcschr(filterExt, '.');
+                if (filterSearchIndex++ && !wcschr(filterSearchIndex, '*') && !wcschr(filterSearchIndex, '?'))
+                    lstrcpyW(filterExt, filterSearchIndex);
+                else
+                {
+                    heap_free(filterExt);
+                    filterExt = NULL;
+                }
+            }
+
+            if (!filterExt && fodInfos->defext)
+            {
+                filterExt = heap_alloc((lstrlenW(fodInfos->defext) + 1) * sizeof(WCHAR));
+                lstrcpyW(filterExt, fodInfos->defext);
+            }
+
+            if (filterExt && *filterExt)
+            {
+                if (*ext)
+                    PathRemoveExtensionW(lpstrPathAndFile);
+                lstrcatW(lpstrPathAndFile, L".");
+                lstrcatW(lpstrPathAndFile, filterExt);
+            }
+
+            heap_free(filterExt);
+        }
+        else if (! *ext && fodInfos->defext)
         {
             /* if no extension is specified with file name, then */
             /* attach the extension from file filter or default one */
@@ -3204,6 +3249,34 @@ static BOOL FILEDLG95_FILETYPE_OnCommand(HWND hwnd, WORD wNotifyCode)
       /* Refresh the actual view to display the included items*/
       if (fodInfos->Shell.FOIShellView)
         IShellView_Refresh(fodInfos->Shell.FOIShellView);
+
+      /* Update the filename extension when file type changes */
+      if ((fodInfos->DlgInfos.dwDlgProp & FODPROP_SAVEDLG) && lpstrFilter != (LPWSTR)CB_ERR)
+      {
+        WCHAR filename[MAX_PATH];
+        LPWSTR old_ext, ext;
+        int len;
+        HWND hwnd_edit = fodInfos->DlgInfos.hwndFileName;
+
+        if (hwnd_edit)
+        {
+          len = SendMessageW(hwnd_edit, WM_GETTEXTLENGTH, 0, 0);
+          if (len > 0 && len < MAX_PATH)
+          {
+            SendMessageW(hwnd_edit, WM_GETTEXT, MAX_PATH, (LPARAM)filename);
+            old_ext = PathFindExtensionW(filename);
+
+            ext = PathFindExtensionW(lpstrFilter);
+            if (ext && *ext && !StrChrW(ext, '*') && !StrChrW(ext, '?'))
+            {
+              if (*old_ext)
+                PathRemoveExtensionW(filename);
+              lstrcatW(filename, ext);
+              SendMessageW(hwnd_edit, WM_SETTEXT, 0, (LPARAM)filename);
+            }
+          }
+        }
+      }
     }
   }
   return FALSE;
