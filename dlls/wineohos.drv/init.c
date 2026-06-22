@@ -331,6 +331,8 @@ static HRESULT ohos_init( void *arg )
     pthread_mutex_init( &ime_mutex, &attr );
     pthread_mutexattr_destroy( &attr );
 
+    init_ohos_pasteboard();
+
     init_alpha_blend_lut();
 
     if (IsMainProcess())  /* running under arkui */
