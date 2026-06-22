@@ -2869,7 +2869,22 @@ static void add_child_font( struct gdi_font *font, const WCHAR *family_name )
     child->matrix = font->matrix;
     child->can_use_bitmap = font->can_use_bitmap;
     child->scale_y = font->scale_y;
+#ifdef __OHOS__
+     /* OHOS: fix CJK glyphs being horizontally squashed.
+     * The parent Latin font (e.g. Tahoma) has a narrow aveWidth. When
+     * inherited by the CJK child font, freetype computes width_ratio =
+     * aveWidth / tmAveCharWidth, which ends up far below 1 because CJK
+     * fonts have a much larger tmAveCharWidth. This squashes CJK glyphs
+     * into thin vertical lines.
+     * Zeroing child->aveWidth makes freetype skip the ratio-based scaling.
+     * Uniform scaling (X/Y ~0.85) is then applied by
+     * get_transform_matrices() in freetype.c instead.
+     * Only affects OHOS; other platforms keep the upstream behavior.
+     */
+    child->aveWidth = 0;
+#else
     child->aveWidth = font->aveWidth;
+#endif
     child->charset = font->charset;
     child->codepage = font->codepage;
     child->base_font = font;

@@ -2595,7 +2595,21 @@ static FT_Matrix *get_transform_matrices( struct gdi_font *font, BOOL vertical, 
         width_ratio /= (double)font->otm.otmTextMetrics.tmAveCharWidth;
     }
     else
+#ifdef __OHOS__
+        /* OHOS: shrink CJK child glyphs to match parent font size.
+         * add_child_font() in font.c zeroes child->aveWidth on OHOS, so child
+         * (CJK fallback) fonts land here. Upstream defaults width_ratio to
+         * scale_y (1.0), but CJK fonts are naturally 1.5-2x larger than the
+         * parent Latin font (e.g. Tahoma), causing oversized glyphs in SAP GUI
+         * tables that overflow columns and rows.
+         * Fix: use 0.85 for child fonts (base_font != NULL) so CJK glyphs
+         * shrink ~15%, roughly matching the parent. Non-child fonts keep the
+         * upstream scale_y path. 0.85 is empirical; tweak here if needed.
+         */
+        width_ratio = font->base_font ? 0.85 : font->scale_y;
+#else
         width_ratio = font->scale_y;
+#endif
 
     /* Scaling transform */
     if (width_ratio != 1.0 || font->scale_y != 1)
@@ -2604,7 +2618,22 @@ static FT_Matrix *get_transform_matrices( struct gdi_font *font, BOOL vertical, 
         scale_mat.xx = FT_FixedFromFloat( width_ratio );
         scale_mat.xy = 0;
         scale_mat.yx = 0;
+#ifdef __OHOS__
+        /* OHOS: keep aspect ratio when shrinking CJK glyphs.
+         * Upstream sets scale_mat.yy = scale_y << 16 (no Y scaling). With the
+         * X-only 0.85 ratio above, CJK glyphs become "narrow and tall" and
+         * overflow SAP table rows vertically.
+         * Fix: for child fonts (base_font != NULL) that are actually shrunk
+         * (width_ratio < 1.0), apply the same ratio to Y so the glyph scales
+         * uniformly. Other cases keep the upstream behavior.
+         */
+        if (font->base_font && width_ratio < 1.0)
+            scale_mat.yy = FT_FixedFromFloat( width_ratio );
+        else
+            scale_mat.yy = font->scale_y << 16;
+#else
         scale_mat.yy = font->scale_y << 16;
+#endif
 
         pFT_Matrix_Multiply( &scale_mat, &matrices[matrix_unrotated] );
         needs_transform = TRUE;
@@ -2725,7 +2754,22 @@ static FT_Vector get_advance_metric( struct gdi_font *font, FT_Pos base_advance,
     FT_Vector adv;
     FT_Fixed em_scale = 0;
     BOOL fixed_pitch_full = FALSE;
+#ifdef __OHOS__
+    /* OHOS: use the child font's own advance width for CJK fallback.
+     * Advance is computed independently of width_ratio - it comes from
+     * incoming_font->ntmAvgWidth. Upstream sets incoming_font = base_font
+     * (the parent), whose ntmAvgWidth is designed for narrow Latin chars.
+     * When SAP calls GetTextExtentExPoint to size columns, the narrow parent
+     * advance underestimates the actual CJK glyph width (even at 0.85 ratio),
+     * so columns are too narrow and CJK chars overlap.
+     * Fix: use the child font itself so its own ntmAvgWidth drives the
+     * advance and column width matches the rendered width. width_ratio only
+     * affects glyph bbox, not advance (layout width).
+     */
+    struct gdi_font *incoming_font = font;
+#else
     struct gdi_font *incoming_font = font->base_font ? font->base_font : font;
+#endif
 
     adv.x = base_advance;
     adv.y = 0;
@@ -3476,9 +3520,25 @@ static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT 
     /* Some poorly-created fonts contain glyphs that exceed the boundaries set
      * by the text metrics. The proper behavior is to clip the glyph metrics to
      * fit within the maximums specified in the text metrics. */
+#ifdef __OHOS__
+    /* OHOS: clip CJK glyphs against their own metrics instead of the parent's.
+     * Upstream clips glyph metrics to base_font's tmAscent/tmDescent, which
+     * is fine for Latin chars but too small for CJK — even after the 0.85
+     * uniform scaling, CJK horiBearingY can still exceed the parent's
+     * tmAscent, so the top gets clipped off.
+     * Fix: on OHOS, child fonts use their own tmAscent/tmDescent for
+     * clipping, preserving the full glyph height. Non-child fonts keep
+     * using base_font as upstream does.
+     */
+    struct gdi_font *clip_font = font->base_font ? font : base_font;
+    if (freetype_set_outline_text_metrics(clip_font) ||
+        freetype_set_bitmap_text_metrics(clip_font)) {
+        TEXTMETRICW *ptm = &clip_font->otm.otmTextMetrics;
+#else
     if (freetype_set_outline_text_metrics(base_font) ||
         freetype_set_bitmap_text_metrics(base_font)) {
         TEXTMETRICW *ptm = &base_font->otm.otmTextMetrics;
+#endif
         INT top = min( metrics.horiBearingY, ptm->tmAscent << 6 );
         INT bottom = max( metrics.horiBearingY - metrics.height, -(ptm->tmDescent << 6) );
         metrics.horiBearingY = top;
