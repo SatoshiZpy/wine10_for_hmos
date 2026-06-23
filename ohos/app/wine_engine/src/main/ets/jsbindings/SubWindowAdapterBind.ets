@@ -27,6 +27,10 @@ function closeWindow(id: number) {
   implSubWindowAdapter().closeWindow(id);
 }
 
+function destroyWindow(id: number) {
+  implSubWindowAdapter().destroyWindow(id);
+}
+
 function setBounds(id: number, bounds: WindowBound) {
   implSubWindowAdapter().setBounds(id, bounds);
 }
@@ -37,6 +41,7 @@ export class SubWindowAdapterBind {
     JsBindingUtils.bindFunction("SubWindow.ShowWindow", showWindow);
     JsBindingUtils.bindFunction("SubWindow.HideWindow", hideWindow);
     JsBindingUtils.bindFunction("SubWindow.CloseWindow", closeWindow);
+    JsBindingUtils.bindFunction("SubWindow.DestroyWindow", destroyWindow);
     JsBindingUtils.bindFunction("SubWindow.SetBounds", setBounds);
   }
 }

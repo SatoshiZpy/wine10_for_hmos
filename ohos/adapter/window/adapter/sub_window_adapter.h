@@ -20,7 +20,7 @@ class ADAPTER_EXPORT_API SubWindowAdapter {
 
   int32_t Create(const NewWindowParam& param);
   void Close(int32_t id);
-
+  void Destroy(int32_t id);
   void Show(int32_t id);
   void Hide(int32_t id);
 

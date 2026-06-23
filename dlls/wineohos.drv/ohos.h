@@ -61,6 +61,7 @@ extern int set_window_features( HWND hwnd, const struct window_features* wf);
 extern int set_window_state( HWND hwnd, const struct window_state* state);
 extern int set_window_visible( HWND hwnd, int visible);
 extern void set_window_title( HWND hwnd, const WCHAR *text);
+extern BOOL is_tooltips_hwnd(HWND hwnd);
 extern int perform( HWND hwnd, int operation, ... );
 
 extern pthread_mutex_t win_data_mutex;
@@ -75,6 +76,7 @@ extern void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent );
 extern void OHOS_SetCapture( HWND hwnd, UINT flags );
 extern UINT OHOS_ShowWindow( HWND hwnd, INT cmd, RECT *rect, UINT swp );
 extern LRESULT OHOS_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp );
+extern BOOL init_ohos_pasteboard(void);
 extern void OHOS_UpdateClipboard(void);
 extern LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 extern BOOL OHOS_WindowPosChanging( HWND hwnd, UINT swp_flags, BOOL shaped, const struct window_rects *rects );

@@ -346,8 +346,25 @@ export class SubWindowAdapter extends BaseAdapter {
     for (let i = 0; i < this.subWindowList.length; i++) {
       const item = this.subWindowList[i];
       if (item && item.id === id) {
-        item.subWindow.minimize();
+        item.subWindow.minimize().catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to close the subWindow. Cause:' + JSON.stringify(err));
+        });
         this.addReuseWindow(item);
+        this.subWindowList.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  @LogMethod
+  destroyWindow(id: number) {
+    for (let i = 0; i < this.subWindowList.length; i++) {
+      const item = this.subWindowList[i];
+      if (item && item.id === id) {
+        item.subWindow.destroyWindow()
+          .catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to destroy the subWindow. Cause:' + JSON.stringify(err));
+          });
         this.subWindowList.splice(i, 1);
         break;
       }

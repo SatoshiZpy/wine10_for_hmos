@@ -38,7 +38,11 @@ void WinePopupWindow::Hide()
 
 void WinePopupWindow::Close()
 {
-  SubWindowAdapter::GetInstance().Close(GetWidget());
+  if (type() == WindowInitType::kTooltip) {
+    SubWindowAdapter::GetInstance().Destroy(GetWidget());
+  } else {
+    SubWindowAdapter::GetInstance().Close(GetWidget());
+  }
 }
 
 void WinePopupWindow::SetBounds(const WindowRect& rect)

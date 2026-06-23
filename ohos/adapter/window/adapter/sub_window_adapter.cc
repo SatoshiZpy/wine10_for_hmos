@@ -41,6 +41,12 @@ int32_t SubWindowAdapter::Create(const NewWindowParam& param) {
   return -1;
 }
 
+void SubWindowAdapter::Destroy(int32_t id) {
+  if (auto func = ohos::adapter::GetJSFunction("SubWindow.DestroyWindow")) {
+    func->Invoke<void>(id);
+  }
+}
+
 void SubWindowAdapter::Close(int32_t id) {
   if (auto func = ohos::adapter::GetJSFunction("SubWindow.CloseWindow")) {
     func->Invoke<void>(id);

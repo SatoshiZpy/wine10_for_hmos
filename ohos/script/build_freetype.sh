@@ -3,13 +3,17 @@
 set -ex
 
 FREETYPE_DIR="${ROOT_DIR}/third_party/freetype"
+FREETYPE_PREFIX="${FREETYPE_DIR}/build"
 
-if [ ! -d "${FREETYPE_DIR}/build" ]; then
-    mkdir -p ${FREETYPE_DIR}/build
+if [ ! -d "${FREETYPE_PREFIX}" ]; then
+    mkdir -p ${FREETYPE_PREFIX}
 fi
 
+cd ${FREETYPE_DIR}
+mkdir -p freetype
+
 # Build freetype
-cd ${FREETYPE_DIR}/build
+cd ${FREETYPE_DIR}/freetype
 ${CMAKE_PATH} \
     -DOHOS_SDK_NATIVE=${OHOS_SDK}/native \
     -DCMAKE_BUILD_TYPE=Release \
@@ -26,6 +30,8 @@ ${CMAKE_PATH} \
     -DCMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE \
     -DCMAKE_DISABLE_FIND_PACKAGE_HarfBuzz=TRUE \
     -DCMAKE_DISABLE_FIND_PACKAGE_BrotliDec=TRUE \
+    -DCMAKE_INSTALL_PREFIX=${FREETYPE_PREFIX} \
     ../
  
 make -j$(nproc)
+make install

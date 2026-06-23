@@ -96,7 +96,7 @@ rm -rf ${INSTALL_DIR}
 rm -rf ${ARM64EC_INSTALL_DIR}
 
 # Build adapter
-if [${DEBUG_MODE} -eq 1]; then
+if [ "${DEBUG_MODE}" -eq 1 ]; then
     export ADAPTER_BUILD_TYPE=Debug
 else
     export ADAPTER_BUILD_TYPE=Release
@@ -160,7 +160,7 @@ else
     export CXXFLAGS="-fPIC -D__MUSL__=1"
 fi
 export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include ${KRB5_CFLAGS}"
-export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build ${GSTREAMER_LIBS} ${KRB5_LIBS}"
+export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build/lib ${GSTREAMER_LIBS} ${KRB5_LIBS}"
 export PATH=${OHOS_SDK}/native/llvm/bin:$PATH
 
 time_start_for_build=$(date +%s)
@@ -190,8 +190,6 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp ${FEX_DIR}/libarm64ecfex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
     cp ${FEX_DIR}/libwow64fex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
 fi
-cp ${FREETYPE_DIR}/build/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so
-cp ${FREETYPE_DIR}/build/libfreetype.so.6.20.6 ${INSTALL_DIR}/lib/wine/aarch64-unix/libfreetype.so.6
 cp ${ADAPTER_DIR}/lib/libadapter.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 
@@ -200,7 +198,10 @@ cd ${ROOT_DIR}/
 rm -rf ${APP_DIR}/wine_engine/src/main/resources/resfile/
 mkdir -p ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine
 mkdir -p ${APP_DIR}/wine_engine/src/main/resources/resfile/share
-cp ${INSTALL_DIR}/lib/wine/aarch64-unix/*.so* ${APP_DIR}/wine_engine/libs/arm64-v8a
+cp ${INSTALL_DIR}/lib/wine/aarch64-unix/*.so ${APP_DIR}/wine_engine/libs/arm64-v8a
+cp -d ${FREETYPE_DIR}/build/lib/libfreetype.so ${APP_DIR}/wine_engine/libs/arm64-v8a
+cp -d ${FREETYPE_DIR}/build/lib/libfreetype.so.6 ${APP_DIR}/wine_engine/libs/arm64-v8a
+cp ${FREETYPE_DIR}/build/lib/libfreetype.so.6.20.6 ${APP_DIR}/wine_engine/libs/arm64-v8a
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp -r ${ARM64EC_INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
     cp -r ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/

@@ -1276,10 +1276,26 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
     if (data->on_screen)
     {
         if ((swp_flags & SWP_HIDEWINDOW) && !(new_style & WS_VISIBLE))
+        {
             hide_window(data);
+            goto done;
+        }
     }
 
-    window_pos_changed( hwnd, new_rects, &old_rects, new_style, swp_flags );
+    if (is_tooltips_hwnd(hwnd) && !EqualRect(&old_rects.window, &new_rects->window))
+    {
+        WARN("win %p old_rects %s --> new_rects %s\n", hwnd,
+            debugstr_window_rects(&old_rects), debugstr_window_rects(new_rects));
+        /* destroy the old ohos window */
+        destroy_native_window(hwnd);
+
+        /* new tool tips window */
+        create_native_window(data);
+    }
+    else
+    {
+        window_pos_changed( hwnd, new_rects, &old_rects, new_style, swp_flags );
+    }
 
     if (new_style & WS_VISIBLE)
     {
