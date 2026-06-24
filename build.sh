@@ -8,7 +8,7 @@ BUILD_DIR=${ROOT_DIR}/build
 INSTALL_DIR=${ROOT_DIR}/out
 ADAPTER_DIR=${ROOT_DIR}/ohos/adapter
 APP_DIR=${ROOT_DIR}/ohos/app
-FEX_DIR=${ROOT_DIR}/ohos/fex
+UBT_DIR=${ROOT_DIR}/ohos/ubt
 LLVM_DIR=${ROOT_DIR}/third_party/llvm
 ARM64EC_BUILD_DIR=${ROOT_DIR}/arm64ecbuild
 ARM64EC_INSTALL_DIR=${ROOT_DIR}/out-arm64ec
@@ -187,8 +187,8 @@ make install-lib
 
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp ${INSTALL_DIR}/lib/wine/aarch64-windows/wineboot.exe ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
-    cp ${FEX_DIR}/libarm64ecfex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
-    cp ${FEX_DIR}/libwow64fex.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
+    cp ${UBT_DIR}/ubt_x64a64_win.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
+    cp ${UBT_DIR}/ubt_x32a64_win.dll ${ARM64EC_INSTALL_DIR}/lib/wine/aarch64-windows/
 fi
 cp ${ADAPTER_DIR}/lib/libadapter.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
