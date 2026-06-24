@@ -234,11 +234,12 @@ class WindowNodeController extends NodeController {
       { rawDir: 'preset/sap', destAbsDir: sapDir },
       { rawDir: 'preset/add', destAbsDir: system32Dir },
       { rawDir: 'preset/modify', destAbsDir: system32Dir },
+      { rawDir: 'preset/system32', destAbsDir: system32Dir },
       { rawDir: 'preset/root', destAbsDir: userDir }
     ];
 
     try {
-      await this.presetDeployer.deployIfNeeded(prefixDir, '.preset_sap_deployed_v1', mappings);
+      await this.presetDeployer.deployIfNeeded(prefixDir, '.preset_sap_deployed_v2_gecko', mappings);
     } catch (err) {
       LogUtil.error(TAG, `deploySapPreset failed: ${JSON.stringify(err)}`);
     }
