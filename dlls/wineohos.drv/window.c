@@ -1432,8 +1432,8 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
     {
         if (old_parent == NtUserGetDesktopWindow())
         {
-            /* destroy the old ohos window */
-            destroy_native_window(old_parent);
+            /* destroy the current window's old OHOS peer */
+            destroy_native_window(data->hwnd);
         }
     }
     else  /* new top level window */
