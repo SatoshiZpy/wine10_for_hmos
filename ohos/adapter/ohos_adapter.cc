@@ -252,6 +252,25 @@ void SetCustomCursor(int widget_id, int width, int height, int hotspot_x, int ho
     SetCustomCursor(cursor_info);
 }
 
+void SetCursorStyle(int widget_id, int cursor_type)
+{
+    if (!IsMainProcess()) {
+        // todo: Implement function in a child process
+        LOGW("performed in a child process is not supported");
+        return;
+    }
+
+    // cursor_type < 0 means "fall back to the default arrow"; the JS side
+    // treats this the same as kDefault. Clamp to the enum range so the
+    // arkts side never sees an out-of-range value.
+    OhosCursorType type = OhosCursorType::kDefault;
+    if (cursor_type >= static_cast<int>(OhosCursorType::kMinValue) &&
+        cursor_type <= static_cast<int>(OhosCursorType::kMaxValue)) {
+        type = static_cast<OhosCursorType>(cursor_type);
+    }
+    ohos::adapter::SetCursor(widget_id, type);
+}
+
 void SetWindowBounds(int widget_id, const struct window_bounds* bounds)
 {
     MutexLock lock_protect(mutex);

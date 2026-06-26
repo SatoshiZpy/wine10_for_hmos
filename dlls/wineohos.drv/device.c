@@ -828,14 +828,32 @@ int set_cursor( HWND hwnd, int id, int width, int height,
     struct native_win_data *data = get_native_win_data( hwnd );
     if (!data) return STATUS_INVALID_HANDLE;
 
-    if (!bits)
-        return STATUS_INVALID_PARAMETER;
+    /*
+     * Three cases:
+     *   1) id > 0 && bits == NULL  -> SAP/Wine requested a Windows system
+     *      cursor that get_cursor_system_id() mapped to a HarmonyOS
+     *      built-in pointer style. The wineohos.drv enum is 1-based so 0
+     *      can stay the "not a system cursor" sentinel; subtract 1 here
+     *      before forwarding to SetCursorStyle (which expects raw
+     *      OhosCursorType values where kDefault = 0).
+     *   2) id == 0 && bits == NULL -> the application called
+     *      NtUserSetCursor(NULL). Reset to the default arrow instead of
+     *      letting the previously applied custom pixmap stay on screen.
+     *   3) id == 0 && bits != NULL -> custom ARGB cursor, keep existing
+     *      SetCustomCursor path.
+     */
+    if (id > 0 || !bits)
+    {
+        TRACE( "hwnd %08x system id %d (bits=%p)\n", HandleToLong(hwnd), id, bits );
+        SetCursorStyle(data->widget_id, id > 0 ? id - 1 : 0);
+        return STATUS_SUCCESS;
+    }
 
     if (width < 0 || height < 0 || width > 256 || height > 256)
         return STATUS_INVALID_PARAMETER;
 
     TRACE( "hwnd %08x id %d\n", HandleToLong(hwnd), id );
-    
+
     SetCustomCursor(data->widget_id, width, height, hotspotx, hotspoty, bits);
     return STATUS_SUCCESS;
 }

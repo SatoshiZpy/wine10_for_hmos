@@ -68,6 +68,21 @@ ADAPTER_API void SetCustomCursor(int widget_id,
                                  int hotspot_x,
                                  int hotspot_y,
                                  const unsigned int *bits);
+/*
+ * Apply a HarmonyOS built-in pointer style on a given widget.
+ * cursor_type values map to ohos::adapter::OhosCursorType
+ * (kDefault = 0, kHandPointing, kTextCursor, ...). We pass int here so
+ * the C-only wineohos.drv side does not pull in the C++ enum class.
+ * Pass cursor_type < 0 to mean "default arrow" (used when the app
+ * issues SetCursor(NULL) and we still need to clear a previously
+ * applied custom cursor).
+ *
+ * NB: do NOT rename this to SetSystemCursor -- that symbol is taken by
+ * the Win32 USER API declared in winuser.h, which several TUs that
+ * also #include "ohos_adapter.h" (win32u/font.c, sysparams.c,
+ * window.c) end up pulling in.
+ */
+ADAPTER_API void SetCursorStyle(int widget_id, int cursor_type);
 
 /* ipc */
 ADAPTER_API int GetGlobalDescriptor(int key);
