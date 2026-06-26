@@ -1098,6 +1098,7 @@ static struct ohos_win_data *create_win_data( HWND hwnd, const struct window_rec
                hwnd, parent, wine_dbgstr_rect(&data->rects.window),
                wine_dbgstr_rect(&data->rects.visible), wine_dbgstr_rect(&data->rects.client));
     }
+
     return data;
 }
 
@@ -1434,6 +1435,14 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
         {
             /* destroy the current window's old OHOS peer */
             destroy_native_window(data->hwnd);
+            /* Paired cleanup: destroy_native_window() only closes the native
+             * widget and frees native_win_data; it does not touch ohos_win_data.
+             * Leaving data->window set leaves a dangling handle, so any later
+             * show_window() call uses a dead handle in set_window_visible()
+             * (no-op) and the window never appears after a top-to-child
+             * reparent. Mirror free_win_data() and reset both fields here. */
+            data->window = NULL;
+            data->on_screen = FALSE;
         }
     }
     else  /* new top level window */
