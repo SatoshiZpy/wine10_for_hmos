@@ -9,10 +9,21 @@ import { BaseAdapter } from '../common/BaseAdapter';
 import LogMethod from '../common/LogDecorator';
 import LogUtil from '../utils/LogUtil';
 import lazy { ContextAdapter } from './ContextAdapter';
+import StringUtil from '../utils/StringUtil';
 
 const TAG: string = 'PresetDeployerAdapter';
 
 interface PresetMapping {
+  rawDir: string;
+  destAbsDir: string;
+}
+
+interface PresetConfig {
+  version: string;
+  mappings: PresetMapping[];
+}
+
+interface ResolvedMapping {
   rawDir: string;
   destAbsDir: string;
 }
@@ -26,8 +37,7 @@ export class PresetDeployerAdapter extends BaseAdapter {
     this.ctxAdapter = ctxAdapter;
   }
 
-  @LogMethod
-  hasSapPreset(): boolean {
+  private hasPreset(): boolean {
     try {
       const context = this.ctxAdapter.getContext();
       return (context.resourceManager.getRawFileListSync('preset') ?? []).length > 0;
@@ -36,72 +46,74 @@ export class PresetDeployerAdapter extends BaseAdapter {
     }
   }
 
-  @LogMethod
-  async deployIfNeeded(
-    prefixDir: string,
-    markerName: string,
-    mappings: PresetMapping[]
-  ): Promise<void> {
-    const markerPath = `${prefixDir}/${markerName}`;
+  private checkMarkerExists(markerPath: string): boolean {
     try {
       if (fs.accessSync(markerPath)) {
-        return;
+        return true;
       }
+      return false;
     } catch (err) {
-      LogUtil.info(TAG, `file access failed: ${JSON.stringify(err)}`);
-      return;
-    }
-
-    LogUtil.info(TAG, `start preset deploy, prefix=${prefixDir}`);
-    this.ensureDir(prefixDir);
-
-    const lockDir = `${prefixDir}/.deploy.lock`;
-    this.reclaimStaleLock(lockDir);
-
-    try {
-      fs.mkdirSync(lockDir, false);
-    } catch (err) {
-      LogUtil.info(TAG, `deploy lock busy, skip: ${JSON.stringify(err)}`);
-      return;
-    }
-
-    try {
-      if (fs.accessSync(markerPath)) {
-        return;
-      }
-
-      for (let i = 0; i < mappings.length; i++) {
-        const m = mappings[i];
-        LogUtil.info(TAG, `deploy ${m.rawDir} -> ${m.destAbsDir}`);
-        this.ensureDir(m.destAbsDir);
-        await this.copyChildrenToDir(m.rawDir, m.destAbsDir);
-      }
-
-      this.touchMarker(markerPath);
-      LogUtil.info(TAG, `preset deploy done, marker=${markerPath}`);
-    } catch (err) {
-      LogUtil.info(TAG, `preset deploy failed: ${JSON.stringify(err)}`);
-      return;
-    } finally {
-      try {
-        fs.rmdirSync(lockDir);
-      } catch (err) {
-        LogUtil.error(TAG, `rmdir lock failed: ${lockDir}, err=${JSON.stringify(err)}`);
-      }
+      LogUtil.error(TAG, `file access failed: ${JSON.stringify(err)}`);
+      return false;
     }
   }
 
-  private async copyChildrenToDir(
-    rawDir: string,
-    destAbsDir: string
-  ): Promise<void> {
-    const entries = this.listRawDir(rawDir);
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      const childRaw = `${rawDir}/${entry}`;
-      const childDest = `${destAbsDir}/${entry}`;
-      await this.copyEntry(childRaw, childDest);
+  private loadPresetConfig(configFile: string): PresetConfig | undefined {
+    try {
+      const context = this.ctxAdapter.getContext();
+      const uint8Array = context.resourceManager.getRawFileContentSync(configFile);
+      const configContent = StringUtil.uint8ArrayToString(uint8Array);
+      return JSON.parse(configContent);
+    } catch (err) {
+      LogUtil.error(TAG, `parse config failed: ${JSON.stringify(err)}`);
+      return undefined;
     }
+  }
+
+  private resolveMappingPaths(mappings: PresetMapping[], prefixDir: string): ResolvedMapping[] {
+    const result: ResolvedMapping[] = [];
+    for (let i = 0; i < mappings.length; i++) {
+      const mapping: PresetMapping = mappings[i];
+      result.push({
+        rawDir: mapping.rawDir,
+        destAbsDir: mapping.destAbsDir.replace(/\{prefixDir\}/g, prefixDir)
+      });
+    }
+    return result;
+  }
+
+  private async deployDirectory(rawDir: string, destAbsDir: string): Promise<void> {
+    this.ensureDirExists(destAbsDir);
+    await this.copyEntry(rawDir, destAbsDir);
+  }
+
+  @LogMethod
+  async deployIfNeeded(prefixDir: string): Promise<void> {
+    if (!this.hasPreset()) {
+      LogUtil.info(TAG, 'rawfile/preset not found, skipping');
+      return;
+    }
+
+    const config = this.loadPresetConfig('preset_config.json');
+    if (!config) {
+      LogUtil.error(TAG, 'load preset config error');
+      return;
+    }
+    const markerPath = `${prefixDir}/${config.version}`;
+    if (this.checkMarkerExists(markerPath)) {
+      LogUtil.info(TAG, 'preset already deployed, skipping');
+      return;
+    }
+
+    LogUtil.info(TAG, `start preset deploy, prefix=${prefixDir}, version=${config.version}`);
+    this.ensureDirExists(prefixDir);
+    const mappings = this.resolveMappingPaths(config.mappings, prefixDir);
+    for (const mapping of mappings) {
+      LogUtil.info(TAG, `deploy ${mapping.rawDir} -> ${mapping.destAbsDir}`);
+      await this.deployDirectory(mapping.rawDir, mapping.destAbsDir);
+    }
+    this.touchMarker(markerPath);
+    LogUtil.info(TAG, `preset deploy done, marker=${markerPath}`);
   }
 
   private async copyEntry(
@@ -113,7 +125,7 @@ export class PresetDeployerAdapter extends BaseAdapter {
       await this.copyRawFile(rawPath, destAbsPath);
       return;
     }
-    this.ensureDir(destAbsPath);
+    this.ensureDirExists(destAbsPath);
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
       await this.copyEntry(`${rawPath}/${child}`, `${destAbsPath}/${child}`);
@@ -175,30 +187,13 @@ export class PresetDeployerAdapter extends BaseAdapter {
     }
   }
 
-  private reclaimStaleLock(lockDir: string): void {
-    const STALE_LOCK_TIMEOUT_SEC = 600;
-    try {
-      if (!fs.accessSync(lockDir)) {
-        return;
-      }
-      const stat = fs.statSync(lockDir);
-      const ageSec = Math.floor(Date.now() / 1000) - stat.mtime;
-      if (ageSec > STALE_LOCK_TIMEOUT_SEC) {
-        LogUtil.info(TAG, `reclaim stale deploy lock: ${lockDir}, ageSec=${ageSec}`);
-        fs.rmdirSync(lockDir);
-      }
-    } catch (err) {
-      LogUtil.error(TAG, `reclaimStaleLock failed: ${lockDir}, err=${JSON.stringify(err)}`);
-    }
-  }
-
-  private ensureDir(absPath: string): void {
+  private ensureDirExists(absPath: string): void {
     try {
       if (!fs.accessSync(absPath)) {
         fs.mkdirSync(absPath, true);
       }
     } catch (err) {
-      LogUtil.error(TAG, `ensureDir failed: ${absPath}, err=${JSON.stringify(err)}`);
+      LogUtil.error(TAG, `ensureDirExists failed: ${absPath}, err=${JSON.stringify(err)}`);
     }
   }
 

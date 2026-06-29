@@ -3523,7 +3523,7 @@ static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT 
 #ifdef __OHOS__
     /* OHOS: clip CJK glyphs against their own metrics instead of the parent's.
      * Upstream clips glyph metrics to base_font's tmAscent/tmDescent, which
-     * is fine for Latin chars but too small for CJK — even after the 0.85
+     * is fine for Latin chars but too small for CJK even after the 0.85
      * uniform scaling, CJK horiBearingY can still exceed the parent's
      * tmAscent, so the top gets clipped off.
      * Fix: on OHOS, child fonts use their own tmAscent/tmDescent for

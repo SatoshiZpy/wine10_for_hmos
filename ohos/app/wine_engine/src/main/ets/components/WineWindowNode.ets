@@ -14,7 +14,7 @@ import { DragParamManager } from '../common/DragParamManager';
 import { window } from '@kit.ArkUI';
 import fs from '@ohos.file.fs';
 import { NativeThemeAdapter } from '../adapter/NativeThemeAdapter';
-import lazy { PresetDeployerAdapter, PresetMapping } from '../adapter/PresetDeployerAdapter';
+import lazy { PresetDeployerAdapter } from '../adapter/PresetDeployerAdapter';
 import CheckEmptyUtils from '../utils/CheckEmptyUtils';
 
 interface ComponentConfig {
@@ -179,11 +179,7 @@ class WindowNodeController extends NodeController {
     this.ensureDir(prefixDir);
     this.ensureFile(logPath);
 
-    if (this.presetDeployer.hasSapPreset()) {
-      await this.deploySapPreset(prefixDir);
-    } else {
-      LogUtil.info(TAG, 'rawfile/preset not found, skip deploySapPreset');
-    }
+    await this.deployPreset(prefixDir);
 
     const environ = new Map<string, string>();
     this.setEnv(environ, 'WINERESPATH', resDir);
@@ -223,25 +219,11 @@ class WindowNodeController extends NodeController {
     this.config.nativeContext.runWine(cmd, env);
   }
 
-  private async deploySapPreset(prefixDir: string): Promise<void> {
-    const cDriveDir = `${prefixDir}/dosdevices/c:`;
-    const system32Dir = `${cDriveDir}/windows/system32`;
-    const sapDir = `${cDriveDir}/sap`;
-    const userDir = `${cDriveDir}/users/100`;
-
-    const mappings: PresetMapping[] = [
-      { rawDir: 'preset/regs', destAbsDir: prefixDir },
-      { rawDir: 'preset/sap', destAbsDir: sapDir },
-      { rawDir: 'preset/add', destAbsDir: system32Dir },
-      { rawDir: 'preset/modify', destAbsDir: system32Dir },
-      { rawDir: 'preset/system32', destAbsDir: system32Dir },
-      { rawDir: 'preset/root', destAbsDir: userDir }
-    ];
-
+  private async deployPreset(prefixDir: string): Promise<void> {
     try {
-      await this.presetDeployer.deployIfNeeded(prefixDir, '.preset_sap_deployed_v2_gecko', mappings);
+      await this.presetDeployer.deployIfNeeded(prefixDir);
     } catch (err) {
-      LogUtil.error(TAG, `deploySapPreset failed: ${JSON.stringify(err)}`);
+      LogUtil.error(TAG, `deployPreset failed: ${JSON.stringify(err)}`);
     }
   }
 
