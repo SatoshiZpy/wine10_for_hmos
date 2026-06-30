@@ -268,7 +268,7 @@ void SetCursorStyle(int widget_id, int cursor_type)
         cursor_type <= static_cast<int>(OhosCursorType::kMaxValue)) {
         type = static_cast<OhosCursorType>(cursor_type);
     }
-    ohos::adapter::SetCursor(widget_id, type);
+    SetCursor(widget_id, type);
 }
 
 void SetWindowBounds(int widget_id, const struct window_bounds* bounds)

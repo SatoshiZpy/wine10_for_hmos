@@ -830,7 +830,7 @@ int set_cursor( HWND hwnd, int id, int width, int height,
 
     /*
      * Three cases:
-     *   1) id > 0 && bits == NULL  -> SAP/Wine requested a Windows system
+     *   1) id > 0 && bits == NULL  -> the application requested a Windows system
      *      cursor that get_cursor_system_id() mapped to a HarmonyOS
      *      built-in pointer style. The wineohos.drv enum is 1-based so 0
      *      can stay the "not a system cursor" sentinel; subtract 1 here

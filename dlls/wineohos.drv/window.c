@@ -1520,9 +1520,9 @@ void OHOS_SetCursor( HWND hwnd, HCURSOR handle )
      * handle == NULL means the application asked to clear the cursor for
      * this window. Forward hwnd (not 0) so set_cursor() can locate the
      * native widget and revert it to the default arrow; passing 0 caused
-     * get_native_win_data() to fail and left whatever custom cursor SAP
-     * last set (e.g. column-resize, column-select) stuck on screen even
-     * after the pointer moved away.
+     * get_native_win_data() to fail and left whatever custom cursor the
+     * application last set (e.g. column-resize, column-select) stuck on
+     * screen even after the pointer moved away.
      */
     else set_cursor( hwnd, 0, 0, 0, 0, 0, NULL );
 }

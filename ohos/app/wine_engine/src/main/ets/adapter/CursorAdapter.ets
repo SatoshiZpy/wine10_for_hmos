@@ -24,7 +24,7 @@ export class CursorAdapter extends BaseAdapter {
   // -1 sentinel means "not initialized yet"; fall back to 1.0 on read failure.
   private cachedCursorScale: number = -1;
   // Cap the projected cursor side to keep the system cursor reasonable
-  // on extreme HiDPI configs (avoids "huge cursor" when SAP supplies a
+  // on extreme HiDPI configs (avoids "huge cursor" when the application supplies a
   // ~64px source on a density-3 screen).
   private static readonly CURSOR_MAX_SIDE: number = 96;
 
@@ -49,7 +49,7 @@ export class CursorAdapter extends BaseAdapter {
    * Compute the per-axis scale to apply to the source ARGB cursor bits
    * before forwarding to the multimodal pointer service.
    *
-   * SAP/Wine cursors arrive at the original 11x17 / 16x16 hotspot size
+   * Wine cursors arrive at the original 11x17 / 16x16 hotspot size
    * authored for 96 DPI displays. On a HiDPI panel (densityPixels > 1)
    * the system cursor service renders them as a few physical pixels,
    * which is what users see as the "tiny down-arrow" issue. We scale
@@ -72,7 +72,7 @@ export class CursorAdapter extends BaseAdapter {
     if (srcMaxSide > 0 && srcMaxSide * scale > CursorAdapter.CURSOR_MAX_SIDE) {
       scale = CursorAdapter.CURSOR_MAX_SIDE / srcMaxSide;
     }
-    return scale < 1.0 ? 1.0 : scale;
+    return Math.max(scale, 1.0);
   }
 
   private applyCustomCursor(id: number, cursorImage: image.PixelMap,
@@ -133,7 +133,7 @@ export class CursorAdapter extends BaseAdapter {
         width: width
       }
     };
-    let srcMaxSide: number = width > height ? width : height;
+    let srcMaxSide: number = Math.max(width, height);
     let scale: number = this.getCursorScale(srcMaxSide);
     image.createPixelMap(buff, opts)
       .then((cursorImage: image.PixelMap) => {
@@ -144,7 +144,7 @@ export class CursorAdapter extends BaseAdapter {
                 Math.round(hotspotX * scale), Math.round(hotspotY * scale));
             })
             .catch((error: BusinessError) => {
-              LogUtil.error(TAG, "Failed to scale cursor pixelMap, using source size. Cause: " + JSON.stringify(error));
+              LogUtil.warn(TAG, "Failed to scale cursor pixelMap, using source size. Cause: " + JSON.stringify(error));
               this.applyCustomCursor(id, cursorImage, hotspotX, hotspotY);
             });
         } else {
