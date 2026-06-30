@@ -91,7 +91,7 @@ fi
 # 3. 准备 Wine 工具
 # ============================================================
 cd ${ROOT_DIR}
-autoconf
+autoheader && autoconf
 
 if [ ! -d "${TOOLS_DIR}" ]; then
     echo "build x86 wine in ${TOOLS_DIR}"

@@ -1016,6 +1016,14 @@ case $host_os in
     LIBEXT="so"
     AC_DEFINE(_GNU_SOURCE,1,[Define to 1 to enable GNU extensions on Linux])
     AC_DEFINE(__OHOS__,1,[Define for openharmong systems])
+    EXTRACFLAGS="$EXTRACFLAGS -D__OHOS__"
+    if test "x$PE_ARCHS" != xNONE
+    then
+      for wine_arch in $PE_ARCHS
+      do
+        AS_VAR_APPEND([${wine_arch}_EXTRACFLAGS],[" -D__OHOS__"])
+      done
+    fi
     DLLFLAGS="$DLLFLAGS -fPIC"
     LDDLLFLAGS="-fPIC"
     LDEXECFLAGS="-Wl,-pie"

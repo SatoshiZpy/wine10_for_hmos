@@ -1,4 +1,3 @@
-EXTRADEFS = -D__OHOS__
 MODULE    = wineboot.exe
 IMPORTS   = uuid advapi32 ws2_32 kernelbase
 DELAYIMPORTS = shell32 shlwapi version user32 gdi32 setupapi newdev
