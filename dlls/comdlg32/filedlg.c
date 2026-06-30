@@ -2702,52 +2702,11 @@ BOOL FILEDLG95_OnOpen(HWND hwnd)
 
         /* Attach the file extension with file name*/
         ext = PathFindExtensionW(lpstrPathAndFile);
-        if (fodInfos->DlgInfos.dwDlgProp & FODPROP_SAVEDLG)
-        {
-            /* For save dialogs, replace existing extension with filter extension */
-            WCHAR *filterExt = NULL;
-            LPWSTR lpstrFilter = NULL;
-
-            lpstrFilter = (LPWSTR) CBGetItemDataPtr(fodInfos->DlgInfos.hwndFileTypeCB,
-                                             fodInfos->ofnInfos->nFilterIndex-1);
-
-            if (lpstrFilter != (LPWSTR)CB_ERR)
-            {
-                WCHAR* filterSearchIndex;
-                filterExt = heap_alloc((lstrlenW(lpstrFilter) + 1) * sizeof(WCHAR));
-                lstrcpyW(filterExt, lpstrFilter);
-
-                filterSearchIndex = wcschr(filterExt, ';');
-                if (filterSearchIndex)
-                    filterSearchIndex[0] = '\0';
-
-                filterSearchIndex = wcschr(filterExt, '.');
-                if (filterSearchIndex++ && !wcschr(filterSearchIndex, '*') && !wcschr(filterSearchIndex, '?'))
-                    lstrcpyW(filterExt, filterSearchIndex);
-                else
-                {
-                    heap_free(filterExt);
-                    filterExt = NULL;
-                }
-            }
-
-            if (!filterExt && fodInfos->defext)
-            {
-                filterExt = heap_alloc((lstrlenW(fodInfos->defext) + 1) * sizeof(WCHAR));
-                lstrcpyW(filterExt, fodInfos->defext);
-            }
-
-            if (filterExt && *filterExt)
-            {
-                if (*ext)
-                    PathRemoveExtensionW(lpstrPathAndFile);
-                lstrcatW(lpstrPathAndFile, L".");
-                lstrcatW(lpstrPathAndFile, filterExt);
-            }
-
-            heap_free(filterExt);
-        }
-        else if (! *ext && fodInfos->defext)
+#ifdef __OHOS__
+        if (fodInfos->DlgInfos.dwDlgProp & FODPROP_SAVEDLG || (! *ext && fodInfos->defext))
+#else
+        if (! *ext && fodInfos->defext)
+#endif
         {
             /* if no extension is specified with file name, then */
             /* attach the extension from file filter or default one */
@@ -2790,7 +2749,11 @@ BOOL FILEDLG95_OnOpen(HWND hwnd)
                 }
             }
 
+#ifdef __OHOS__
+            if (!filterExt && fodInfos->defext)
+#else
             if (!filterExt)
+#endif
             {
                 /* use the default file extension */
                 filterExt = heap_alloc((lstrlenW(fodInfos->defext) + 1) * sizeof(WCHAR));
@@ -2799,6 +2762,10 @@ BOOL FILEDLG95_OnOpen(HWND hwnd)
 
             if (*filterExt) /* ignore filterExt="" */
             {
+#ifdef __OHOS__
+                if (*ext)
+                    PathRemoveExtensionW(lpstrPathAndFile);
+#endif
                 /* Attach the dot*/
                 lstrcatW(lpstrPathAndFile, L".");
                 /* Attach the extension */
@@ -2807,6 +2774,10 @@ BOOL FILEDLG95_OnOpen(HWND hwnd)
 
             heap_free(filterExt);
 
+#ifdef __OHOS__
+        if (! *ext && fodInfos->defext)
+        {
+#endif
             /* In Open dialog: if file does not exist try without extension */
             if (!(fodInfos->DlgInfos.dwDlgProp & FODPROP_SAVEDLG) && !PathFileExistsW(lpstrPathAndFile))
                   lpstrPathAndFile[PathLength] = '\0';
@@ -2818,6 +2789,9 @@ BOOL FILEDLG95_OnOpen(HWND hwnd)
                 fodInfos->ofnInfos->Flags &= ~OFN_EXTENSIONDIFFERENT;
             else
                 fodInfos->ofnInfos->Flags |= OFN_EXTENSIONDIFFERENT;
+#ifdef __OHOS__
+        }
+#endif
 	}
 
 	/* In Save dialog: check if the file already exists */
@@ -3249,7 +3223,7 @@ static BOOL FILEDLG95_FILETYPE_OnCommand(HWND hwnd, WORD wNotifyCode)
       /* Refresh the actual view to display the included items*/
       if (fodInfos->Shell.FOIShellView)
         IShellView_Refresh(fodInfos->Shell.FOIShellView);
-
+#ifdef __OHOS__
       /* Update the filename extension when file type changes */
       if ((fodInfos->DlgInfos.dwDlgProp & FODPROP_SAVEDLG) && lpstrFilter != (LPWSTR)CB_ERR)
       {
@@ -3277,6 +3251,7 @@ static BOOL FILEDLG95_FILETYPE_OnCommand(HWND hwnd, WORD wNotifyCode)
           }
         }
       }
+#endif
     }
   }
   return FALSE;
