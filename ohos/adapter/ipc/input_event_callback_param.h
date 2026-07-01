@@ -51,6 +51,7 @@ struct InputEventParam {
         parcel.Write(event.data.mouse_event.button);
         parcel.Write(event.data.mouse_event.wheel_x);
         parcel.Write(event.data.mouse_event.wheel_y);
+        parcel.Write(event.data.mouse_event.source_tool);
     }
 
     static void ReadMouseEventParam(const multiprocess::NativeIpcParcel& parcel, input_event& event)
@@ -64,6 +65,7 @@ struct InputEventParam {
         parcel.Read(event.data.mouse_event.button);
         parcel.Read(event.data.mouse_event.wheel_x);
         parcel.Read(event.data.mouse_event.wheel_y);
+        parcel.Read(event.data.mouse_event.source_tool);
     }
 
     static void WriteKeyEventParam(multiprocess::NativeIpcParcel& parcel, const input_event& event)

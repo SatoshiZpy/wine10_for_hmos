@@ -514,23 +514,117 @@ void mouse_event_callback( const input_event* event )
                 return;
             break;
         case OHOS_MOUSE_ACTION_SCROLL:
+        {
             data.motion.input.mi.dx = last_mouse_screen_x;
             data.motion.input.mi.dy = last_mouse_screen_y;
             float wheel_x = event->data.mouse_event.wheel_x;
             float wheel_y = event->data.mouse_event.wheel_y;
-            if (wheel_y)
+            int source_tool = event->data.mouse_event.source_tool;
+
+            if (source_tool == OHOS_SOURCE_TOOL_MOUSE)
             {
-                data.motion.input.mi.mouseData = wheel_y < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
-                data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_WHEEL;
-                send_event(&data);
+                /* Mouse wheel: each notch click is a discrete event, keep the
+                 * original one-notch-per-event behavior. */
+                if (wheel_y)
+                {
+                    data.motion.input.mi.mouseData = wheel_y < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+                    data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_WHEEL;
+                    send_event(&data);
+                }
+                if (wheel_x)
+                {
+                    data.motion.input.mi.mouseData = wheel_x < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+                    data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_HWHEEL;
+                    send_event(&data);
+                }
             }
-            if (wheel_x)
+            else
             {
-                data.motion.input.mi.mouseData = wheel_x < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
-                data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_HWHEEL;
-                send_event(&data);
+                /* Touchpad/touchscreen: pan_event.offset_y is the cumulative
+                 * offset from gesture start (not a per-frame delta), monotonically
+                 * increasing/decreasing and resetting to zero at gesture end.
+                 * Accumulating it as a delta would double-count and flood notches.
+                 * Instead, derive the target notch level from the cumulative offset
+                 * and only emit the difference from the last emitted level. */
+                static float pad_y_base = 0.0f;   /* offset baseline at last emitted notch */
+                static float pad_x_base = 0.0f;
+                static int pad_y_sign = 0;        /* current gesture direction (0 = unset) */
+                static int pad_x_sign = 0;
+                const float PIXELS_PER_WHEEL_NOTCH = 120.0f;
+
+                /* Y axis: a direction reversal or zero crossing starts a new gesture,
+                 * reset the baseline and direction. */
+                int y_sign = (wheel_y > 0) - (wheel_y < 0);
+                if (y_sign != 0 && pad_y_sign != 0 && y_sign != pad_y_sign)
+                {
+                    pad_y_base = 0.0f;
+                    pad_y_sign = 0;
+                }
+                if (y_sign != 0) pad_y_sign = y_sign;
+
+                if (wheel_y != 0.0f)
+                {
+                    /* Use the absolute value for the notch level: it grows
+                     * monotonically with the gesture, so target only moves forward
+                     * and only same-direction notches are emitted. When target <
+                     * emitted (the pan gesture resets across sessions and wy jumps
+                     * back near zero), do not emit a reverse notch; instead pull the
+                     * baseline back to the current wy as the new session origin.
+                     * Direction is decided by the sign of wheel_y. */
+                    float abs_y = wheel_y < 0 ? -wheel_y : wheel_y;
+                    float abs_base = pad_y_base < 0 ? -pad_y_base : pad_y_base;
+                    int target = (int)(abs_y / PIXELS_PER_WHEEL_NOTCH);
+                    int emitted = (int)(abs_base / PIXELS_PER_WHEEL_NOTCH);
+                    if (target > emitted)
+                    {
+                        int notches = target - emitted;
+                        /* Record the offset corresponding to the emitted level rather
+                         * than the raw wy, so wy bouncing within a level does not
+                         * re-emit a notch. */
+                        pad_y_base = y_sign * target * PIXELS_PER_WHEEL_NOTCH;
+                        data.motion.input.mi.mouseData = y_sign * notches * WHEEL_DELTA;
+                        data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_WHEEL;
+                        send_event(&data);
+                    }
+                    else if (target < emitted)
+                    {
+                        /* Cross-session reset: new session origin, reset the
+                         * baseline without emitting a reverse notch. */
+                        pad_y_base = wheel_y;
+                    }
+                }
+
+                /* X axis: same as Y. */
+                int x_sign = (wheel_x > 0) - (wheel_x < 0);
+                if (x_sign != 0 && pad_x_sign != 0 && x_sign != pad_x_sign)
+                {
+                    pad_x_base = 0.0f;
+                    pad_x_sign = 0;
+                }
+                if (x_sign != 0) pad_x_sign = x_sign;
+
+                if (wheel_x != 0.0f)
+                {
+                    float abs_x = wheel_x < 0 ? -wheel_x : wheel_x;
+                    float abs_base = pad_x_base < 0 ? -pad_x_base : pad_x_base;
+                    int target = (int)(abs_x / PIXELS_PER_WHEEL_NOTCH);
+                    int emitted = (int)(abs_base / PIXELS_PER_WHEEL_NOTCH);
+                    if (target > emitted)
+                    {
+                        int notches = target - emitted;
+                        pad_x_base = x_sign * target * PIXELS_PER_WHEEL_NOTCH;
+                        data.motion.input.mi.mouseData = x_sign * notches * WHEEL_DELTA;
+                        data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_HWHEEL;
+                        send_event(&data);
+                    }
+                    else if (target < emitted)
+                    {
+                        pad_x_base = wheel_x;
+                    }
+                }
             }
             return;
+        }
         case OH_NATIVEXCOMPONENT_MOUSE_MOVE:
             break;
         default:

@@ -53,6 +53,7 @@ void ConvertToInputEventUnion(input_event& event,
     event.data.mouse_event.button = 0;
     event.data.mouse_event.wheel_x = pan_event.offset_x;
     event.data.mouse_event.wheel_y = pan_event.offset_y;
+    event.data.mouse_event.source_tool = static_cast<int>(pan_event.source_tool);
 }
 
 void ConvertToInputEventUnion(input_event& event,
