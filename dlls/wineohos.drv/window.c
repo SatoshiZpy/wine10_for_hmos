@@ -823,29 +823,36 @@ failed:
 }
 
 
+/*
+ * Wine-side cursor IDs: 1-based wrapper around ohos::adapter::OhosCursorType
+ * (kDefault = 0, kResizeLeftRight = 22, ...). The +1 offset preserves
+ * 0 as the "not a recognized system cursor; fall through to custom
+ * ARGB" sentinel used by get_cursor_system_id(). set_cursor() subtracts
+ * 1 before forwarding to SetCursorStyle().
+ */
 enum ohos_system_cursors
 {
-    TYPE_ARROW = 1000,
-    TYPE_CONTEXT_MENU = 1001,
-    TYPE_HAND = 1002,
-    TYPE_HELP = 1003,
-    TYPE_WAIT = 1004,
-    TYPE_CELL = 1006,
-    TYPE_CROSSHAIR = 1007,
-    TYPE_TEXT = 1008,
-    TYPE_VERTICAL_TEXT = 1009,
-    TYPE_ALIAS = 1010,
-    TYPE_COPY = 1011,
-    TYPE_NO_DROP = 1012,
-    TYPE_ALL_SCROLL = 1013,
-    TYPE_HORIZONTAL_DOUBLE_ARROW = 1014,
-    TYPE_VERTICAL_DOUBLE_ARROW = 1015,
-    TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW = 1016,
-    TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW = 1017,
-    TYPE_ZOOM_IN = 1018,
-    TYPE_ZOOM_OUT = 1019,
-    TYPE_GRAB = 1020,
-    TYPE_GRABBING = 1021,
+    TYPE_ARROW = 1,                                /* kDefault */
+    TYPE_HORIZONTAL_DOUBLE_ARROW = 23,             /* kResizeLeftRight */
+    TYPE_VERTICAL_DOUBLE_ARROW = 24,               /* kResizeUpDown */
+    TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW = 12,     /* kNorthEastSouthWest */
+    TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW = 13,      /* kNorthWestSouthEast */
+    TYPE_CROSSHAIR = 14,                           /* kCross */
+    TYPE_COPY = 15,                                /* kCursorCopy */
+    TYPE_NO_DROP = 16,                             /* kCursorForbid */
+    TYPE_HAND = 20,                                /* kHandPointing */
+    TYPE_HELP = 21,                                /* kHelp */
+    TYPE_ALL_SCROLL = 22,                          /* kMove */
+    TYPE_TEXT = 27,                                /* kTextCursor */
+    TYPE_ZOOM_IN = 28,                             /* kZoomIn */
+    TYPE_ZOOM_OUT = 29,                            /* kZoomOut */
+    TYPE_GRAB = 19,                                /* kHandOpen */
+    TYPE_GRABBING = 18,                            /* kHandGrabbing */
+    TYPE_ALIAS = 15,                               /* no dedicated alias style, reuse Copy */
+    TYPE_WAIT = 43,                                /* kLoading */
+    TYPE_CONTEXT_MENU = 1,                         /* no equivalent, fall back to Arrow */
+    TYPE_CELL = 1,                                 /* no equivalent, fall back to Arrow */
+    TYPE_VERTICAL_TEXT = 40,                       /* kHorizontalTextCursor */
 };
 
 struct system_cursors
@@ -1518,7 +1525,15 @@ void OHOS_SetCursor( HWND hwnd, HCURSOR handle )
         NtGdiDeleteObjectApp( info.hbmColor );
         NtGdiDeleteObjectApp( info.hbmMask );
     }
-    else set_cursor( 0, 0, 0, 0, 0, 0, NULL );
+    /*
+     * handle == NULL means the application asked to clear the cursor for
+     * this window. Forward hwnd (not 0) so set_cursor() can locate the
+     * native widget and revert it to the default arrow; passing 0 caused
+     * get_native_win_data() to fail and left whatever custom cursor the
+     * application last set (e.g. column-resize, column-select) stuck on
+     * screen even after the pointer moved away.
+     */
+    else set_cursor( hwnd, 0, 0, 0, 0, 0, NULL );
 }
 
 /**********************************************************************
