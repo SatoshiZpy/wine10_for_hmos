@@ -845,7 +845,52 @@ static void doc_navigate_proc(DocHost *This, task_header_t *t)
         html_window_navigate(This, priv_window, task->url, task->headers, task->post_data);
         IHTMLPrivateWindow_Release(priv_window);
     }else {
+#ifdef __OHOS__
+        /* IHTMLPrivateWindow is [local] and cannot be marshaled across COM apartments.
+         * Route SuperNavigate to the Gecko thread where same-apartment QI succeeds.
+         * Use PostMessage (async) to avoid deadlock: SuperNavigate triggers COM calls
+         * back to this thread, which would deadlock with synchronous SendMessage. */
+        HWND gecko_hwnd = FindWindowW(L"GeckoProxy", NULL);
+        IStream *nav_stream = NULL;
+
+        if(gecko_hwnd)
+            hres = CoMarshalInterThreadInterfaceInStream(&IID_IUnknown, This->doc_navigate, &nav_stream);
+
+        if(gecko_hwnd && nav_stream) {
+            struct {
+                IStream *nav_stream;
+                BSTR url;
+                BSTR headers;
+                SAFEARRAY *post_data;
+                ULONG flags;
+                HRESULT hres;
+            } *params;
+
+            TRACE("IHTMLPrivateWindow QI failed, routing navigate to Gecko thread (async)\n");
+
+            set_dochost_url(This, task->url);
+            set_doc_state(This, READYSTATE_LOADING);
+
+            /* Heap-allocate params because PostMessage is async */
+            params = calloc(1, sizeof(*params));
+            if(params) {
+                params->nav_stream = nav_stream;
+                params->url = SysAllocString(task->url);
+                params->headers = task->headers ? SysAllocString(task->headers) : NULL;
+                params->post_data = NULL;  /* TODO: copy post_data if needed */
+                params->flags = 0;
+                params->hres = E_FAIL;
+
+                PostMessageW(gecko_hwnd, WM_USER + 102, 0, (LPARAM)params);
+            }else {
+                IStream_Release(nav_stream);
+            }
+        }else {
+            WARN("Could not get IHTMLPrivateWindow iface: %08lx\n", hres);
+        }
+#else
         WARN("Could not get IHTMLPrivateWindow iface: %08lx\n", hres);
+#endif
     }
 }
 

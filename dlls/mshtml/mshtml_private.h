@@ -1165,6 +1165,11 @@ struct HTMLDocumentNode {
 
 HRESULT HTMLDocument_Create(IUnknown*,REFIID,void**);
 HRESULT MHTMLDocument_Create(IUnknown*,REFIID,void**);
+#ifdef __OHOS__
+HRESULT create_document_object(BOOL is_mhtml, IUnknown *outer, REFIID riid, void **ppv);
+#else
+static HRESULT create_document_object(BOOL is_mhtml, IUnknown *outer, REFIID riid, void **ppv);
+#endif
 HRESULT HTMLLoadOptions_Create(IUnknown*,REFIID,void**);
 HRESULT create_document_node(nsIDOMDocument*,GeckoBrowser*,HTMLInnerWindow*,HTMLInnerWindow*,
                              compat_mode_t,HTMLDocumentNode**);
@@ -1229,6 +1234,9 @@ UINT get_document_charset(HTMLDocumentNode*);
 HRESULT ProtocolFactory_Create(REFCLSID,REFIID,void**);
 
 BOOL load_gecko(void);
+#ifdef __OHOS__
+HWND get_gecko_proxy_hwnd(void);
+#endif
 void close_gecko(void);
 void register_nsservice(nsIComponentRegistrar*,nsIServiceManager*);
 void init_nsio(nsIComponentManager*);
@@ -1708,6 +1716,33 @@ HRESULT get_mime_type_display_name(const WCHAR*,BSTR*);
 HINSTANCE get_shdoclc(void);
 void set_statustext(HTMLDocumentObj*,INT,LPCWSTR);
 IInternetSecurityManager *get_security_manager(void);
+
+#ifdef __OHOS__
+/* Gecko thread proxy — defined in nsembed.c */
+#define WM_GECKO_CREATE_DOC    (WM_USER + 100)
+#define WM_GECKO_NAVIGATE      (WM_USER + 102)
+
+struct gecko_create_params {
+    BOOL is_mhtml;
+    IUnknown *outer;
+    IID riid;          /* Requested interface (copied, not const pointer) */
+    HRESULT hres;
+    IStream *stream;  /* Marshaled interface from Gecko thread's apartment */
+};
+
+/* Parameters for WM_GECKO_NAVIGATE — route SuperNavigate call to Gecko
+ * thread when IHTMLPrivateWindow cannot be marshaled across apartments. */
+struct gecko_navigate_params {
+    IStream *nav_stream;     /* IN: marshaled IHTMLWindow2 (doc_navigate) */
+    BSTR url;                /* IN */
+    BSTR headers;            /* IN (may be NULL) */
+    SAFEARRAY *post_data;    /* IN (may be NULL) */
+    ULONG flags;             /* IN */
+    HRESULT hres;            /* OUT */
+};
+
+extern DWORD gecko_owner_thread;  /* Thread ID of Gecko/XPCOM main thread */
+#endif
 
 extern HINSTANCE hInst;
 void create_console(HTMLInnerWindow *window, IWineMSHTMLConsole **ret);

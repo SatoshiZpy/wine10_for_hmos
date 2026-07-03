@@ -481,6 +481,9 @@ typedef struct {
     IClassFactory IClassFactory_iface;
     LONG ref;
     CreateInstanceFunc fnCreateInstance;
+#ifdef __OHOS__
+    BOOL proxy_to_gecko;  /* TRUE for HTMLDocument/MHTMLDocument */
+#endif
 } ClassFactory;
 
 static inline ClassFactory *impl_from_IClassFactory(IClassFactory *iface)
@@ -523,10 +526,93 @@ static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
     return ref;
 }
 
+#ifdef __OHOS__
+/* CreateInstance for HTMLDocument/MHTMLDocument.
+ * If calling thread IS the Gecko owner (XPCOM main thread), create directly —
+ * no proxy needed, all Gecko operations are on the correct thread.
+ * Otherwise proxy creation via SendMessage to the Gecko owner thread, which
+ * creates the document in its apartment and marshals the interface via
+ * CoMarshalInterThreadInterfaceInStream. The calling thread unmarshals to get
+ * a COM proxy that routes calls back to the Gecko owner's STA. */
+static HRESULT WINAPI GeckoProxy_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
+        REFIID riid, void **ppvObject)
+{
+    ClassFactory *This = impl_from_IClassFactory(iface);
+    struct gecko_create_params params;
+    HWND proxy_hwnd;
+    BOOL is_mhtml;
+    HRESULT hres;
+
+    TRACE("(%p)->(%p %s %p)\n", This, pUnkOuter, debugstr_mshtml_guid(riid), ppvObject);
+
+    *ppvObject = NULL;
+
+    /* Ensure Gecko is initialized */
+    if(!load_gecko()) {
+        ERR("Gecko not available\n");
+        return CLASS_E_CLASSNOTAVAILABLE;
+    }
+
+    is_mhtml = (This->fnCreateInstance == MHTMLDocument_Create);
+
+    /* If calling thread IS the Gecko owner thread, create directly.
+     * No COM marshaling needed — object lives in same apartment as caller. */
+    if(gecko_owner_thread == GetCurrentThreadId()) {
+        TRACE("Calling thread is Gecko owner, creating directly\n");
+        return create_document_object(is_mhtml, pUnkOuter, riid, ppvObject);
+    }
+
+    /* Secondary thread: proxy via SendMessage to Gecko owner thread */
+    proxy_hwnd = get_gecko_proxy_hwnd();
+    if(!proxy_hwnd) {
+        ERR("Gecko proxy window not available\n");
+        return CLASS_E_CLASSNOTAVAILABLE;
+    }
+
+    params.is_mhtml = is_mhtml;
+    params.outer = pUnkOuter;
+    memcpy(&params.riid, riid, sizeof(IID));
+    params.hres = E_FAIL;
+    params.stream = NULL;
+
+    TRACE("Secondary thread, proxying to Gecko owner via SendMessage\n");
+    SendMessageW(proxy_hwnd, WM_GECKO_CREATE_DOC, 0, (LPARAM)&params);
+
+    hres = params.hres;
+    if(FAILED(hres)) {
+        TRACE("Gecko owner CreateInstance failed: %08lx\n", hres);
+        return hres;
+    }
+
+    /* Unmarshal the stream in calling thread's apartment to get a proxy.
+     * All vtable method calls on the proxy route back to Gecko owner's STA. */
+    if(params.stream) {
+        hres = CoGetInterfaceAndReleaseStream(params.stream, riid, ppvObject);
+        if(FAILED(hres)) {
+            ERR("CoGetInterfaceAndReleaseStream failed: %08lx\n", hres);
+            *ppvObject = NULL;
+            return hres;
+        }
+        TRACE("Got proxy interface %p for %s\n", *ppvObject, debugstr_mshtml_guid(riid));
+    }else {
+        ERR("No marshaled stream from Gecko owner thread\n");
+        return E_FAIL;
+    }
+
+    return S_OK;
+}
+#endif
+
 static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
         REFIID riid, void **ppvObject)
 {
     ClassFactory *This = impl_from_IClassFactory(iface);
+
+#ifdef __OHOS__
+    if(This->proxy_to_gecko)
+        return GeckoProxy_CreateInstance(iface, pUnkOuter, riid, ppvObject);
+#endif
+
     return This->fnCreateInstance(pUnkOuter, riid, ppvObject);
 }
 
@@ -546,7 +632,12 @@ static const IClassFactoryVtbl HTMLClassFactoryVtbl = {
     ClassFactory_LockServer
 };
 
+#ifdef __OHOS__
+static HRESULT ClassFactory_Create(REFIID riid, void **ppv, CreateInstanceFunc fnCreateInstance,
+        BOOL proxy_to_gecko)
+#else
 static HRESULT ClassFactory_Create(REFIID riid, void **ppv, CreateInstanceFunc fnCreateInstance)
+#endif
 {
     ClassFactory *ret = malloc(sizeof(ClassFactory));
     HRESULT hres;
@@ -554,6 +645,9 @@ static HRESULT ClassFactory_Create(REFIID riid, void **ppv, CreateInstanceFunc f
     ret->IClassFactory_iface.lpVtbl = &HTMLClassFactoryVtbl;
     ret->ref = 0;
     ret->fnCreateInstance = fnCreateInstance;
+#ifdef __OHOS__
+    ret->proxy_to_gecko = proxy_to_gecko;
+#endif
 
     hres = IClassFactory_QueryInterface(&ret->IClassFactory_iface, riid, ppv);
     if(FAILED(hres)) {
@@ -570,10 +664,18 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 {
     if(IsEqualGUID(&CLSID_HTMLDocument, rclsid)) {
         TRACE("(CLSID_HTMLDocument %s %p)\n", debugstr_mshtml_guid(riid), ppv);
+#ifdef __OHOS__
+        return ClassFactory_Create(riid, ppv, HTMLDocument_Create, TRUE);
+#else
         return ClassFactory_Create(riid, ppv, HTMLDocument_Create);
+#endif
     }else if(IsEqualGUID(&CLSID_MHTMLDocument, rclsid)) {
         TRACE("(CLSID_MHTMLDocument %s %p)\n", debugstr_mshtml_guid(riid), ppv);
+#ifdef __OHOS__
+        return ClassFactory_Create(riid, ppv, MHTMLDocument_Create, TRUE);
+#else
         return ClassFactory_Create(riid, ppv, MHTMLDocument_Create);
+#endif
     }else if(IsEqualGUID(&CLSID_AboutProtocol, rclsid)) {
         TRACE("(CLSID_AboutProtocol %s %p)\n", debugstr_mshtml_guid(riid), ppv);
         return ProtocolFactory_Create(rclsid, riid, ppv);
@@ -591,7 +693,11 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
         return ProtocolFactory_Create(rclsid, riid, ppv);
     }else if(IsEqualGUID(&CLSID_HTMLLoadOptions, rclsid)) {
         TRACE("(CLSID_HTMLLoadOptions %s %p)\n", debugstr_mshtml_guid(riid), ppv);
+#ifdef __OHOS__
+        return ClassFactory_Create(riid, ppv, HTMLLoadOptions_Create, FALSE);
+#else
         return ClassFactory_Create(riid, ppv, HTMLLoadOptions_Create);
+#endif
     }
 
     FIXME("Unknown class %s\n", debugstr_guid(rclsid));
