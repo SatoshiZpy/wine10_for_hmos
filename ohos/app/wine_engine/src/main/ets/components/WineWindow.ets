@@ -13,7 +13,7 @@ import { DragParamManager } from '../common/DragParamManager';
 import { window } from '@kit.ArkUI';
 import { NativeThemeAdapter } from '../adapter/NativeThemeAdapter'
 import fs from '@ohos.file.fs';
-import lazy { PresetDeployerAdapter, PresetMapping } from '../adapter/PresetDeployerAdapter';
+import lazy { PresetDeployerAdapter } from '../adapter/PresetDeployerAdapter';
 import CheckEmptyUtils from '../utils/CheckEmptyUtils';
 
 @Component
@@ -208,11 +208,7 @@ export struct WineWindow {
     this.ensureDir(prefixDir);
     this.ensureFile(logPath);
 
-    if (this.presetDeployer.hasSapPreset()) {
-      await this.deploySapPreset(prefixDir);
-    } else {
-      LogUtil.info(WineWindow.TAG, 'rawfile/preset not found, skip deploySapPreset');
-    }
+    await this.deployPreset(prefixDir);
 
     const environ = new Map<string, string>();
     this.setEnv(environ, 'WINERESPATH', resDir);
@@ -252,24 +248,11 @@ export struct WineWindow {
     this.nativeContext.runWine(cmd, env);
   }
 
-  private async deploySapPreset(prefixDir: string): Promise<void> {
-    const cDriveDir = `${prefixDir}/dosdevices/c:`;
-    const system32Dir = `${cDriveDir}/windows/system32`;
-    const sapDir = `${cDriveDir}/sap`;
-    const userDir = `${cDriveDir}/users/100`;
-
-    const mappings: PresetMapping[] = [
-      { rawDir: 'preset/regs', destAbsDir: prefixDir },
-      { rawDir: 'preset/sap', destAbsDir: sapDir },
-      { rawDir: 'preset/add', destAbsDir: system32Dir },
-      { rawDir: 'preset/modify', destAbsDir: system32Dir },
-      { rawDir: 'preset/root', destAbsDir: userDir }
-    ];
-
+  private async deployPreset(prefixDir: string): Promise<void> {
     try {
-      await this.presetDeployer.deployIfNeeded(prefixDir, '.preset_sap_deployed_v1', mappings);
+      await this.presetDeployer.deployIfNeeded(prefixDir);
     } catch (err) {
-      LogUtil.error(WineWindow.TAG, `deploySapPreset failed: ${JSON.stringify(err)}`);
+      LogUtil.error(WineWindow.TAG, `deployPreset failed: ${JSON.stringify(err)}`);
     }
   }
 

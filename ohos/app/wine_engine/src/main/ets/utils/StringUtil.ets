@@ -4,6 +4,7 @@
 
 import fileUri from '@ohos.file.fileuri';
 import { ConfigData } from '../common/Constants';
+import { util } from '@kit.ArkTS';
 
 export default class StringUtil {
   private static TAG: string = 'StringUtil';
@@ -25,5 +26,18 @@ export default class StringUtil {
       return ConfigData.WINDOW_PREFIX + widgetId;
     }
     return widgetId;
+  }
+
+  static uint8ArrayToString(array: Uint8Array): string {
+    let textDecoderOptions: util.TextDecoderOptions = {
+      fatal: false,
+      ignoreBOM: true
+    };
+    let decodeToStringOptions: util.DecodeToStringOptions = {
+      stream: false
+    };
+    let textDecoder = util.TextDecoder.create('utf-8', textDecoderOptions);
+    let retStr = textDecoder.decodeToString(array, decodeToStringOptions);
+    return retStr;
   }
 }

@@ -1,0 +1,34 @@
+{
+  "UniformDataTypeDeclarations": [
+    {
+      "TypeId": "com.huawei.ohos_wine.sap",
+      "BelongingToTypes": [
+        "general.object"
+      ],
+      "FilenameExtensions": [
+        ".sap",
+      ],
+      "MIMETypes": [
+        "application/sap",
+      ],
+      "Description": "sap file.",
+      "ReferenceURL": ""
+    }
+  ],
+  "ReferenceUniformDataTypeDeclarations": [
+    {
+      "TypeId": "com.huawei.ohos_wine.sap",
+      "BelongingToTypes": [
+        "general.object"
+      ],
+      "FilenameExtensions": [
+        ".sap",
+      ],
+      "MIMETypes": [
+        "application/sap",
+      ],
+      "Description": "sap file.",
+      "ReferenceURL": ""
+    }
+  ]
+}

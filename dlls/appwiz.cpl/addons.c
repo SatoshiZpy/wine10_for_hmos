@@ -51,6 +51,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(appwizcpl);
 #elif defined(__x86_64__)
 #define GECKO_ARCH "x86_64"
 #define GECKO_SHA "e590b7d988a32d6aa4cf1d8aa3aa3d33766fdd4cf4c89c2dcc2095ecb28d066f"
+#elif defined(__aarch64__) && defined(__OHOS__)
+#define GECKO_ARCH "x86_64"
+#define GECKO_SHA "e590b7d988a32d6aa4cf1d8aa3aa3d33766fdd4cf4c89c2dcc2095ecb28d066f"
 #else
 #define GECKO_ARCH ""
 #define GECKO_SHA "???"
@@ -58,6 +61,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(appwizcpl);
 
 #define MONO_VERSION "10.1.0"
 #if defined(__i386__) || defined(__x86_64__)
+#define MONO_ARCH "x86"
+#define MONO_SHA "c88c2431890bc32cacec8d7ea70e53a5ae4b95c8c55ca6e75ef8db0e4ccf1070"
+#elif defined(__aarch64__) && defined(__OHOS__)
 #define MONO_ARCH "x86"
 #define MONO_SHA "c88c2431890bc32cacec8d7ea70e53a5ae4b95c8c55ca6e75ef8db0e4ccf1070"
 #else

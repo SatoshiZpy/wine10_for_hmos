@@ -38,7 +38,6 @@ export class WineAbilityStage extends AbilityStage {
 
   private runTaskAsync() {
     setTimeout(() => {
-      // see https://wiki.huawei.com/domains/21385/wiki/40123/WIKI202311072298113 section 2.1
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
       JsBindingUtils.initNativeContext(ContextType.kMainProcess);
       this.nativeContext = JsBindingUtils.getNativeContext(ContextType.kMainProcess);
