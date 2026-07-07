@@ -671,9 +671,15 @@ static HRESULT on_default_action(FileDialogImpl *This)
             {
                 if(newext)
                 {
+#ifdef __OHOS__
+                    /* Remove existing extension before adding the new one */
+                    PathRemoveExtensionW(canon_filename);
+                    lstrcatW(canon_filename, newext);
+#else
                     WCHAR *ext = PathFindExtensionW(canon_filename);
                     if(lstrcmpiW(ext, newext))
                         lstrcatW(canon_filename, newext);
+#endif /* __OHOS__ */
                 }
             }
             else
@@ -2306,8 +2312,13 @@ static LRESULT on_command_filetype(FileDialogImpl *This, WPARAM wparam, LPARAM l
             {
                 lstrcpyW(buf, filename);
 
+#ifdef __OHOS__
+                /* Always remove existing extension before adding the new one */
+                PathRemoveExtensionW(buf);
+#else
                 if(PathMatchSpecW(buf, This->filterspecs[prev_index].pszSpec))
                     PathRemoveExtensionW(buf);
+#endif /* __OHOS__ */
 
                 lstrcatW(buf, ext);
                 set_file_name(This, buf);
