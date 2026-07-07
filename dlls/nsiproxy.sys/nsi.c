@@ -28,6 +28,10 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <limits.h>
+#ifdef __OHOS__
+#include <pthread.h>
+#include <stdbool.h>
+#endif
 #ifdef HAVE_LINUX_RTNETLINK_H
 #include <linux/rtnetlink.h>
 #endif
@@ -52,6 +56,9 @@
 #include "wine/unixlib.h"
 #include "unix_private.h"
 #include "nsiproxy_private.h"
+#ifdef __OHOS__
+#include <network/netmanager/net_connection.h>
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(nsi);
 
@@ -160,7 +167,7 @@ static NTSTATUS unix_nsi_get_parameter_ex( void *args )
     return nsi_get_parameter_ex( params );
 }
 
-#if defined(HAVE_LINUX_RTNETLINK_H) || defined(__APPLE__)
+#if defined(HAVE_LINUX_RTNETLINK_H) || defined(__APPLE__) || defined(__OHOS__)
 static struct
 {
     const NPI_MODULEID *module;
@@ -186,7 +193,119 @@ static NTSTATUS add_notification( const NPI_MODULEID *module, UINT32 table )
     return STATUS_SUCCESS;
 }
 
-#if defined(HAVE_LINUX_RTNETLINK_H)
+#if defined(__OHOS__)
+
+static pthread_mutex_t ohos_netconn_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ohos_netconn_cond = PTHREAD_COND_INITIALIZER;
+static unsigned int ohos_netconn_change_count;
+static unsigned int ohos_netconn_callback_id;
+static BOOL ohos_netconn_registered;
+
+static NTSTATUS ohos_netconn_ntstatus( int error )
+{
+    switch (error)
+    {
+    case NETCONN_SUCCESS:
+        return STATUS_SUCCESS;
+    case NETCONN_PERMISSION_DENIED:
+        return STATUS_ACCESS_DENIED;
+    case NETCONN_PARAMETER_ERROR:
+        return STATUS_INVALID_PARAMETER;
+    default:
+        return STATUS_UNSUCCESSFUL;
+    }
+}
+
+static void ohos_netconn_signal_change( void )
+{
+    pthread_mutex_lock( &ohos_netconn_mutex );
+    if (ohos_netconn_change_count != UINT_MAX) ohos_netconn_change_count++;
+    pthread_cond_signal( &ohos_netconn_cond );
+    pthread_mutex_unlock( &ohos_netconn_mutex );
+}
+
+static void ohos_netconn_available( NetConn_NetHandle *net_handle )
+{
+    ohos_netconn_signal_change();
+}
+
+static void ohos_netconn_capabilities_changed( NetConn_NetHandle *net_handle,
+                                               NetConn_NetCapabilities *net_capabilities )
+{
+    ohos_netconn_signal_change();
+}
+
+static void ohos_netconn_properties_changed( NetConn_NetHandle *net_handle,
+                                             NetConn_ConnectionProperties *properties )
+{
+    ohos_netconn_signal_change();
+}
+
+static void ohos_netconn_lost( NetConn_NetHandle *net_handle )
+{
+    ohos_netconn_signal_change();
+}
+
+static void ohos_netconn_unavailable( void )
+{
+    ohos_netconn_signal_change();
+}
+
+static void ohos_netconn_block_status_changed( NetConn_NetHandle *net_handle, bool blocked )
+{
+    ohos_netconn_signal_change();
+}
+
+static NTSTATUS init_ohos_netconn_notifications( void )
+{
+    static NetConn_NetConnCallback netconn_callback =
+    {
+        ohos_netconn_available,
+        ohos_netconn_capabilities_changed,
+        ohos_netconn_properties_changed,
+        ohos_netconn_lost,
+        ohos_netconn_unavailable,
+        ohos_netconn_block_status_changed,
+    };
+    NTSTATUS status;
+    int ret;
+
+    if (ohos_netconn_registered) return STATUS_SUCCESS;
+
+    ret = OH_NetConn_RegisterDefaultNetConnCallback( &netconn_callback,
+                                                     &ohos_netconn_callback_id );
+    if ((status = ohos_netconn_ntstatus( ret )))
+    {
+        WARN( "OHOS network callback registration failed, error %d, status %#x.\n",
+              ret, status );
+        return status;
+    }
+
+    ohos_netconn_registered = TRUE;
+    TRACE( "registered OHOS default network callback.\n" );
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS poll_events( void )
+{
+    NTSTATUS status;
+
+    if ((status = init_ohos_netconn_notifications())) return status;
+
+    pthread_mutex_lock( &ohos_netconn_mutex );
+    while (!ohos_netconn_change_count)
+        pthread_cond_wait( &ohos_netconn_cond, &ohos_netconn_mutex );
+    ohos_netconn_change_count--;
+    pthread_mutex_unlock( &ohos_netconn_mutex );
+
+    /* OHOS default network callbacks do not identify the changed NSI address
+     * family, so refresh both unicast address tables. */
+    if ((status = add_notification( &NPI_MS_IPV4_MODULEID, NSI_IP_UNICAST_TABLE ))) return status;
+    if ((status = add_notification( &NPI_MS_IPV6_MODULEID, NSI_IP_UNICAST_TABLE ))) return status;
+    return STATUS_SUCCESS;
+}
+
+#elif defined(HAVE_LINUX_RTNETLINK_H)
 static NTSTATUS poll_events(void)
 {
     static int netlink_fd = -1;

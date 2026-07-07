@@ -11,8 +11,8 @@ SystemSettingsAdapter& SystemSettingsAdapter::GetInstance() {
   return instance;
 }
 
-void SystemSettingsAdapter::ShowSystemsSettings(const std::string& uri,
-                                                const std::string& sub_uri) {
+void SystemSettingsAdapter::ShowSystemSettings(const std::string& uri,
+                                               const std::string& sub_uri) {
   if (auto func =
       ohos::adapter::GetJSFunction("NetConnection.ShowSystemSettings")) {
     if (sub_uri.empty()) {

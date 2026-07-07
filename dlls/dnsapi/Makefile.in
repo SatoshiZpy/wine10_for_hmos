@@ -2,12 +2,13 @@ MODULE    = dnsapi.dll
 UNIXLIB   = dnsapi.so
 IMPORTLIB = dnsapi
 DELAYIMPORTS = netapi32
-UNIX_LIBS    = $(RESOLV_LIBS)
+UNIX_LIBS    = $(RESOLV_LIBS) $(OHOS_NETCONN_LIBS)
 
 SOURCES = \
 	libresolv.c \
 	main.c \
 	name.c \
+	ohos_netconn.c \
 	query.c \
 	record.c \
 	version.rc

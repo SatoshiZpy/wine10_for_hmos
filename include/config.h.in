@@ -833,6 +833,9 @@
 /* Define to 1 to enable GNU extensions on Linux */
 #undef _GNU_SOURCE
 
+/* Define to 1 for OpenHarmony systems. */
+#undef __OHOS__
+
 /* Define to 1 on platforms where this makes off_t a 64-bit type. */
 #undef _LARGE_FILES
 

@@ -6,8 +6,6 @@ import("//build/config/ohos/config.gni")
 
 component("net") {
   sources = [
-    "connection_adapter.cc",
-    "connection_adapter.h",
     "system_settings_adapter.cc",
     "system_settings_adapter.h"
   ]
