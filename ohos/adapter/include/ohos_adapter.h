@@ -7,7 +7,6 @@
 
 #include <stdarg.h>
 
-#include <native_buffer/native_buffer.h>
 #include <native_window/external_window.h>
 #include <native_window/graphic_error_code.h>
 
