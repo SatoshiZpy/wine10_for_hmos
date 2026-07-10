@@ -12,18 +12,12 @@ import { MultiInputAdapter } from '../adapter/MultiInputAdapter';
 import { typeNode as TypedNode, NodeController, FrameNode } from '@ohos.arkui.node';
 import { DragParamManager } from '../common/DragParamManager';
 import { window } from '@kit.ArkUI';
-import fs from '@ohos.file.fs';
 import { NativeThemeAdapter } from '../adapter/NativeThemeAdapter';
-import lazy { PresetDeployerAdapter } from '../adapter/PresetDeployerAdapter';
-import CheckEmptyUtils from '../utils/CheckEmptyUtils';
 
 interface ComponentConfig {
   moduleName: string,
   widgetId: number,
-  uri: string,
   nativeContext: NativeContext,
-  exePath: string,
-  args: string,
   window?: window.Window,
   bgColor?: Color | string
 }
@@ -46,7 +40,6 @@ class WindowNodeController extends NodeController {
   private xcController: XComponentController = new WindowXComponentController();
   private xComponent: TypedNode.XComponent | undefined = undefined;
   private config: ComponentConfig;
-  private presetDeployer = Inject.get(PresetDeployerAdapter);
 
   constructor(config: ComponentConfig) {
     super();
@@ -87,10 +80,6 @@ class WindowNodeController extends NodeController {
         if (this.config.widgetId === ConfigData.DEFAULT_WIDGET_ID) {
           this.setDefaultBounds();
         }
-
-        this.loadWine().catch((err: Object) => {
-          LogUtil.error(TAG, `loadWine failed: ${JSON.stringify(err)}`);
-        });
 
         setTimeout(() => {
           this.config.bgColor = Color.White;
@@ -138,135 +127,14 @@ class WindowNodeController extends NodeController {
       this.config.nativeContext.OnWindowInitSize(windowRect, drawableRect);
     }
   }
-
-  private buildArgs(): string[] {
-    let default_uri = '';
-    if (this.config.uri.length !== 0) {
-      default_uri = this.config.uri;
-    }
-    let resDir = '--bundle-installation-dir=' + getContext().resourceDir;
-    let vec_args = [resDir, default_uri];
-    return vec_args;
-  }
-
-  private async loadWine(): Promise<void> {
-    const hostContext = this.config.window?.getUIContext().getHostContext();
-    if (!hostContext) {
-      LogUtil.error(TAG, 'hostContext is undefined');
-      return;
-    }
-
-    const bundleDir = hostContext.bundleCodeDir ?? '';
-    const resDir = hostContext.resourceDir ?? '';
-    const dataDir = hostContext.filesDir ?? '';
-    const cacheDir = hostContext.cacheDir ?? '';
-    const preferenceDir = hostContext.preferencesDir ?? '';
-
-    if (!bundleDir || !resDir || !dataDir || !cacheDir || !preferenceDir) {
-      LogUtil.error(TAG, `invalid path, bundleDir=${bundleDir}, resDir=${resDir}, dataDir=${dataDir},
-        cacheDir=${cacheDir}, preferenceDir=${preferenceDir}`);
-      return;
-    }
-
-    const binDir = `${resDir}/bin`;
-    const libDir = `${resDir}/lib`;
-    const dllDir = `${libDir}/wine`;
-    const loader = `${bundleDir}/libs/arm64/libwine.so`;
-
-    const prefixDir = `${dataDir}/prefix`;
-    const logPath = `${dataDir}/log.txt`;
-
-    this.ensureDir(prefixDir);
-    this.ensureFile(logPath);
-
-    await this.deployPreset(prefixDir);
-
-    const environ = new Map<string, string>();
-    this.setEnv(environ, 'WINERESPATH', resDir);
-
-    this.setEnv(environ, 'XDG_DATA_HOME', dataDir);
-    this.setEnv(environ, 'XDG_CACHE_HOME', cacheDir);
-    this.setEnv(environ, 'XDG_CONFIG_HOME', preferenceDir);
-
-    this.setEnv(environ, 'WINELOADER', loader);
-    this.setEnv(environ, 'WINEDLLPATH', dllDir);
-    this.setEnv(environ, 'WINEPREFIX', prefixDir);
-
-    let wineDebug = '';
-    this.setEnv(environ, 'WINEDEBUG', wineDebug);
-    this.setEnv(environ, 'WINEDEBUGLOG', logPath);
-
-    const config = hostContext.resourceManager.getConfigurationSync();
-    const locale = config?.locale;
-    this.setEnv(environ, 'LC_ALL', locale);
-    this.setEnv(environ, 'LANG', locale);
-
-    const env: string[] = [];
-    environ.forEach((value, key) => {
-      env.push(key, value);
-    });
-
-    let exePath = CheckEmptyUtils.checkStrIsEmpty(this.config.exePath) ?
-      'c:\\windows\\system32\\notepad.exe' : this.config.exePath;
-    const cmd: string[] = [
-      loader,
-      exePath
-    ];
-
-    LogUtil.debug(TAG, `exePath=${exePath}, env=${env.toString()}, loader=${loader},
-      prefixDir=${prefixDir}, logPath=${logPath}`);
-
-    this.config.nativeContext.runWine(cmd, env);
-  }
-
-  private async deployPreset(prefixDir: string): Promise<void> {
-    try {
-      await this.presetDeployer.deployIfNeeded(prefixDir);
-    } catch (err) {
-      LogUtil.error(TAG, `deployPreset failed: ${JSON.stringify(err)}`);
-    }
-  }
-
-  private setEnv(environ: Map<string, string>, key: string, value?: string): void {
-    if (value && value.trim().length > 0) {
-      environ.set(key, value);
-    }
-  }
-
-  private ensureDir(path: string): void {
-    try {
-      const exists = fs.accessSync(path);
-      if (!exists) {
-        fs.mkdirSync(path);
-      }
-    } catch (err) {
-      LogUtil.error(TAG, `ensureDir failed: ${path}, err=${JSON.stringify(err)}`);
-    }
-  }
-
-  private ensureFile(path: string): void {
-    try {
-      const exists = fs.accessSync(path);
-      if (!exists) {
-        const file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE);
-        const randomAccessFile = fs.createRandomAccessFileSync(file);
-        randomAccessFile.close();
-      }
-    } catch (err) {
-      LogUtil.error(TAG, `ensureFile failed: ${path}, err=${JSON.stringify(err)}`);
-    }
-  }
 }
 
 @Component
 export struct WineWindowNode {
   @LocalStorageLink('widgetId') widgetId: number = -1;
-  @LocalStorageLink('startUri') startUri: string = '';
   @LocalStorageLink('window') window: window.Window | undefined = undefined;
   @LocalStorageLink('useDarkMode') useDarkMode: boolean = false;
   @LocalStorageLink('ownerPid') ownerPid: number = -1;
-  @LocalStorageLink('wineExePath') exePath: string = '';
-  @LocalStorageLink('wineArgs') args: string = '';
   private XCOMPONENT_NAME: string = 'xcomponent';
   private MODULE_NAME: string = this.widgetId + ':' + this.XCOMPONENT_NAME + ':' + this.ownerPid;
   private dragDropAdapter: DragDropAdapter = Inject.get(DragDropAdapter);
@@ -280,10 +148,7 @@ export struct WineWindowNode {
     new WindowNodeController({
       moduleName: this.MODULE_NAME,
       widgetId: this.widgetId,
-      uri: this.startUri,
       nativeContext: this.nativeContext,
-      exePath: this.exePath,
-      args: this.args,
       window: this.window,
       bgColor: this.bgColor
     });

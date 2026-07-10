@@ -65,6 +65,18 @@
         "launchType": "specified",
         "removeMissionAfterTerminate": true,
         "exported": true,
+      },
+      {
+        "name": "IsolateProcessAbility",
+        "srcEntry": "./ets/entryability/IsolateProcessAbility.ets",
+        "description": "$string:IsolateProcessAbility_desc",
+        "icon": "$media:app_icon",
+        "label": "$string:IsolateProcessAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "launchType": "specified",
+        "isolationProcess": true
       }
     ],
     "extensionAbilities": [

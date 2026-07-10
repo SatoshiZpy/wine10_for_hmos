@@ -7,10 +7,11 @@ import window from '@ohos.window';
 import Want from '@ohos.app.ability.Want';
 import JsBindingUtils from '../utils/JsBindingUtils';
 import { NativeContext, WindowStyles } from '../interface/CommonInterface';
-import { CommandType, ConfigData, ContextType } from '../common/Constants';
+import { CommandType, ContextType } from '../common/Constants';
 import { WineProxy, dwStyles } from '../interface/WineProxy';
 import { common, EmbeddedUIExtensionAbility, UIExtensionContentSession } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { fileUri } from '@kit.CoreFileKit';
 
 const TAG: string = 'WineBaseExtensionAbility';
 
@@ -25,6 +26,9 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
     JsBindingUtils.getNativeContext(ContextType.kMainProcess);
   protected hideTitleBar: boolean = true;
   protected ownerPid: number = -1;
+  protected exePath: string = '';
+  protected args: string = '';
+  protected sockPath: string = '';
 
   private initParameters(want: Want) {
     if (want.parameters) {
@@ -43,12 +47,21 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
       if (want.parameters["ownerPid"] !== undefined) {
         this.ownerPid = want.parameters['ownerPid'] as number;
       }
+      if (want.parameters['wineExePath'] !== undefined) {
+        this.exePath = want.parameters['wineExePath'] as string;
+      }
+      if (want.parameters['wineArgs'] !== undefined) {
+        this.args = want.parameters['wineArgs'] as string;
+      }
+      if (want.parameters['sockPath'] !== undefined) {
+        this.sockPath = want.parameters['sockPath'] as string;
+      }
     }
 
     if (want.uri) {
       let storePath = want.uri as string;
-      // convert storage path to uri
-      this.startUri = storePath.replace("file://docs/", "file:///");
+      const fileUriObj = new fileUri.FileUri(storePath);
+      this.startUri = fileUriObj.path;
     }
   }
 
@@ -56,11 +69,10 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
     this.initParameters(want);
 
     if (this.widgetId <= 0) {
-      LogUtil.info(TAG, 'onCreate, Allocate widgetId');
-      this.widgetId = ConfigData.DEFAULT_WIDGET_ID;
+      this.widgetId = this.nativeContext.ExecuteCommand(CommandType.kGetWidget, {}).widget_Id;
       this.ownerPid = this.nativeContext.ExecuteCommand(CommandType.kGetPid, {}).pid;
-      LogUtil.info(TAG, 'onCreate, Allocate widgetId:' + this.widgetId + ',ownerPid:' + this.ownerPid);
     }
+    LogUtil.info(TAG, `widgetId:${this.widgetId}, ownerPid:${this.ownerPid}, startUri:${this.startUri}`);
 
     this.session = session;
   }
@@ -103,7 +115,8 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
       const windowProxy = this.session.getUIExtensionWindowProxy();
       const subWindowOpts: window.SubWindowOptions = {
         title: 'This is a subwindow',
-        decorEnabled: false
+        decorEnabled: false,
+        zLevelAboveParentLoosened: true
       };
       windowProxy?.createSubWindowWithOptions(name, subWindowOpts)
         .then((data: window.Window) => {

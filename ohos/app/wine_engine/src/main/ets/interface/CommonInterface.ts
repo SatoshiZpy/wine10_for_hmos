@@ -56,6 +56,7 @@ export interface NativeContext {
   runWine: (vec_args: string[], env: string[]) => void;
   Destroyed: () => boolean;
   runOtherProcessType: (processType: number) => void;
+  runWineProcess: (env: string[], sock_path: string) => void;
   registerLifecycle: () => void;
   readImageFromReceiver: (receiver: image.ImageReceiver) => image.Image;
   JSBind: JSBind;
@@ -309,6 +310,8 @@ export class WindowStyles {
 }
 
 export interface NewWindowParam {
+  process_key: string,
+  window_type: number,
   ability_type: AbilityType,
   parent_id: number
   widget_id: number,

@@ -16,7 +16,7 @@ namespace ohos::adapter::window {
 
 // static
 std::shared_ptr<WineWindow> WineWindow::Create(
-    const ipc::WindowParam& param,
+    const NewWindowParam& param,
     int* widget_id)
 {
   LOGI("WineWindow::Create, type is %{public}d", param.window_type);
@@ -35,7 +35,7 @@ std::shared_ptr<WineWindow> WineWindow::Create(
       }
       break;
     case WindowInitType::kWindow: {
-      bool use_floating_window = has_feature(WindowFeatures::USE_FLOATING_WINDOW, param.features);
+      bool use_floating_window = has_feature(WindowFeatures::USE_FLOATING_WINDOW, param.feature_mask);
       if (!use_floating_window) {
         window = std::make_shared<WineToplevelWindow>();
       } else {
@@ -47,10 +47,10 @@ std::shared_ptr<WineWindow> WineWindow::Create(
       LOGE("unsupported window type %{public}d", param.window_type);
       return nullptr;
   }
-  if (!window->Initialize(std::move(param))) {
+  if (!window->Initialize(param)) {
     LOGE("Failed to create window, type %{public}d", param.window_type);
     return nullptr;
-  } 
+  }
   *widget_id = window->GetWidget();
   WineWindowManager::GetInstance().AddWindow(*widget_id, window);
   return window;

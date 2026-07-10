@@ -148,7 +148,7 @@ static void fatal_error(const char* err, ...) {
     ERR("wine fatal_error: %s", buffer);
     free(buffer);
 
-    exit(1);
+    KillNativeProcess(1);
 }
 #else
 static void fatal_error( const char *err, ... )
@@ -185,7 +185,7 @@ static void fatal_perror( const char *err, ... )
     ERR("wine fatal_perror: %s", buffer);
     free(buffer);
 
-    exit(1);
+    KillNativeProcess(1);
 }
 #else
 static void fatal_perror( const char *err, ... )
@@ -1645,7 +1645,7 @@ void process_exit_wrapper( int status )
 {
     close( fd_socket );
 #ifdef __OHOS__
-    KillNativeProcess(status, 0);
+    KillNativeProcess(status);
 #else
     exit( status );
 #endif

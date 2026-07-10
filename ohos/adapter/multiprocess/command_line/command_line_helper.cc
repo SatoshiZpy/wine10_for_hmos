@@ -4,8 +4,11 @@
 
 #include "command_line_helper.h"
 
+#include <fcntl.h>
 #include <unistd.h>
 #include <sstream>
+
+#include "ohos/adapter/common/constants.h"
 #include "ohos/adapter/common/logging.h"
 
 namespace ohos::adapter::multiprocess {
@@ -15,9 +18,10 @@ const std::string kEnvCommand = "--env=";
 const std::string kEnvSeparator = ";";
 const std::string kFdSeparator = ",";
 
-static std::vector<std::string> wrapp_args_ = {};
-static std::vector<std::string> wrapp_env_ = {};
-static std::string env_string_ = "";
+static std::vector<std::string> command_line_ = {};
+static std::string env_line_ = "";
+static std::string process_name_ = "";
+static int g_process_type_ = -1;
 static int32_t g_pid_ = -1;
 
 std::string CommandLineHelper::BuildCommands(
@@ -39,8 +43,8 @@ std::string CommandLineHelper::BuildCommands(
     }
     argv_ss << extra_commands[extra_commands.size() - 1];
   }
-  if (!env_string_.empty()) {
-    argv_ss << kCommandSeparator << env_string_;
+  if (!env_line_.empty()) {
+    argv_ss << kCommandSeparator << env_line_;
   }
 
   return argv_ss.str();
@@ -87,11 +91,36 @@ std::string CommandLineHelper::BuildSharedFDCommand(
   return shared_fd_command;
 }
 
-void CommandLineHelper::WrapCommands(const std::vector<std::string>& args,
+void CommandLineHelper::SetCommandLine(int process_type,
+  const std::vector<std::string>& args,
   const std::vector<std::string>& env) {
-    wrapp_args_ = args;
-    wrapp_env_ = env;
+    command_line_ = args;
+    g_process_type_ = process_type;
     g_pid_ = getpid();
+
+    std::string full_name;
+    int fd = open("/proc/self/cmdline", O_RDONLY);
+    if (fd >= 0) {
+        char buf[256] = {};
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) { full_name = buf; }
+    }
+    size_t colon_pos = full_name.rfind(':');
+    if (colon_pos != std::string::npos) {
+        process_name_ = full_name.substr(colon_pos + 1);
+    } else {
+        process_name_ = "";
+    }
+    LOGI("SetCommandLine process_name: %{public}s, full_name: %{public}s",
+         process_name_.c_str(), full_name.c_str());
+
+    for (size_t i = 0; i < args.size(); i++) {
+      LOGI("SetCommandLine arg[%{public}zu]: %{public}s", i, args[i].c_str());
+    }
+    for (size_t i = 0; i < env.size(); i++) {
+      LOGI("SetCommandLine env[%{public}zu]: %{public}s", i, env[i].c_str());
+    }
 
     if (!env.empty()) {
       std::string env_command = kEnvCommand;
@@ -101,20 +130,27 @@ void CommandLineHelper::WrapCommands(const std::vector<std::string>& args,
       if (!env_command.empty()) {
         env_command.pop_back();
       }
-      env_string_ = env_command;
+      env_line_ = env_command;
     }
-    LOGD("WrapCommands env value: %{public}s", env_string_.c_str());
 }
 
 std::string CommandLineHelper::GetEnvString() {
-  return env_string_;
+  return env_line_;
 }
 
 bool CommandLineHelper::IsMainProcess() {
-  return g_pid_ > 0;
+  return g_pid_ > 0 && g_process_type_ == ProcessType::kMainProcess;
 }
 
 int32_t CommandLineHelper::GetMainProcessId() {
   return g_pid_;
+}
+
+std::string CommandLineHelper::GetProcessName() {
+  return process_name_;
+}
+
+int CommandLineHelper::GetProcessType() {
+  return g_process_type_;
 }
 }  // namespace ohos::adapter::multiprocess

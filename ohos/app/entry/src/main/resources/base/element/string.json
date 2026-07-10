@@ -31,6 +31,14 @@
     {
       "name": "StatusBarEntryAbility_desc",
       "value": "Application status bar"
+    },
+    {
+      "name": "IsolateProcessAbility_desc",
+      "value": "IsolateProcessAbility"
+    },
+    {
+      "name": "IsolateProcessAbility_label",
+      "value": "IsolateProcessAbility"
     }
   ]
 }

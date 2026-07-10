@@ -5,67 +5,47 @@
 #include "ohos/adapter/window/wine_window.h"
 
 #include "ohos/adapter/common/logging.h"
-#include "ohos/adapter/multiprocess/child_process/child_process_helper.h"
 #include "ohos/adapter/window/window_common.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
 #include "ohos/adapter/xcomponent/xcomponent_utils.h"
 
 namespace ohos::adapter::window {
 
-using namespace ohos::adapter::multiprocess;
 using namespace ohos::adapter::xcomponent;
 
-WineWindow::WineWindow()
-{
-  widget_ = WindowAdapter::GetInstance().NextWindowWidgetId();
-  window_unique_id_ = XComponentUtils::ConvertWidgetIdToWindowId(widget_);
-}
+WineWindow::WineWindow() {}
 
 WineWindow::~WineWindow() {}
 
-WindowStyle WineWindow::BuilderStyle(const ipc::WindowParam& param) {
+WindowStyle WineWindow::BuilderStyle(const NewWindowParam& param) {
   WindowStyle styles;
-  bool has_title_bar = has_feature(WindowFeatures::WINDOW_TITLE_BAR, param.features);
+  bool has_title_bar = has_feature(WindowFeatures::WINDOW_TITLE_BAR, param.feature_mask);
   styles.hide_title_bar = !has_title_bar;
-  styles.close_button = has_title_bar && has_feature(WindowFeatures::WINDOW_CLOSE_BUTTON, param.features);
-  styles.minimize_button = has_title_bar && has_feature(WindowFeatures::WINDOW_MINIMIZE_BUTTON, param.features);
-  styles.maximize_button = has_title_bar && has_feature(WindowFeatures::WINDOW_MAXIMIZE_BUTTON, param.features);
-  styles.use_floating_window = has_feature(WindowFeatures::USE_FLOATING_WINDOW, param.features);
-  styles.use_dark_mode = has_feature(WindowFeatures::USE_DARK_MODE, param.features);
-  styles.always_on_top = is_state(WindowState::WINDOW_TOP_MOST, param.window_state);
+  styles.close_button = has_title_bar && has_feature(WindowFeatures::WINDOW_CLOSE_BUTTON, param.feature_mask);
+  styles.minimize_button = has_title_bar && has_feature(WindowFeatures::WINDOW_MINIMIZE_BUTTON, param.feature_mask);
+  styles.maximize_button = has_title_bar && has_feature(WindowFeatures::WINDOW_MAXIMIZE_BUTTON, param.feature_mask);
+  styles.use_floating_window = has_feature(WindowFeatures::USE_FLOATING_WINDOW, param.feature_mask);
+  styles.use_dark_mode = has_feature(WindowFeatures::USE_DARK_MODE, param.feature_mask);
+  styles.always_on_top = is_state(WindowState::WINDOW_TOP_MOST, param.window_state_mask);
 
-  bool is_enable = !is_state(WindowState::WINDOW_DISABLED, param.window_state);
-  styles.resizable = is_enable && has_feature(WindowFeatures::WINDOW_RESIZABLE, param.features);
-  styles.focusable = is_enable && !has_feature(WindowFeatures::WINDOW_NO_ACTIVATION, param.features);
-  styles.touchable = is_enable && has_feature(WindowFeatures::WINDOW_TOUCHABLE, param.features);
-  styles.show_window = is_state(WindowState::WINDOW_VISIBLE, param.window_state);
+  bool is_enable = !is_state(WindowState::WINDOW_DISABLED, param.window_state_mask);
+  styles.resizable = is_enable && has_feature(WindowFeatures::WINDOW_RESIZABLE, param.feature_mask);
+  styles.focusable = is_enable && !has_feature(WindowFeatures::WINDOW_NO_ACTIVATION, param.feature_mask);
+  styles.touchable = is_enable && has_feature(WindowFeatures::WINDOW_TOUCHABLE, param.feature_mask);
+  styles.show_window = is_state(WindowState::WINDOW_VISIBLE, param.window_state_mask);
   return styles;
 }
 
-NewWindowParam WineWindow::BuilderParam(const ipc::WindowParam& param) {
-  NewWindowParam newParam;
-  newParam.ability_type = (AbilityType)param.ability_type;
-  newParam.parent_id = param.parent_id;
-  newParam.widget_id = GetWidget();
-  newParam.bounds = {param.left,
-                     param.top,
-                     param.width,
-                     param.height};
-  newParam.feature_mask = param.features;
-  newParam.window_state_mask = param.window_state;
-  newParam.hwnd = param.hwnd;
-  newParam.owner_pid = param.owner_pid;
-  return newParam;
-}
-
-bool WineWindow::Initialize(const ipc::WindowParam& param)
+bool WineWindow::Initialize(const NewWindowParam& param)
 {
+  widget_ = param.widget_id;
+  window_unique_id_ = XComponentUtils::ConvertWidgetIdToWindowId(widget_);
   type_ = (WindowInitType)param.window_type;
-  features_ = param.features;
-  window_state_ = param.window_state;
+  features_ = param.feature_mask;
+  window_state_ = param.window_state_mask;
   hwnd_ = param.hwnd;
   owner_pid_ = param.owner_pid;
-  newParam_ = BuilderParam(param);
+  newParam_ = param;
 
   OnInitialize(param);
 
@@ -105,6 +85,7 @@ void WineWindow::SetWidget(int32_t new_widget)
     return;
   }
 
+  LOGI("widget id changed: %{public}d --> %{public}d", widget_, new_widget);
   widget_ = new_widget;
   window_unique_id_ = XComponentUtils::ConvertWidgetIdToWindowId(new_widget);
 }
@@ -134,10 +115,7 @@ bool WineWindow::IsVisible() const
 
 void WineWindow::SetTitle(const std::string& title) {}
 
-void WineWindow::SetBounds(const WindowRect& rect)
-{
-  ChildProcessHelper::SetWindowBounds(GetWidget(), rect);
-}
+void WineWindow::SetBounds(const WindowRect& rect) {}
 
 void WineWindow::SetFullscreen(bool fullscreen, int64_t target_display_id) {}
 

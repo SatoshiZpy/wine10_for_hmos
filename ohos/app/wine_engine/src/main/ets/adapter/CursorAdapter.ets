@@ -61,7 +61,7 @@ export class CursorAdapter extends BaseAdapter {
       try {
         let displayClass: display.Display = display.getDefaultDisplaySync();
         let density: number = displayClass.densityPixels;
-        // densityPixels==1 on 96 DPI baseline; <1.05 → no perceptible gain.
+        // densityPixels==1 on 96 DPI baseline; <1.05 no perceptible gain.
         this.cachedCursorScale = density > 1.05 ? density : 1.0;
       } catch (error) {
         LogUtil.error(TAG, "Failed to read densityPixels, fallback scale=1.0. Cause: " + JSON.stringify(error));

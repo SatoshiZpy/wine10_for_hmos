@@ -309,6 +309,7 @@ static void init_event_queue(void)
     }
     NtClose( handle );
     desktop_tid = GetCurrentThreadId();
+    TRACE( "desktop_tid: %x, event_pipe(%d,%d)\n", desktop_tid, event_pipe[0], event_pipe[1] );
 }
 
 
@@ -1039,7 +1040,7 @@ BOOL OHOS_CreateWindow( HWND hwnd )
         release_win_data( data );
     }
 
-    if ((event_pipe[0] == 0 || event_pipe[1] == 0) && IsMainProcess()) {
+    if ((event_pipe[0] == 0 || event_pipe[1] == 0)) {
         init_event_queue();
     }
     return TRUE;

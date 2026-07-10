@@ -13,7 +13,7 @@ export default class TaskManagerAbility extends WineAbility {
   onConfigurationUpdate(config: Configuration) {
     super.onConfigurationUpdate(config);
   }
- 
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam) {
     super.onCreate(want, launchParam);
   }

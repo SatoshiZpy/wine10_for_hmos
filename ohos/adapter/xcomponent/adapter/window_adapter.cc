@@ -220,6 +220,12 @@ bool WindowAdapter::WindowHasInit(int32_t widget_id)
     return false;
 }
 
+bool WindowAdapter::IsEmpty()
+{
+    MutexLock lock_protect(windows_mutex_);
+    return windows_.empty();
+}
+
 void WindowAdapter::SetSystemWindowLimits(WindowLimits window_limits)
 {
     system_window_limits_ = window_limits;

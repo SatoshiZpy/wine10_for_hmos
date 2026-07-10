@@ -15,8 +15,13 @@ function setActiveWindow(id: number) {
   implContextAdapter().setActiveWindow(id);
 }
 
+function getActiveWindow(): number {
+  return implContextAdapter().getActiveWindow();
+}
+
 export class ContextAdapterBind {
   static bind() {
     JsBindingUtils.bindFunction("ContextAdapter.SetActiveWindow", setActiveWindow);
+    JsBindingUtils.bindFunction("ContextAdapter.GetActiveWindow", getActiveWindow);
   }
 }

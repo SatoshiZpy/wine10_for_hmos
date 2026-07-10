@@ -8,6 +8,7 @@ export class ConfigData {
   static WINDOW_PREFIX: string = 'surface';
   static DEFAULT_WINDOW_ID: string = 'surface1';
   static DEFAULT_WIDGET_ID: number = 1;
+  static DEFAULT_PROCESS_ID: string = 'process1';
 }
 let configData = new ConfigData();
 export default configData as ConfigData;

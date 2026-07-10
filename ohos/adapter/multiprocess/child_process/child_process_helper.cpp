@@ -139,13 +139,13 @@ int ChildProcessHelper::KillProcess(int32_t pid)
     return 0;
 }
 
-int ChildProcessHelper::CreateWindow(const ipc::WindowParam& param)
+int ChildProcessHelper::CreateWindow(const NewWindowParam& param)
 {
     LOGI("CreateWindow type: %{public}d, rect: (%{public}d,%{public}d,%{public}d,%{public}d)",
-        param.window_type, param.left, param.top, param.width, param.height);
+        param.window_type, param.bounds.left, param.bounds.top, param.bounds.width, param.bounds.height);
 
     int widget_id = -1;
-    auto window = WineWindow::Create(std::move(param), &widget_id);
+    auto window = WineWindow::Create(param, &widget_id);
     if (!window) {
         LOGE("create window error");
         return -1;
@@ -154,7 +154,7 @@ int ChildProcessHelper::CreateWindow(const ipc::WindowParam& param)
     return widget_id;
 }
 
-int ChildProcessHelper::UpdateWindow(int32_t widget_id, const ipc::WindowParam& param)
+int ChildProcessHelper::UpdateWindow(int32_t widget_id, const NewWindowParam& param)
 {
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {

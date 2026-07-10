@@ -14,12 +14,10 @@
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/drag_drop/drag_drop_ohos_adapter.h"
 #include "ohos/adapter/event/event_manager.h"
-#include "ohos/adapter/multiprocess/child_process/child_process_host.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
 
 namespace ohos::adapter::event {
 
-using namespace ohos::adapter::multiprocess;
 using namespace ohos::adapter::xcomponent;
 
 void ConvertToInputEventUnion(input_event& event,
@@ -288,12 +286,7 @@ void InputEventDispatcher::ExecuteCallback(const input_event& event)
         LOGE("not found owner_pid, widget_id: %{public}d", event.widget_id);
         return;
     }
-    bool need_process = (owner_pid == pid_);
-    if (need_process) {
-        Dispatch(event);
-    } else {
-        ChildProcessHost::Instance().SendInputEvent(owner_pid, event);
-    }
+    Dispatch(event);
 }
 
 }  // namespace ohos::adapter::event

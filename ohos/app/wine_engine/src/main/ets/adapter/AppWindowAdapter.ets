@@ -94,7 +94,7 @@ export class AppWindowAdapter extends BaseAdapter {
         'widgetId': param.widget_id,
         'features': param.feature_mask,
         'window_state': param.window_state_mask,
-        instanceKey: param.widget_id,
+        'instanceKey': `${param.process_key}:${param.widget_id}`,
         'ownerPid': param.owner_pid,
       }
     };

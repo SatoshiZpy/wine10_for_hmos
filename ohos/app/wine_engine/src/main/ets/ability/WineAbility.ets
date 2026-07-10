@@ -19,17 +19,16 @@ import { deviceInfo, emitter, settings } from '@kit.BasicServicesKit';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { DeviceInfoAdapter } from '../adapter/DeviceInfoAdapter';
 import lazy { StatusBarCallback, TrayManager } from '../common/TrayManager';
+import { WineLoaderAdapter } from '../adapter/WineLoaderAdapter';
 
 const TAG: string = 'WineAbility';
 
 export class WineAbility extends WineBaseAbility {
-  private static WINDOW_CLOSE: number = 1000;
-  private static SLEEP_INTERVAL_MS = 10;
-  private static MAXIMUM_NUM_OF_SLEEP_CYCLES = 250;
   private abilityManager: AbilityManager | undefined = undefined;
   private displayAdapter : DisplayAdapter | undefined = undefined;
   private nativeThemeAdapter: NativeThemeAdapter | undefined = undefined;
   private deviceInfoAdapter: DeviceInfoAdapter | undefined = undefined;
+  private wineLoader: WineLoaderAdapter | undefined = undefined;
   private callback: StatusBarCallback = {
     iconClick: (data: emitter.EventData) => {},
     rightMenuClick: (data: emitter.EventData) => {},
@@ -49,6 +48,7 @@ export class WineAbility extends WineBaseAbility {
     Inject.get(PermissionManagerAdapter).initPermissions();
     this.deviceInfoAdapter = Inject.get(DeviceInfoAdapter);
     Inject.get(TrayManager).addToStatusBar(this.context, this.callback);
+    this.wineLoader = Inject.get(WineLoaderAdapter);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage) {
@@ -144,12 +144,9 @@ export class WineAbility extends WineBaseAbility {
 
     const para: Record<string, Object> = {
       'widgetId': this.widgetId,
-      'startUri': this.startUri,
       'window': windowStage.getMainWindowSync(),
       'useDarkMode': this.needDarkMode(),
       'ownerPid': this.ownerPid,
-      'wineExePath': this.exePath,
-      'wineArgs': this.args,
     };
     let storage: LocalStorage = new LocalStorage(para);
     windowStage.loadContent(this.getContentPath(), storage, (err, data) => {
@@ -204,6 +201,11 @@ export class WineAbility extends WineBaseAbility {
       } catch (exception) {
         LogUtil.error(TAG, 'Failed to get window limits or get ui context:' + JSON.stringify(exception));
       }
+
+      this.wineLoader?.loadWine(this.exePath, this.sockPath, this.startUri)
+        .catch((err: Object) => {
+          LogUtil.error(TAG, `loadWine failed: ${JSON.stringify(err)}`);
+        });
     });
   }
 
@@ -244,49 +246,15 @@ export class WineAbility extends WineBaseAbility {
     }
   }
 
-  onPrepareToTerminate(): boolean {
-    this.nativeContext.OnWindowEvent(this.widgetId, WineAbility.WINDOW_CLOSE);
-    return true;
-  }
-
   async onPrepareToTerminateAsync(): Promise<boolean> {
-    let response: CloseResponse = CloseResponse.kUndetermined;
-    this.nativeContext.OnWindowEvent(this.widgetId, WineAbility.WINDOW_CLOSE);
-    for (let i = 0; i < WineAbility.MAXIMUM_NUM_OF_SLEEP_CYCLES; i++) {
-      await this.sleep(WineAbility.SLEEP_INTERVAL_MS);
-      response = this.nativeContext.GetCloseResponse(this.widgetId);
-      if (response !== CloseResponse.kUndetermined) {
-        break;
-      }
-    }
-    if (response === CloseResponse.kClosingContinue || response === CloseResponse.kClosed) {
-      return false;
-    }
-    return true;
-  }
-
-  sleep(delay: number) {
-    return new Promise<void>((resolve) => setTimeout(resolve, delay));
+    LogUtil.info(TAG, 'onPrepareToTerminateAsync widgetId:' + this.widgetId +
+      ',processKey:' + this.processKey + ',ownerPid:' + this.ownerPid);
+    return false;
   }
 
   async onDestroy(): Promise<void> {
-    while (true) {
-      await this.sleep(WineAbility.SLEEP_INTERVAL_MS);
-      let response = this.nativeContext.GetCloseResponse(this.widgetId);
-      if (response === CloseResponse.kClosed || response === CloseResponse.kClosedAnyway) {
-        break;
-      }
-    }
-    if (this.abilityManager?.getProxyCount() === 0) {
-      while (true) {
-        await this.sleep(WineAbility.SLEEP_INTERVAL_MS);
-        let destroyed = this.nativeContext.Destroyed();
-        if (destroyed) {
-          break;
-        }
-      }
-    }
-    return;
+    LogUtil.info(TAG, 'onDestroy widgetId:' + this.widgetId +
+      ',processKey:' + this.processKey + ',ownerPid:' + this.ownerPid);
   }
 
   private checkSingleInstance(): boolean {

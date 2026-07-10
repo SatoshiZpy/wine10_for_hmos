@@ -36,8 +36,7 @@ void OnSurfaceCreatedCB(OH_NativeXComponent* component, void* window) {
   uint64_t height = 0;
   int32_t ret = OH_NativeXComponent_GetXComponentSize(component, window, &width, &height);
   if (ret != OH_NATIVEXCOMPONENT_RESULT_SUCCESS) {
-    LOGE("Get xcomponent surface size error:%{public}lu %{public}lu, widget_id:%{public}d",
-         width, height, info.widget_id);
+    LOGE("Get xcomponent size error:%{public}d, widget_id:%{public}d", ret, info.widget_id);
     return;
   }
   

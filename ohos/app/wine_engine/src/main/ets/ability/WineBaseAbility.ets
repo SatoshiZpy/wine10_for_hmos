@@ -9,12 +9,13 @@ import Want from '@ohos.app.ability.Want';
 import AbilityConstant from '@ohos.app.ability.AbilityConstant';
 import JsBindingUtils from '../utils/JsBindingUtils';
 import Inject from '../common/InjectModule';
-import { NativeContext, WindowStyles } from '../interface/CommonInterface';
-import { CommandType, ConfigData, ContextType } from '../common/Constants';
+import lazy { NativeContext, WindowStyles } from '../interface/CommonInterface';
+import { CommandType, ContextType } from '../common/Constants';
 import { WineProxy, dwStyles } from '../interface/WineProxy';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { deviceInfo, BusinessError } from '@kit.BasicServicesKit';
 import { WindowStyle } from '../common/WindowStyle';
+import { fileUri } from '@kit.CoreFileKit';
 
 const TAG: string = 'WineBaseAbility';
 
@@ -26,9 +27,11 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
     JsBindingUtils.getNativeContext(ContextType.kMainProcess);
   protected originWindowId: number = -1;
   protected styles: WindowStyles = dwStyles;
+  protected processKey: string = '';
   protected ownerPid: number = -1;
   protected exePath: string = '';
   protected args: string = '';
+  protected sockPath: string = '';
 
   private initParameters(want: Want) {
     if (want && want.parameters) {
@@ -41,6 +44,9 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
         let window_state = want.parameters['window_state'] as number;
         this.styles = Inject.get(WindowStyle).buildWindowStyles(features, window_state);
       }
+      if (want.parameters['processKey'] !== undefined) {
+        this.processKey = want.parameters['processKey'] as string;
+      }
       if (want.parameters['ownerPid'] !== undefined) {
         this.ownerPid = want.parameters['ownerPid'] as number;
       }
@@ -50,12 +56,15 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
       if (want.parameters['wineArgs'] !== undefined) {
         this.args = want.parameters['wineArgs'] as string;
       }
+      if (want.parameters['sockPath'] !== undefined) {
+        this.sockPath = want.parameters['sockPath'] as string;
+      }
     }
 
     if (want["uri"]) {
       let storePath = want['uri'] as string;
-      // convert storage path to uri
-      this.startUri = storePath.replace("file://docs/", "file:///");
+      const fileUriObj = new fileUri.FileUri(storePath);
+      this.startUri = fileUriObj.path;
     }
   }
 
@@ -107,15 +116,20 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
     this.initParameters(want);
 
     if (this.widgetId <= 0) {
-      this.widgetId = ConfigData.DEFAULT_WIDGET_ID;
+      this.widgetId = this.nativeContext.ExecuteCommand(CommandType.kGetWidget, {}).widget_Id;
       this.ownerPid = this.nativeContext.ExecuteCommand(CommandType.kGetPid, {}).pid;
     }
-    LogUtil.info(TAG, 'widgetId:' + this.widgetId + ',ownerPid:' + this.ownerPid + ',styles:' + JSON.stringify(this.styles));
+    LogUtil.info(TAG, `onCreate widgetId:${this.widgetId}, ownerPid:${this.ownerPid},
+      styles:${JSON.stringify(this.styles)}, startUri:${this.startUri}`);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage) {
-    this.windowStage = windowStage;
-    this.originWindowId = windowStage?.getMainWindowSync().getWindowProperties().id;
+    try {
+      this.windowStage = windowStage;
+      this.originWindowId = windowStage.getMainWindowSync().getWindowProperties().id;
+    } catch (err) {
+      LogUtil.error(TAG, 'Failed to getMainWindowSync. Cause:' + JSON.stringify(err));
+    }
   }
 
   // implements WineProxy interface
@@ -124,7 +138,12 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
   }
 
   getWindow(): window.Window | undefined {
-    return this.windowStage?.getMainWindowSync();
+    try {
+      return this.windowStage?.getMainWindowSync();
+    } catch (err) {
+      LogUtil.error(TAG, 'Failed to getMainWindowSync. Cause:' + JSON.stringify(err));
+      return undefined;
+    }
   }
 
   getWindowContext(): common.Context {
@@ -158,7 +177,12 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
         reject('Failed to get windowStage');
         return;
       }
-      this.windowStage.createSubWindow(name)
+      const subWindowOpts: window.SubWindowOptions = {
+        title: 'This is a subwindow',
+        decorEnabled: false,
+        zLevelAboveParentLoosened: true
+      };
+      this.windowStage.createSubWindowWithOptions(name, subWindowOpts)
         .then((data: window.Window) => {
           resolve(data);
         }).catch((error: BusinessError) => {

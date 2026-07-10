@@ -56,7 +56,7 @@ ADAPTER_API int GetFocusWindow(void);
 
 /* process */
 ADAPTER_API int StartNativeProcess(int argc, char **argv, const struct launch_options *options);
-ADAPTER_API void KillNativeProcess(int exitcode, int force);
+ADAPTER_API void KillNativeProcess(int exitcode);
 ADAPTER_API int IsMainProcess(void);
 ADAPTER_API int GetMainProcessId(void);
 

@@ -11,17 +11,17 @@ function implAppLifecycleAdapter(): AppLifecycleAdapter {
   return Inject.getOrCreate(AppLifecycleAdapter);
 }
 
-function onWineCreate() {
-  implAppLifecycleAdapter().onWineCreate();
+function onCreate() {
+  implAppLifecycleAdapter().onCreate();
 }
 
-function onWineDestroy() {
-  implAppLifecycleAdapter().onWineDestroy();
+function onDestroy() {
+  implAppLifecycleAdapter().onDestroy();
 }
 
 export class AppLifecycleAdapterBind {
   static bind() {
-    JsBindingUtils.bindFunction("AppLifecycleAdapter.onWineCreate", onWineCreate);
-    JsBindingUtils.bindFunction("AppLifecycleAdapter.onWineDestroy", onWineDestroy);
+    JsBindingUtils.bindFunction("AppLifecycleAdapter.onCreate", onCreate);
+    JsBindingUtils.bindFunction("AppLifecycleAdapter.onDestroy", onDestroy);
   }
 }

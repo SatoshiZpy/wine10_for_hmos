@@ -1465,7 +1465,7 @@ void abort_process( int status )
 {
     TRACE("abort_process code=%d\n", get_unix_exit_code( status ));
 #ifdef __OHOS__
-    KillNativeProcess(get_unix_exit_code( status ), 1);
+    KillNativeProcess(get_unix_exit_code( status ));
 #else
     _exit( get_unix_exit_code( status ));
 #endif
