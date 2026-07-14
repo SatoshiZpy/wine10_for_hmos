@@ -527,13 +527,7 @@ static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
 }
 
 #ifdef __OHOS__
-/* CreateInstance for HTMLDocument/MHTMLDocument.
- * If calling thread IS the Gecko owner (XPCOM main thread), create directly —
- * no proxy needed, all Gecko operations are on the correct thread.
- * Otherwise proxy creation via SendMessage to the Gecko owner thread, which
- * creates the document in its apartment and marshals the interface via
- * CoMarshalInterThreadInterfaceInStream. The calling thread unmarshals to get
- * a COM proxy that routes calls back to the Gecko owner's STA. */
+
 static HRESULT WINAPI GeckoProxy_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
         REFIID riid, void **ppvObject)
 {
@@ -548,23 +542,22 @@ static HRESULT WINAPI GeckoProxy_CreateInstance(IClassFactory *iface, IUnknown *
     *ppvObject = NULL;
 
     /* Ensure Gecko is initialized */
-    if(!load_gecko()) {
+    if (!load_gecko()) {
         ERR("Gecko not available\n");
         return CLASS_E_CLASSNOTAVAILABLE;
     }
 
     is_mhtml = (This->fnCreateInstance == MHTMLDocument_Create);
 
-    /* If calling thread IS the Gecko owner thread, create directly.
-     * No COM marshaling needed — object lives in same apartment as caller. */
-    if(gecko_owner_thread == GetCurrentThreadId()) {
+    /* Gecko owner thread: create directly, no marshaling needed. */
+    if (gecko_owner_thread == GetCurrentThreadId()) {
         TRACE("Calling thread is Gecko owner, creating directly\n");
         return create_document_object(is_mhtml, pUnkOuter, riid, ppvObject);
     }
 
     /* Secondary thread: proxy via SendMessage to Gecko owner thread */
     proxy_hwnd = get_gecko_proxy_hwnd();
-    if(!proxy_hwnd) {
+    if (!proxy_hwnd) {
         ERR("Gecko proxy window not available\n");
         return CLASS_E_CLASSNOTAVAILABLE;
     }
@@ -576,25 +569,29 @@ static HRESULT WINAPI GeckoProxy_CreateInstance(IClassFactory *iface, IUnknown *
     params.stream = NULL;
 
     TRACE("Secondary thread, proxying to Gecko owner via SendMessage\n");
-    SendMessageW(proxy_hwnd, WM_GECKO_CREATE_DOC, 0, (LPARAM)&params);
+    /* SMTO_ABORTIFHUNG: fail fast if the Gecko thread is wedged. */
+    if (!SendMessageTimeoutW(proxy_hwnd, WM_GECKO_CREATE_DOC, 0, (LPARAM)&params,
+                            SMTO_ABORTIFHUNG, 10000, NULL)) {
+        ERR("SendMessageTimeout to Gecko owner failed (thread hung?)\n");
+        return E_FAIL;
+    }
 
     hres = params.hres;
-    if(FAILED(hres)) {
+    if (FAILED(hres)) {
         TRACE("Gecko owner CreateInstance failed: %08lx\n", hres);
         return hres;
     }
 
-    /* Unmarshal the stream in calling thread's apartment to get a proxy.
-     * All vtable method calls on the proxy route back to Gecko owner's STA. */
-    if(params.stream) {
+    /* Unmarshal in this apartment to get a proxy back to the Gecko STA. */
+    if (params.stream) {
         hres = CoGetInterfaceAndReleaseStream(params.stream, riid, ppvObject);
-        if(FAILED(hres)) {
+        if (FAILED(hres)) {
             ERR("CoGetInterfaceAndReleaseStream failed: %08lx\n", hres);
             *ppvObject = NULL;
             return hres;
         }
         TRACE("Got proxy interface %p for %s\n", *ppvObject, debugstr_mshtml_guid(riid));
-    }else {
+    } else {
         ERR("No marshaled stream from Gecko owner thread\n");
         return E_FAIL;
     }
@@ -609,7 +606,7 @@ static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown
     ClassFactory *This = impl_from_IClassFactory(iface);
 
 #ifdef __OHOS__
-    if(This->proxy_to_gecko)
+    if (This->proxy_to_gecko)
         return GeckoProxy_CreateInstance(iface, pUnkOuter, riid, ppvObject);
 #endif
 

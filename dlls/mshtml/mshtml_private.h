@@ -1235,7 +1235,7 @@ HRESULT ProtocolFactory_Create(REFCLSID,REFIID,void**);
 
 BOOL load_gecko(void);
 #ifdef __OHOS__
-HWND get_gecko_proxy_hwnd(void);
+HWND WINAPI get_gecko_proxy_hwnd(void);
 #endif
 void close_gecko(void);
 void register_nsservice(nsIComponentRegistrar*,nsIServiceManager*);
@@ -1730,8 +1730,7 @@ struct gecko_create_params {
     IStream *stream;  /* Marshaled interface from Gecko thread's apartment */
 };
 
-/* Parameters for WM_GECKO_NAVIGATE — route SuperNavigate call to Gecko
- * thread when IHTMLPrivateWindow cannot be marshaled across apartments. */
+/* WM_GECKO_NAVIGATE params: route SuperNavigate to the Gecko thread. */
 struct gecko_navigate_params {
     IStream *nav_stream;     /* IN: marshaled IHTMLWindow2 (doc_navigate) */
     BSTR url;                /* IN */
