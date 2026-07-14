@@ -31,6 +31,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(ieframe);
 
+#ifdef __OHOS__
+/* mshtml export (delay-imported): the Gecko proxy message window. */
+HWND WINAPI get_gecko_proxy_hwnd(void);
+#endif
+
 static const WCHAR emptyW[] = {0};
 
 typedef struct {
@@ -845,7 +850,67 @@ static void doc_navigate_proc(DocHost *This, task_header_t *t)
         html_window_navigate(This, priv_window, task->url, task->headers, task->post_data);
         IHTMLPrivateWindow_Release(priv_window);
     }else {
+#ifdef __OHOS__
+        HWND gecko_hwnd;
+
+#define WM_GECKO_NAVIGATE (WM_USER + 102)
+
+        /* mshtml is delay-imported; it is already loaded on this path. */
+        gecko_hwnd = get_gecko_proxy_hwnd();
+        if (!gecko_hwnd) {
+            WARN("Gecko proxy window not available\n");
+            return;
+        }
+
+        IStream *nav_stream = NULL;
+        struct {
+            IStream *nav_stream;
+            BSTR url;
+            BSTR headers;
+            SAFEARRAY *post_data;
+            ULONG flags;
+            HRESULT hres;
+        } *params;
+
+        hres = CoMarshalInterThreadInterfaceInStream(&IID_IUnknown, This->doc_navigate, &nav_stream);
+        if (FAILED(hres) || !nav_stream) {
+            WARN("Failed to marshal doc_navigate: %08lx\n", hres);
+            return;
+        }
+
+        TRACE("IHTMLPrivateWindow QI failed, routing navigate to Gecko thread (async)\n");
+
+        set_dochost_url(This, task->url);
+        set_doc_state(This, READYSTATE_LOADING);
+
+        /* PostMessage is async: heap-allocate; the Gecko thread frees it. */
+        params = calloc(1, sizeof(*params));
+        if (!params) {
+            IStream_Release(nav_stream);
+            return;
+        }
+
+        params->nav_stream = nav_stream;
+        params->url = SysAllocString(task->url);
+        params->headers = task->headers ? SysAllocString(task->headers) : NULL;
+        params->post_data = NULL;
+        params->flags = 0;
+
+        if (!PostMessageW(gecko_hwnd, WM_GECKO_NAVIGATE, 0, (LPARAM)params)) {
+            LARGE_INTEGER zero = { { 0 } };
+
+            WARN("PostMessage to Gecko thread failed\n");
+            /* Not delivered: release the marshaled ref ourselves (rewind first). */
+            IStream_Seek(nav_stream, zero, STREAM_SEEK_SET, NULL);
+            CoReleaseMarshalData(nav_stream);
+            IStream_Release(nav_stream);
+            SysFreeString(params->url);
+            SysFreeString(params->headers);
+            free(params);
+        }
+#else
         WARN("Could not get IHTMLPrivateWindow iface: %08lx\n", hres);
+#endif
     }
 }
 

@@ -779,6 +779,257 @@ static CRITICAL_SECTION_DEBUG cs_load_gecko_dbg =
 };
 static CRITICAL_SECTION cs_load_gecko = { &cs_load_gecko_dbg, -1, 0, 0, 0, 0 };
 
+#ifdef __OHOS__
+DWORD gecko_owner_thread = 0;
+static HWND gecko_proxy_hwnd = NULL;
+static ATOM gecko_proxy_class = 0;
+
+/* Gecko main thread window proc: handles CreateInstance proxy requests */
+static LRESULT WINAPI gecko_proxy_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    if (msg == WM_DESTROY) {
+        gecko_proxy_hwnd = NULL;
+        return 0;
+    }
+
+    if (msg == WM_GECKO_CREATE_DOC) {
+        struct gecko_create_params *params = (struct gecko_create_params*)lparam;
+        IUnknown *obj = NULL;
+        IStream *stream = NULL;
+        HRESULT hres;
+
+        TRACE("Gecko thread received CreateInstance request (is_mhtml=%d, riid=%s)\n",
+              params->is_mhtml, debugstr_guid(&params->riid));
+
+        /* Create the document on the Gecko/XPCOM main thread */
+        hres = create_document_object(params->is_mhtml, params->outer,
+                                       &params->riid, (void**)&obj);
+
+        if (SUCCEEDED(hres)) {
+            /* Marshal on the Gecko thread (object's apartment) so the caller
+             * can unmarshal a proxy in its own. */
+            hres = CoMarshalInterThreadInterfaceInStream(&params->riid, obj, &stream);
+            if (FAILED(hres)) {
+                ERR("CoMarshalInterThreadInterfaceInStream failed on Gecko thread: %08lx\n", hres);
+            }
+            /* Release the raw pointer — the calling thread will use the proxy */
+            IUnknown_Release(obj);
+        }
+
+        params->hres = hres;
+        params->stream = stream;
+        return 0;
+    }
+
+    if (msg == WM_GECKO_NAVIGATE) {
+        struct gecko_navigate_params *params = (struct gecko_navigate_params*)lparam;
+        IUnknown *doc_navigate = NULL;
+        IHTMLPrivateWindow *priv_window;
+        HRESULT hres;
+
+        TRACE("Gecko thread received navigate request (url=%s)\n", debugstr_w(params->url));
+
+        /* Unmarshal in the Gecko apartment so QI for IHTMLPrivateWindow works. */
+        hres = CoGetInterfaceAndReleaseStream(params->nav_stream, &IID_IUnknown,
+                                               (void**)&doc_navigate);
+        params->nav_stream = NULL;
+        if (FAILED(hres)) {
+            ERR("Failed to unmarshal doc_navigate: %08lx\n", hres);
+            goto navigate_cleanup;
+        }
+
+        hres = IUnknown_QueryInterface(doc_navigate, &IID_IHTMLPrivateWindow,
+                                        (void**)&priv_window);
+        if (SUCCEEDED(hres)) {
+            VARIANT headers_var, post_data_var;
+            BSTR empty_str = SysAllocStringLen(NULL, 0);
+
+            if (params->headers) {
+                V_VT(&headers_var) = VT_BSTR;
+                V_BSTR(&headers_var) = params->headers;
+            } else {
+                V_VT(&headers_var) = VT_EMPTY;
+            }
+
+            if (params->post_data) {
+                V_VT(&post_data_var) = VT_UI1|VT_ARRAY;
+                V_ARRAY(&post_data_var) = params->post_data;
+            } else {
+                V_VT(&post_data_var) = VT_EMPTY;
+            }
+
+            hres = IHTMLPrivateWindow_SuperNavigate(priv_window, params->url,
+                    empty_str, NULL, NULL, &post_data_var, &headers_var, params->flags);
+            if (FAILED(hres))
+                ERR("SuperNavigate failed on Gecko thread: %08lx\n", hres);
+            SysFreeString(empty_str);
+            IHTMLPrivateWindow_Release(priv_window);
+        } else {
+            ERR("IHTMLPrivateWindow QI failed on Gecko thread: %08lx\n", hres);
+        }
+
+        if (doc_navigate)
+            IUnknown_Release(doc_navigate);
+
+navigate_cleanup:
+        /* Params were heap-allocated by ieframe (PostMessage is async) */
+        SysFreeString(params->url);
+        SysFreeString(params->headers);
+        if (params->post_data)
+            SafeArrayDestroy(params->post_data);
+        free(params);
+        return 0;
+    }
+
+
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+static HANDLE gecko_thread_handle = NULL;
+static HANDLE gecko_init_done_event = NULL;
+static BOOL gecko_init_result = FALSE;
+
+static void reset_gecko_thread_state(void)
+{
+    EnterCriticalSection(&cs_load_gecko);
+    if (gecko_thread_handle) {
+        CloseHandle(gecko_thread_handle);
+        gecko_thread_handle = NULL;
+    }
+    gecko_init_result = FALSE;
+    LeaveCriticalSection(&cs_load_gecko);
+}
+
+/* Runs the actual Gecko/XPCOM initialization. Must execute ON the dedicated
+ * Gecko thread so that the XPCOM main thread is that background thread. */
+static BOOL init_gecko_on_thread(void)
+{
+    BOOL ret = FALSE;
+    WCHAR *gecko_path;
+
+    if (!(gecko_path = find_wine_gecko_reg())
+       && !(gecko_path = find_wine_gecko_datadir())
+       && !(gecko_path = find_wine_gecko_unix(L"\\\\?\\unix" INSTALL_DATADIR "/wine/gecko/" GECKO_DIR_NAME))
+       && (!strcmp(INSTALL_DATADIR, "/usr/share") ||
+           !(gecko_path = find_wine_gecko_unix(L"\\\\?\\unix/usr/share/wine/gecko/" GECKO_DIR_NAME)))
+       && !(gecko_path = find_wine_gecko_unix(L"\\\\?\\unix/opt/wine/gecko/" GECKO_DIR_NAME))
+       && install_wine_gecko())
+        gecko_path = find_wine_gecko_reg();
+
+    if (gecko_path) {
+        ret = load_xul(gecko_path);
+        free(gecko_path);
+    } else {
+        MESSAGE("Could not find Wine Gecko. HTML rendering will be disabled.\n");
+    }
+
+    if (ret) {
+        /* Message-only window: secondary threads proxy requests here. */
+        WNDCLASSEXW wndclass = { 0 };
+        wndclass.cbSize = sizeof(wndclass);
+        wndclass.lpfnWndProc = gecko_proxy_wndproc;
+        wndclass.hInstance = hInst;
+        wndclass.lpszClassName = L"GeckoProxy";
+
+        gecko_proxy_class = RegisterClassExW(&wndclass);
+        if (gecko_proxy_class) {
+            gecko_proxy_hwnd = CreateWindowExW(0, L"GeckoProxy", NULL,
+                    0, 0, 0, 0, 0, HWND_MESSAGE, NULL, hInst, NULL);
+        }
+    }
+
+    return ret;
+}
+
+/* Dedicated Gecko/XPCOM main thread: runs all Gecko ops off the UI thread so
+ * blocking cross-apartment calls never freeze visible windows. */
+static DWORD WINAPI gecko_thread_proc(void *arg)
+{
+    HRESULT hres;
+    MSG msg;
+
+    /* STA with a message loop: required for COM marshaling to callers. */
+    hres = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+
+    gecko_init_result = init_gecko_on_thread();
+
+    /* Wake up load_gecko() regardless of success/failure. */
+    SetEvent(gecko_init_done_event);
+
+    if (!gecko_init_result) {
+        if (SUCCEEDED(hres))
+            CoUninitialize();
+        reset_gecko_thread_state();
+        return 0;
+    }
+
+    /* Service proxied requests for the process lifetime. */
+    while(GetMessageW(&msg, NULL, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    if (SUCCEEDED(hres))
+        CoUninitialize();
+    reset_gecko_thread_state();
+    return 0;
+}
+
+BOOL load_gecko(void)
+{
+    TRACE("()\n");
+
+    if (!GECKO_ARCH_STRING[0]) {
+        FIXME("Wine Gecko is not supported on this architecture.\n");
+        return FALSE;
+    }
+
+    if (pCompMgr)
+        return TRUE;
+
+    EnterCriticalSection(&cs_load_gecko);
+
+    /* Check again after acquiring lock */
+    if (pCompMgr) {
+        LeaveCriticalSection(&cs_load_gecko);
+        return TRUE;
+    }
+
+    /* Gecko thread was already started (possibly failing init). */
+    if (gecko_thread_handle) {
+        LeaveCriticalSection(&cs_load_gecko);
+        return gecko_init_result;
+    }
+
+    gecko_init_done_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!gecko_init_done_event) {
+        LeaveCriticalSection(&cs_load_gecko);
+        return FALSE;
+    }
+
+    /* Spawn the Gecko thread; gecko_owner_thread is its id. */
+    gecko_thread_handle = CreateThread(NULL, 0, gecko_thread_proc, NULL, 0,
+                                       &gecko_owner_thread);
+    if (!gecko_thread_handle) {
+        CloseHandle(gecko_init_done_event);
+        gecko_init_done_event = NULL;
+        LeaveCriticalSection(&cs_load_gecko);
+        return FALSE;
+    }
+
+    /* Wait for init; the Gecko thread never takes cs_load_gecko, so no deadlock. */
+    WaitForSingleObject(gecko_init_done_event, INFINITE);
+
+    LeaveCriticalSection(&cs_load_gecko);
+    return gecko_init_result;
+}
+
+/* Gecko proxy window; valid only after load_gecko() succeeds. */
+HWND WINAPI get_gecko_proxy_hwnd(void)
+{
+    return gecko_proxy_hwnd;
+}
+#else
 BOOL load_gecko(void)
 {
     BOOL ret = FALSE;
@@ -827,6 +1078,7 @@ BOOL load_gecko(void)
 
     return ret;
 }
+#endif
 
 void *nsalloc(size_t size)
 {
