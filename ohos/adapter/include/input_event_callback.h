@@ -25,6 +25,22 @@ typedef enum {
     OHOS_MOUSE_ACTION_SCROLL = 99,
 } ohos_mouse_action;
 
+/* Source tool of a pan/scroll event. Values must match the C++
+ * GestureEventSourceTool enum in gesture_event_common.h so that the source
+ * can be carried across the IPC boundary unchanged. */
+typedef enum {
+    OHOS_SOURCE_TOOL_UNKNOWN = 0,
+    OHOS_SOURCE_TOOL_FINGER,
+    OHOS_SOURCE_TOOL_PEN,
+    OHOS_SOURCE_TOOL_RUBBER,
+    OHOS_SOURCE_TOOL_BRUSH,
+    OHOS_SOURCE_TOOL_PENCIL,
+    OHOS_SOURCE_TOOL_AIR_BRUSH,
+    OHOS_SOURCE_TOOL_MOUSE,
+    OHOS_SOURCE_TOOL_LENS,
+    OHOS_SOURCE_TOOL_TOUCHPAD,
+} ohos_source_tool;
+
 typedef struct {
     float x;
     float y;
@@ -35,6 +51,7 @@ typedef struct {
     int button;
     float wheel_x;
     float wheel_y;
+    int source_tool;
 } mouse_event_param;
 
 typedef struct {

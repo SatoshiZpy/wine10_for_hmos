@@ -474,6 +474,36 @@ int set_swap_interval( HWND hwnd, int interval )
     return STATUS_SUCCESS;
 }
 
+static int get_pan_scroll_delta( float offset, float *last_offset, int *last_sign )
+{
+    float abs_offset, abs_last_offset;
+    int sign, level, last_level;
+
+    if (offset == 0.0f) return 0;
+
+    sign = (offset > 0) - (offset < 0);
+    if (*last_sign != 0 && sign != *last_sign)
+    {
+        *last_offset = 0.0f;
+        *last_sign = 0;
+    }
+    *last_sign = sign;
+
+    abs_offset = offset < 0 ? -offset : offset;
+    abs_last_offset = *last_offset < 0 ? -*last_offset : *last_offset;
+    level = (int)(abs_offset / WHEEL_DELTA);
+    last_level = (int)(abs_last_offset / WHEEL_DELTA);
+
+    if (level <= last_level)
+    {
+        if (level < last_level) *last_offset = offset;
+        return 0;
+    }
+
+    *last_offset = sign * level * WHEEL_DELTA;
+    return sign * (level - last_level) * WHEEL_DELTA;
+}
+
 void mouse_event_callback( const input_event* event )
 {
     static float last_mouse_screen_x = 0;
@@ -514,23 +544,56 @@ void mouse_event_callback( const input_event* event )
                 return;
             break;
         case OHOS_MOUSE_ACTION_SCROLL:
+        {
             data.motion.input.mi.dx = last_mouse_screen_x;
             data.motion.input.mi.dy = last_mouse_screen_y;
             float wheel_x = event->data.mouse_event.wheel_x;
             float wheel_y = event->data.mouse_event.wheel_y;
-            if (wheel_y)
+            int source_tool = event->data.mouse_event.source_tool;
+
+            if (source_tool == OHOS_SOURCE_TOOL_MOUSE)
             {
-                data.motion.input.mi.mouseData = wheel_y < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
-                data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_WHEEL;
-                send_event(&data);
+                /* Mouse wheel: each notch click is a discrete event, keep the
+                 * original one-notch-per-event behavior. */
+                if (wheel_y)
+                {
+                    data.motion.input.mi.mouseData = wheel_y < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+                    data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_WHEEL;
+                    send_event(&data);
+                }
+                if (wheel_x)
+                {
+                    data.motion.input.mi.mouseData = wheel_x < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+                    data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_HWHEEL;
+                    send_event(&data);
+                }
             }
-            if (wheel_x)
+            else
             {
-                data.motion.input.mi.mouseData = wheel_x < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
-                data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_HWHEEL;
-                send_event(&data);
+                /* Touchpad/touchscreen pan offsets are cumulative during a gesture.
+                 * Convert each axis to wheel notches and emit only newly crossed
+                 * notch levels. */
+                static float pad_y_offset = 0.0f;
+                static float pad_x_offset = 0.0f;
+                static int pad_y_sign = 0;
+                static int pad_x_sign = 0;
+                int delta;
+
+                if ((delta = get_pan_scroll_delta( wheel_y, &pad_y_offset, &pad_y_sign )))
+                {
+                    data.motion.input.mi.mouseData = delta;
+                    data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_WHEEL;
+                    send_event(&data);
+                }
+                if ((delta = get_pan_scroll_delta( wheel_x, &pad_x_offset, &pad_x_sign )))
+                {
+                    data.motion.input.mi.mouseData = delta;
+                    data.motion.input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_HWHEEL;
+                    send_event(&data);
+                }
             }
             return;
+        }
         case OH_NATIVEXCOMPONENT_MOUSE_MOVE:
             break;
         default:
