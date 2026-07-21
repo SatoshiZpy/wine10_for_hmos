@@ -59,6 +59,7 @@ export class PermissionManagerAdapter extends BaseAdapter {
     ]]
   ]);
   private atManager: abilityAccessCtrl.AtManager;
+  private bundleName: string = 'com.huawei.ohos_wine';
   private bundleFlags = bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION;
   private tokenId: number = 0;
   private ctxAdapter: ContextAdapter;
@@ -71,13 +72,18 @@ export class PermissionManagerAdapter extends BaseAdapter {
     this.atManager = abilityAccessCtrl.createAtManager();
 
     try {
-      bundleManager.getBundleInfoForSelf(this.bundleFlags).then((data) => {
-        let appInfo: bundleManager.ApplicationInfo = data.appInfo;
-        this.tokenId = appInfo.accessTokenId;
-        this.appLabelId = appInfo.labelId;
-      }).catch((err: BusinessError) => {
-        LogUtil.error(TAG, `getBundleInfoForSelf failed. Cause: ${err.message}`);
-      });
+      let bundleInfo: bundleManager.BundleInfo = bundleManager.getBundleInfoForSelfSync(this.bundleFlags);
+      let appInfo: bundleManager.ApplicationInfo = bundleInfo.appInfo;
+      this.tokenId = appInfo.accessTokenId;
+      this.appLabelId = appInfo.labelId;
+      this.bundleName = bundleInfo.name;
+      // bundleManager.getBundleInfoForSelf(this.bundleFlags).then((data) => {
+      //   let appInfo: bundleManager.ApplicationInfo = data.appInfo;
+      //   this.tokenId = appInfo.accessTokenId;
+      //   this.appLabelId = appInfo.labelId;
+      // }).catch((err: BusinessError) => {
+      //   LogUtil.error(TAG, `getBundleInfoForSelf failed. Cause: ${err.message}`);
+      // });
     } catch (err) {
       let message = (err as BusinessError).message;
       LogUtil.error(TAG, `getBundleInfoForSelf failed.: ${message}`);
@@ -312,7 +318,7 @@ export class PermissionManagerAdapter extends BaseAdapter {
           abilityName: 'com.huawei.hmos.settings.MainAbility',
           uri: 'privacy_settings',
           parameters: {
-            pushParams: 'com.huawei.ohos_wine'
+            pushParams: this.bundleName
           }
         }
         LaunchHelper.Launch(activeContext, wantInfo);
