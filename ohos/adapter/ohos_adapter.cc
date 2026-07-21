@@ -144,12 +144,13 @@ static NewWindowParam Builder(const struct window_param* param)
     win_param.window_state_mask = get_window_state_mask(&param->state);
 
     // The first window created must be the main window of the main process.
-    if (param->type != WindowInitType::kWindow &&
-            WindowAdapter::GetInstance().GetWindowWidgetId() == USER_DEFAULT_WIDGET_ID &&
+    if (WindowAdapter::GetInstance().GetWindowWidgetId() == USER_DEFAULT_WIDGET_ID &&
             IsMainProcess() &&
             !has_loaded_) {
-        LOGW("first window must be kWindow, overriding type=%{public}d", param->type);
-        win_param.window_type = WindowInitType::kWindow;
+        if (param->type != WindowInitType::kWindow ) {
+            LOGW("first window must be kWindow, overriding type=%{public}d", param->type);
+            win_param.window_type = WindowInitType::kWindow;
+        }
         win_param.widget_id = USER_DEFAULT_WIDGET_ID;
         has_loaded_ = true;
     } else {
