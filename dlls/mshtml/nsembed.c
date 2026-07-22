@@ -1030,6 +1030,10 @@ HWND WINAPI get_gecko_proxy_hwnd(void)
     return gecko_proxy_hwnd;
 }
 #else
+HWND WINAPI get_gecko_proxy_hwnd(void)
+{
+    return NULL;
+}
 BOOL load_gecko(void)
 {
     BOOL ret = FALSE;
