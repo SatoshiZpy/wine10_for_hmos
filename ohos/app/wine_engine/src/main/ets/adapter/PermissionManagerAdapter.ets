@@ -77,13 +77,6 @@ export class PermissionManagerAdapter extends BaseAdapter {
       this.tokenId = appInfo.accessTokenId;
       this.appLabelId = appInfo.labelId;
       this.bundleName = bundleInfo.name;
-      // bundleManager.getBundleInfoForSelf(this.bundleFlags).then((data) => {
-      //   let appInfo: bundleManager.ApplicationInfo = data.appInfo;
-      //   this.tokenId = appInfo.accessTokenId;
-      //   this.appLabelId = appInfo.labelId;
-      // }).catch((err: BusinessError) => {
-      //   LogUtil.error(TAG, `getBundleInfoForSelf failed. Cause: ${err.message}`);
-      // });
     } catch (err) {
       let message = (err as BusinessError).message;
       LogUtil.error(TAG, `getBundleInfoForSelf failed.: ${message}`);
