@@ -32,6 +32,14 @@ void FileManagerAdapter::OpenVerifiedItem(const std::string& full_path) {
   }
 }
 
+void FileManagerAdapter::OpenVerifiedItemWithChooser(const std::string& full_path) {
+  auto func =
+    ohos::adapter::GetJSFunction("FileManagerAdapter.OpenVerifiedItemWithChooser");
+  if (func) {
+    func->Invoke<void>(full_path);
+  }
+}
+
 void FileManagerAdapter::GetPathForUri(const char* uri, std::string& path) {
   if (uri == nullptr) {
     LOGE("[FileManagerAdapter] GetPathForUri fail, uri is null");

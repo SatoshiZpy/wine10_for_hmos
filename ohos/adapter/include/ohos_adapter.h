@@ -109,6 +109,9 @@ ADAPTER_API void StartListeningForScreenlock(screenlock_event_callback callback)
 /* url */
 ADAPTER_API int OpenNativeUrl(const char *url);
 
+/* file */
+ADAPTER_API int OpenNativeFileWithChooser(const char *path);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

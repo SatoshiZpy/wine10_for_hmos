@@ -28,8 +28,11 @@
 
 #define COBJMACROS
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "windef.h"
 #include "winbase.h"
+#include "winternl.h"
 #include "winerror.h"
 #include "winreg.h"
 #include "winuser.h"
@@ -1936,11 +1939,23 @@ static BOOL SHELL_execute( LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc )
     }
     else if (retval == SE_ERR_NOASSOC && SHGetFileInfoW(wcmd, 0, NULL, 0, SHGFI_EXETYPE) == 0)
     {
-        /* File found, but no association. And no other cases fit, this could be a
-           unix programs, try running it. We have to do this in a "catch-all" fashion because
-           unix program can have any extensions. However, things get more complicated because
-           the file we find could be a Windows executable without the proper extensions, it could
-           be seen as unexpected if we start it, so we special case it here. */
+#ifdef __OHOS__
+        char *unix_path = wine_get_unix_file_name( wcmd );
+        if (unix_path)
+        {
+            char *argv[] = { unix_path, NULL };
+            NTSTATUS status = __wine_unix_spawnvp( argv, FALSE );
+            free( unix_path );
+            if (status == STATUS_SUCCESS)
+            {
+                retval = 33;
+                goto end;
+            }
+            WARN("OHOS chooser failed for %s, status %#lx\n", debugstr_w(wcmd), status);
+        }
+        else
+            WARN("cannot get unix path for %s\n", debugstr_w(wcmd));
+#else
         UINT exec_retval;
         TRACE("No association found, trying as Unix binary %s\n", debugstr_w(wcmd));
         exec_retval = SHELL_quote_and_execute( wcmd, wszParameters, wszKeyname,
@@ -1949,6 +1964,7 @@ static BOOL SHELL_execute( LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc )
         TRACE("Unix binary returned %u\n", exec_retval);
         if (exec_retval > 32)
             retval = exec_retval;
+#endif
     }
 
 end:

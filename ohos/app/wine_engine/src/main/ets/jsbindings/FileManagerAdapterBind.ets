@@ -18,6 +18,10 @@ function openVerifiedItem(filePath: string) {
   implFileManagerAdapter().openVerifiedItem(filePath);
 }
 
+function openVerifiedItemWithChooser(filePath: string) {
+  implFileManagerAdapter().openVerifiedItemWithChooser(filePath);
+}
+
 function createSymlink(srcPath: string, dstPath: string) {
   implFileManagerAdapter().createSymlink(srcPath, dstPath);
 }
@@ -26,6 +30,7 @@ export class FileManagerAdapterBind {
   static bind() {
     JsBindingUtils.bindFunction("FileManagerAdapter.OpenItemInFolder", openItemInFolder);
     JsBindingUtils.bindFunction("FileManagerAdapter.OpenVerifiedItem", openVerifiedItem);
+    JsBindingUtils.bindFunction("FileManagerAdapter.OpenVerifiedItemWithChooser", openVerifiedItemWithChooser);
     JsBindingUtils.bindFunction("FileManagerAdapter.CreateSymlink", createSymlink);
   }
 }
