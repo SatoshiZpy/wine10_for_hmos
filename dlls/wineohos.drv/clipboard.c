@@ -50,6 +50,7 @@ typedef struct _WINE_CLIPFORMAT
  **************************************************************************/
 
 
+#define WM_OHOSDRV_PASTEBOARD_UPDATE (WM_USER + 101)
 
  /**************************************************************************
  *              Forward Function Declarations
@@ -58,6 +59,9 @@ static void *import_utf8_to_unicodetext(OH_UdmfData* data, size_t *ret_size);
 static OH_UdmfData* export_unicodetext_to_utf8(void *data, size_t size);
 static WINE_CLIPFORMAT* format_for_type(const char *type);
 static WINE_CLIPFORMAT* natural_format_for_format(UINT format_id);
+static void advertise_pasteboard_to_win32(void);
+static BOOL open_clipboard_for_import(HWND hwnd);
+static void close_clipboard_for_import(void);
 
 
  /**************************************************************************
@@ -73,10 +77,12 @@ static HWND clipboard_hwnd;
 static BOOL is_clipboard_owner;
 static volatile LONG pasteboard_notify_flag;   /* set by observer callback, cleared by clipboard thread */
 static volatile LONG exporting_to_ohos;        /* guard: TRUE while Win32->OHOS push is in flight */
+static volatile LONG importing_from_ohos;      /* guard: TRUE while OHOS->Win32 pull is in flight */
 static OH_Pasteboard* OHOS_pasteboard;
 static OH_PasteboardObserver* OHOS_observer;
 static WINE_CLIPFORMAT **current_ohos_formats;
 static unsigned int nb_current_ohos_formats;
+static uint32_t last_pasteboard_change_count;  /* OHOS pasteboard change counter for change detection */
 
 static const struct
 {
@@ -489,8 +495,16 @@ static void PasteboardNotifyImpl(void* context, Pasteboard_NotifyType type)
      * ignore the notification to avoid a feedback loop. */
     if (InterlockedCompareExchange(&exporting_to_ohos, 0, 0)) return;
 
-    /* Signal the clipboard thread to pull OHOS data into Win32 */
-    InterlockedExchange(&pasteboard_notify_flag, 1);
+    /* Also ignore if we are currently importing from OHOS to Win32 */
+    if (InterlockedCompareExchange(&importing_from_ohos, 0, 0)) return;
+
+    /* Post a custom message to the clipboard window to trigger sync.
+     * This avoids calling clipboard APIs directly from the observer callback
+     * which may be on a different thread. */
+    if (clipboard_hwnd)
+    {
+        NtUserPostMessage(clipboard_hwnd, WM_OHOSDRV_PASTEBOARD_UPDATE, (WPARAM)type, 0);
+    }
 }
 
 
@@ -503,6 +517,74 @@ static void PasteboardNotifyImpl(void* context, Pasteboard_NotifyType type)
 static void PasteboardFinalizeImpl(void* context)
 {
     TRACE("callback: Pasteboard_Finalize");
+}
+
+
+/**************************************************************************
+ *              advertise_pasteboard_to_win32
+ *
+ * Pull data from OHOS pasteboard and advertise it to Win32 clipboard
+ * via deferred rendering (WM_RENDERFORMAT).
+ */
+static void advertise_pasteboard_to_win32(void)
+{
+    uint32_t change_count;
+
+    if (!OHOS_pasteboard || !clipboard_hwnd) return;
+    if (importing_from_ohos || exporting_to_ohos) return;
+
+    change_count = OH_Pasteboard_GetChangeCount(OHOS_pasteboard);
+    if (change_count && change_count == last_pasteboard_change_count) return;
+
+    if (!OH_Pasteboard_HasData(OHOS_pasteboard) ||
+        !OH_Pasteboard_HasType(OHOS_pasteboard, "text/plain"))
+    {
+        if (change_count && change_count != last_pasteboard_change_count)
+            TRACE("OHOS pasteboard has no plain text, change=%u\n", change_count);
+        if (change_count) last_pasteboard_change_count = change_count;
+        return;
+    }
+
+    if (!open_clipboard_for_import(clipboard_hwnd)) return;
+
+    NtUserEmptyClipboard();
+    is_clipboard_owner = TRUE;
+
+    /* Register CF_UNICODETEXT for deferred rendering */
+    struct set_clipboard_params params = { 0 };
+    NtUserSetClipboardData(CF_UNICODETEXT, 0, &params);
+
+    if (change_count) last_pasteboard_change_count = change_count;
+
+    close_clipboard_for_import();
+    TRACE("advertised OHOS pasteboard text to Win32, change=%u\n", change_count);
+}
+
+
+/**************************************************************************
+ *              open_clipboard_for_import
+ *
+ * Open clipboard for importing data from OHOS. Uses a guard to prevent
+ * reentrancy.
+ */
+static BOOL open_clipboard_for_import(HWND hwnd)
+{
+    InterlockedIncrement(&importing_from_ohos);
+    if (NtUserOpenClipboard(hwnd, 0)) return TRUE;
+    InterlockedDecrement(&importing_from_ohos);
+    return FALSE;
+}
+
+
+/**************************************************************************
+ *              close_clipboard_for_import
+ *
+ * Close clipboard after importing data from OHOS.
+ */
+static void close_clipboard_for_import(void)
+{
+    NtUserCloseClipboard();
+    InterlockedDecrement(&importing_from_ohos);
 }
 
 
@@ -603,14 +685,14 @@ static void update_clipboard(void)
         {
             /* OHOS app changed the pasteboard while we were the owner */
             InterlockedExchange(&pasteboard_notify_flag, 0);
-            grab_win32_clipboard();
+            advertise_pasteboard_to_win32();
         }
     }
     else if (InterlockedCompareExchange(&pasteboard_notify_flag, 0, 0))
     {
         /* external OHOS app changed the pasteboard -- pull data into Win32 */
         InterlockedExchange(&pasteboard_notify_flag, 0);
-        grab_win32_clipboard();
+        advertise_pasteboard_to_win32();
     }
 
     updating = FALSE;
@@ -673,6 +755,7 @@ static void cleanup_pasteboard(void)
     if (OHOS_pasteboard && OHOS_observer)
     {
         OH_Pasteboard_Unsubscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
+        OH_Pasteboard_Unsubscribe(OHOS_pasteboard, NOTIFY_REMOTE_DATA_CHANGE, OHOS_observer);
         TRACE("pasteboard unsubscribed\n");
     }
 
@@ -704,7 +787,7 @@ static BOOL init_clipboard(HWND hwnd)
 
     /* re-entrant guard: WM_NCCREATE may fire more than once */
     if (initialized) return TRUE;
-    
+
     if (!OHOS_pasteboard)
     {
         ERR("pasteboard not initialized -- init_ohos_pasteboard() must be called first\n");
@@ -715,19 +798,21 @@ static BOOL init_clipboard(HWND hwnd)
     clipboard_thread_id = GetCurrentThreadId();
     NtUserAddClipboardFormatListener(clipboard_hwnd);
 
-    /* subscribe to OHOS pasteboard data change notifications */
+    /* subscribe to OHOS pasteboard data change notifications (local and remote) */
     {
         int ret = OH_Pasteboard_Subscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
         if (ret != 0)
-            WARN("Failed to subscribe to pasteboard notifications, ret=%d\n", ret);
+            WARN("Failed to subscribe to local pasteboard notifications, ret=%d\n", ret);
+        ret = OH_Pasteboard_Subscribe(OHOS_pasteboard, NOTIFY_REMOTE_DATA_CHANGE, OHOS_observer);
+        if (ret != 0)
+            WARN("Failed to subscribe to remote pasteboard notifications, ret=%d\n", ret);
     }
 
     /* register builtin format mappings (CF_UNICODETEXT <-> "text/plain") */
     register_builtin_formats();
 
     /* initial sync: pull data from OHOS pasteboard into Win32 clipboard */
-    /* Timer will be started in grab_win32_clipboard if we become the owner */
-    grab_win32_clipboard();
+    advertise_pasteboard_to_win32();
 
     TRACE("clipboard thread %04x running\n", clipboard_thread_id);
     initialized = TRUE;
@@ -762,6 +847,10 @@ LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_RENDERFORMAT:
             render_format(wp);
             break;
+        case WM_OHOSDRV_PASTEBOARD_UPDATE:
+            /* OHOS pasteboard changed - pull data into Win32 clipboard */
+            advertise_pasteboard_to_win32();
+            break;
         case WM_DESTROYCLIPBOARD:
             is_clipboard_owner = FALSE;
             break;
@@ -785,6 +874,10 @@ LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 /**************************************************************************
  *              OHOS_UpdateClipboard
+ *
+ * Called periodically from the Wine main thread to check for clipboard
+ * updates. Now uses OH_PasteboardObserver callback for change notifications,
+ * but this function remains as a fallback/periodic sync trigger.
  */
 void OHOS_UpdateClipboard(void)
 {
@@ -811,7 +904,8 @@ void OHOS_UpdateClipboard(void)
         }
     }
 
-    send_message_timeout(clipboard_manager, WM_USER, 0, 0,
+    /* Send custom message to trigger clipboard sync from OHOS pasteboard */
+    send_message_timeout(clipboard_manager, WM_OHOSDRV_PASTEBOARD_UPDATE, 0, 0,
                          SMTO_ABORTIFHUNG, 5000, &ret);
     last_update = now;
 }
