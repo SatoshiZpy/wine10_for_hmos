@@ -49,7 +49,6 @@ typedef struct _WINE_CLIPFORMAT
  *              Constants
  **************************************************************************/
 
-#define CLIPBOARD_UPDATE_DELAY 2000   /* delay between checks of the Mac pasteboard */
 
 
  /**************************************************************************
@@ -78,7 +77,6 @@ static OH_Pasteboard* OHOS_pasteboard;
 static OH_PasteboardObserver* OHOS_observer;
 static WINE_CLIPFORMAT **current_ohos_formats;
 static unsigned int nb_current_ohos_formats;
-static unsigned int last_ohos_data_hash;       /* hash of last synced OHOS data for change detection */
 
 static const struct
 {
@@ -139,38 +137,6 @@ static const char *debugstr_format(UINT id)
 #undef BUILTIN
     default: return wine_dbg_sprintf("0x%04x", id);
     }
-}
-
-
-/**************************************************************************
- *              compute_ohos_data_hash
- *
- * Compute a simple hash of the OHOS pasteboard types and their order.
- * Used to detect whether the clipboard content has actually changed.
- */
-static unsigned int compute_ohos_data_hash(char** types, int count)
-{
-    unsigned int hash = 0;
-    int i;
-
-    if (!types || count <= 0)
-        return 0;
-
-    for (i = 0; i < count; i++)
-    {
-        const char *type = types[i];
-        while (*type)
-        {
-            hash = hash * 31 + (unsigned char)*type;
-            type++;
-        }
-        hash = hash * 31 + 37;  /* separator between types */
-    }
-
-    /* Also factor in count to distinguish different-length lists */
-    hash = hash * 31 + count;
-
-    return hash;
 }
 
 
@@ -255,7 +221,6 @@ static void grab_win32_clipboard(void)
 
     int ret = 0;
     unsigned int count = 0;
-    unsigned int current_hash;
 
     OH_UdmfData* udmfData = OH_Pasteboard_GetData(OHOS_pasteboard, &ret);
     types = OH_UdmfData_GetTypes(udmfData, &count);
@@ -263,16 +228,6 @@ static void grab_win32_clipboard(void)
     if (!types)
     {
         WARN("Failed to copy pasteboard types\n");
-        OH_UdmfData_Destroy(udmfData);
-        return;
-    }
-
-    /* Compute hash of current data to detect changes */
-    current_hash = compute_ohos_data_hash(types, count);
-    if (current_hash == last_ohos_data_hash)
-    {
-        /* Data hasn't changed, skip sync to avoid unnecessary work */
-        TRACE("OHOS clipboard data unchanged (hash=%u), skipping sync\n", current_hash);
         OH_UdmfData_Destroy(udmfData);
         return;
     }
@@ -287,12 +242,6 @@ static void grab_win32_clipboard(void)
     last_clipboard_update = NtGetTickCount();
     set_win32_clipboard_formats_from_ohos_pasteboard(types, count);
     NtUserCloseClipboard();
-
-    /* Update cached hash after successful sync */
-    last_ohos_data_hash = current_hash;
-
-    /* Start periodic timer to detect external changes when we are the owner */
-    NtUserSetTimer(clipboard_hwnd, 1, CLIPBOARD_UPDATE_DELAY, NULL, TIMERV_DEFAULT_COALESCING);
 
     OH_UdmfData_Destroy(udmfData);
 }
@@ -634,31 +583,26 @@ static WINE_CLIPFORMAT* format_for_type(const char *type)
 /**************************************************************************
  *              update_clipboard
  *
- * Periodically update the clipboard while the clipboard is owned by a
- * OHOS app.
+ * Check for clipboard updates when the clipboard is owned by a OHOS app.
+ * Relies on OH_PasteboardObserver callback for change notifications.
  */
 static void update_clipboard(void)
 {
     static BOOL updating;
 
-    TRACE("is_clipboard_owner %d last_clipboard_update %u now %u\n",
-          is_clipboard_owner, last_clipboard_update, NtGetTickCount());
+    TRACE("is_clipboard_owner %d pasteboard_notify_flag %d\n",
+          is_clipboard_owner, InterlockedCompareExchange(&pasteboard_notify_flag, 0, 0));
 
     if (updating) return;
     updating = TRUE;
 
     if (is_clipboard_owner)
     {
-        /* When we are the clipboard owner, check for OHOS-side changes */
+        /* When we are the clipboard owner, check for OHOS-side changes via observer callback */
         if (InterlockedCompareExchange(&pasteboard_notify_flag, 0, 0))
         {
             /* OHOS app changed the pasteboard while we were the owner */
             InterlockedExchange(&pasteboard_notify_flag, 0);
-            grab_win32_clipboard();
-        }
-        else if (NtGetTickCount() - last_clipboard_update > CLIPBOARD_UPDATE_DELAY)
-        {
-            /* Periodic check for changes */
             grab_win32_clipboard();
         }
     }
@@ -818,22 +762,10 @@ LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_RENDERFORMAT:
             render_format(wp);
             break;
-        case WM_TIMER:
-            if (!is_clipboard_owner)
-            {
-                /* Not the clipboard owner anymore, stop polling */
-                NtUserKillTimer(hwnd, 1);
-                break;
-            }
-            update_clipboard();
-            break;
         case WM_DESTROYCLIPBOARD:
             is_clipboard_owner = FALSE;
-            /* Stop the timer when we lose clipboard ownership */
-            NtUserKillTimer(hwnd, 1);
             break;
         case WM_DESTROY:
-            NtUserKillTimer(hwnd, 1);
             cleanup_pasteboard();
             break;
         case WM_USER:
@@ -866,7 +798,7 @@ void OHOS_UpdateClipboard(void)
     TRACE("\n");
 
     now = NtGetTickCount();
-    if (last_update && (int)(now - last_update) <= CLIPBOARD_UPDATE_DELAY) return;
+    if (last_update && (int)(now - last_update) <= 2000) return;
 
     if (!NtUserIsWindow(clipboard_manager))
     {
