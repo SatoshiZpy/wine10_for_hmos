@@ -91,6 +91,9 @@
 #include "wine/rbtree.h"
 #include "unix_private.h"
 #include "wine/debug.h"
+#ifdef __OHOS__
+#include "ohos_adapter.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(virtual);
 WINE_DECLARE_DEBUG_CHANNEL(module);
@@ -2871,7 +2874,11 @@ static void alloc_arm64ec_map(void)
     if (status)
     {
         ERR( "failed to allocate ARM64EC map: %08x\n", status );
+#ifdef __OHOS__
+        KillNativeProcess(1);
+#else
         exit(1);
+#endif
     }
     peb->EcCodeBitMap = arm64ec_view->base;
 }
@@ -4110,7 +4117,11 @@ TEB *virtual_alloc_first_teb(void)
     if (status)
     {
         ERR( "wine: failed to map the shared user data: %08x\n", status );
+#ifdef __OHOS__
+        KillNativeProcess(1);
+#else
         exit(1);
+#endif
     }
 
     NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,
@@ -4339,13 +4350,21 @@ void virtual_map_user_shared_data(void)
     if ((status = NtOpenSection( &section, SECTION_ALL_ACCESS, &attr )))
     {
         ERR( "failed to open the USD section: %08x\n", status );
+#ifdef __OHOS__
+        KillNativeProcess(1);
+#else
         exit(1);
+#endif
     }
     if ((res = server_get_unix_fd( section, 0, &fd, &needs_close, NULL, NULL )) ||
         (user_shared_data != mmap( user_shared_data, page_size, PROT_READ, MAP_SHARED|MAP_FIXED, fd, 0 )))
     {
         ERR( "failed to remap the process USD: %d\n", res );
+#ifdef __OHOS__
+        KillNativeProcess(1);
+#else
         exit(1);
+#endif
     }
     if (needs_close) close( fd );
     NtClose( section );
@@ -4370,13 +4389,21 @@ void virtual_init_user_shared_data(void)
     if ((status = NtOpenSection( &section, SECTION_ALL_ACCESS, &attr )))
     {
         ERR( "failed to open the USD section: %08x\n", status );
+#ifdef __OHOS__
+        KillNativeProcess(1);
+#else
         exit(1);
+#endif
     }
     if ((res = server_get_unix_fd( section, 0, &fd, &needs_close, NULL, NULL )) ||
         (data = mmap( NULL, sizeof(*data), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0 )) == MAP_FAILED)
     {
         ERR( "failed to remap the process USD: %d\n", res );
+#ifdef __OHOS__
+        KillNativeProcess(1);
+#else
         exit(1);
+#endif
     }
     if (needs_close) close( fd );
     NtClose( section );

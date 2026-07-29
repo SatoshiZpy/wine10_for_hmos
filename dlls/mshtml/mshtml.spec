@@ -15,3 +15,6 @@
 
 #Wine extension for Mozilla plugin support
 @ stdcall NP_GetEntryPoints(ptr)
+
+#Gecko thread proxy extension
+@ stdcall get_gecko_proxy_hwnd()

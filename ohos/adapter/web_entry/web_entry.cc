@@ -13,6 +13,8 @@
 #include "ohos/adapter/aki_hook/aki_hook.h"
 #include "ohos/adapter/common/constants.h"
 #include "ohos/adapter/common/logging.h"
+#include "ohos/adapter/common/unix_socket_utils.h"
+#include "ohos/adapter/ipc_lite/ipc_lite_adapter.h"
 #include "ohos/adapter/multiprocess/app_spawn_communication.h"
 #include "ohos/adapter/multiprocess/command_line/command_line.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
@@ -28,7 +30,7 @@ const std::string kCrashpadHandler = "crashpad-handler";
 static bool g_initialized = false;
 static std::atomic<bool> g_destroyed(false);
 
-namespace  {
+namespace {
 void SetEnv(const std::vector<std::string>& env) {
   if (env.empty()) {
     return;
@@ -38,7 +40,6 @@ void SetEnv(const std::vector<std::string>& env) {
     auto& key = env[i];
     auto& value = env[i + 1];
     if (!value.empty()) {
-      LOGD("set the environment %{public}s:%{public}s", key.c_str(), value.c_str());
       setenv(key.c_str(), value.c_str(), 1 );
       if (key == "WINEDEBUGLOG") {
         int fd = open(value.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
@@ -55,14 +56,13 @@ void SetEnv(const std::vector<std::string>& env) {
     }
   }
 }
-}
 
-void DestroyBrowser() {
-  LOGE("The browser process has exited");
+void Destroy() {
+  LOGI("Process exiting, calling AppLifecycleAdapter.onDestroy");
   auto jsfunc = ohos::adapter::GetJSFunction(
-      "AppLifecycleAdapter.onWebDestroy");
+      "AppLifecycleAdapter.onDestroy");
   if (!jsfunc) {
-      LOGE("AppLifecycleAdapter.onWebDestroy not defined");
+      LOGE("AppLifecycleAdapter.onDestroy not defined");
       return;
   }
   jsfunc->Invoke<void>();
@@ -71,6 +71,7 @@ void DestroyBrowser() {
 bool Destroyed() {
   return g_destroyed.load();
 }
+}  // namespace
 
 void RunBrowser(const std::vector<std::string>& args) {
   LOGI("RunBrowser in g_initialized: %{public}d", g_initialized);
@@ -79,10 +80,10 @@ void RunBrowser(const std::vector<std::string>& args) {
   if (!g_initialized) {
     std::thread WineMainthread([args]() {
       auto loader = BasicLoader::Create(USE_LOADER_TARGET);
-      if (loader->StartMainProcess(args) != 0) {
+      if (loader->StartMainProcess(ProcessType::kMainProcess, args) != 0) {
         return;
       }
-      DestroyBrowser();
+      Destroy();
       g_destroyed.store(true);
     });
     WineMainthread.detach();
@@ -162,20 +163,23 @@ int RunIsolateProcessType(int process_type,
   return result;
 }
 
-void RunWine(const std::vector<std::string>& args,
+void RunWine(int process_type,
+             const std::vector<std::string>& args,
              const std::vector<std::string>& env) {
   LOGI("RunWine in g_initialized: %{public}d", g_initialized);
   if (!g_initialized) {
-    multiprocess::CommandLineHelper::WrapCommands(args, env);
-    std::thread mainthread([args, env]() {
+    multiprocess::CommandLineHelper::SetCommandLine(process_type, args, env);
+    std::thread mainthread([args, env, process_type]() {
       /* set the environment variables */
       SetEnv(env);
 
-      auto loader = BasicLoader::Create(USE_LOADER_TARGET);
-      if (loader->StartMainProcess(args) != 0) {
+      auto loader = BasicLoader::Create(USE_LOADER_TARGET, process_type);
+      if (loader->StartMainProcess(process_type, args) != 0) {
+        Destroy();
         return;
       }
 
+      Destroy();
       g_destroyed.store(true);
     });
     mainthread.detach();
@@ -183,6 +187,70 @@ void RunWine(const std::vector<std::string>& args,
   }
 
   LOGI("RunWine out g_initialized: %{public}d", g_initialized);
+}
+
+int RunWineProcess(const std::vector<std::string>& env_args,
+                   const std::string& ipc_socket_path)
+{
+    LOGI("RunWineProcess pid=%{public}d, socket=%{public}s",
+         getpid(), ipc_socket_path.c_str());
+
+    if (ipc_socket_path.empty()) {
+        LOGE("RunWineProcess: ipc_socket_path is empty");
+        return -1;
+    }
+
+    int fd = common::UnixSocketUtils::CreateClientSocket(ipc_socket_path);
+    if (fd < 0) {
+        LOGE("RunWineProcess: connect failed");
+        return -1;
+    }
+
+    const size_t kMaxBufSize = 4096;
+    std::vector<uint8_t> recv_buf(kMaxBufSize);
+    std::vector<int> recv_fds;
+
+    ssize_t len = common::UnixSocketUtils::RecvMsgWithFdsAndPid(
+        fd, recv_buf.data(), recv_buf.size(), recv_fds);
+    if (len <= 0) {
+        LOGE("RunWineProcess: recv failed, len=%{public}zd", len);
+        close(fd);
+        return -1;
+    }
+
+    std::vector<std::string> commands;
+    std::vector<int32_t> remap_ids;
+
+    if (!ipc_lite::DeserializeProcessInfo(
+            recv_buf.data(), static_cast<size_t>(len),
+            commands, remap_ids)) {
+        LOGE("RunWineProcess: deserialize failed");
+        close(fd);
+        return -1;
+    }
+
+    std::vector<std::pair<int, int>> mapped_fds;
+    for (size_t i = 0; i < recv_fds.size() && i < remap_ids.size(); i++) {
+        mapped_fds.push_back({recv_fds[i], remap_ids[i]});
+    }
+
+    multiprocess::AppSpawnCommunication::SetFdIdsRemap(mapped_fds);
+
+    int32_t pid = getpid();
+    ssize_t ret = send(fd, &pid, sizeof(pid), 0);
+    if (ret != sizeof(pid)) {
+        LOGE("RunWineProcess: send pid failed");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    LOGI("RunWineProcess done: pid=%{public}d, socket closed", pid);
+
+    int process_type = (!commands.empty() && commands[0] == "wineserver")
+        ? ProcessType::kServerProcess : ProcessType::kChildProcess;
+    RunWine(process_type, commands, env_args);
+    return 0;
 }
 
 JSBIND_GLOBAL() {

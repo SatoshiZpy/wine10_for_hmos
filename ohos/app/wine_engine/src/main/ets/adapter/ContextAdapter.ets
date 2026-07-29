@@ -43,6 +43,19 @@ export class ContextAdapter extends BaseAdapter {
         }
     }
 
+    @LogMethod
+    public getActiveWindow(): number {
+        if (this.activeWindow > 0) {
+            return this.activeWindow;
+        }
+        let activeProxy = this.getActiveProxy();
+        if (!activeProxy.isUIAbility()) {
+            LogUtil.error(TAG, 'no active window context');
+            return -1;
+        }
+        return activeProxy.getWindowId();
+    }
+
     public getActiveContext(): Context | undefined {
         let activeProxy = this.getActiveProxy();
         if (!activeProxy) {

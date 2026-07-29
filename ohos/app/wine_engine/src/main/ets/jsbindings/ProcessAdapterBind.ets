@@ -14,8 +14,18 @@ function startChildProcess(callback: Function): void {
   implProcessAdapter().startChildProcess(callback);
 }
 
+function createProcess(processKey: string, sockPath: string, callback: (ret: boolean) => void): void {
+  implProcessAdapter().createProcess(processKey, sockPath, callback);
+}
+
+function killProcess(): void {
+  implProcessAdapter().killProcess();
+}
+
 export class ProcessAdapterBind {
   static bind() {
     JsBindingUtils.bindFunction("WineChildProcessStarter.StartChildProcess", startChildProcess);
+    JsBindingUtils.bindFunction("WineChildProcessStarter.CreateProcess", createProcess);
+    JsBindingUtils.bindFunction("WineChildProcessStarter.KillProcess", killProcess);
   }
 }

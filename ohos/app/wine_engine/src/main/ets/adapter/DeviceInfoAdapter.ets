@@ -39,7 +39,7 @@ import { AbilityManager } from '../common/AbilityManager';
 const TAG: string = 'DeviceInfoAdapter';
 
 @injectable()
-export class DeviceInfoAdapter{
+export class DeviceInfoAdapter {
   private isRegisterDeviceModeChange: boolean = false;
   private nativeContext: NativeContext =
     JsBindingUtils.getNativeContext(ContextType.kMainProcess);

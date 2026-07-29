@@ -62,12 +62,14 @@ struct WindowStyle {
 
 struct NewWindowParam {
  public:
+  std::string process_key;
+  int32_t window_type = kWindow;
   AbilityType ability_type = AbilityType::kEntryAbility;
   int32_t parent_id = -1;
   int32_t widget_id = -1;
   WindowRect bounds;
-  int32_t feature_mask;
-  int32_t window_state_mask;
+  int64_t feature_mask;
+  int64_t window_state_mask;
   int32_t init_color_argb;
   int32_t hwnd = -1;
   int32_t owner_pid = -1;

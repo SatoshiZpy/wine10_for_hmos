@@ -31,6 +31,11 @@ class ADAPTER_EXPORT_API ChildProcessStarter {
   int StartGpuProcess(const std::vector<std::string>& command,
                       const std::vector<std::pair<int, int>>& fds);
 
+  bool CreateProcess(const std::string& processKey,
+                     const std::string& sock_path);
+
+  void KillProcess();
+
  private:
    ChildProcessStarter() = default;
   ~ChildProcessStarter() = default;

@@ -110,7 +110,7 @@ fi
 cd ${ROOT_DIR}
 
 # Extract ohos_sdk.
-COMMAND_LINE_TOOLS_TAR="ohos_sdk/commandline-tools-linux-x64-6.0.2.650.zip"
+COMMAND_LINE_TOOLS_TAR="ohos_sdk/commandline-tools-linux-x64-26.0.0.461.zip"
 COMMAND_LINE_TOOLS_DIR="ohos_sdk/command-line-tools"
 if [ ! -d "${COMMAND_LINE_TOOLS_DIR}" ]; then
     unzip -q "${COMMAND_LINE_TOOLS_TAR}" -d ohos_sdk

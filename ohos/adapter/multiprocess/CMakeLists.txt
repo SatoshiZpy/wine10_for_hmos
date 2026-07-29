@@ -2,7 +2,6 @@ target_sources(adapter PRIVATE
     app_spawn_communication.cc
     child_process_starter.cc
     scoped_socket.cc
-    unix_domain_socket_helper.cc
     command_line/command_line_helper.cc
     command_line/command_line_switches.cc
     command_line/command_line.cc

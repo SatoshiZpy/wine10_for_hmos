@@ -61,6 +61,6 @@ static inline bool is_state(int32_t state, window_state_mask mask)
     return ((window_state_mask)1 << state) & mask;
 }
 
-
 }  // namespace ohos::adapter::window
+
 #endif  // OHOS_ADAPTER_WINDOW_WINDOW_COMMON_H_

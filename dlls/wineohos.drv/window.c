@@ -309,6 +309,7 @@ static void init_event_queue(void)
     }
     NtClose( handle );
     desktop_tid = GetCurrentThreadId();
+    TRACE( "desktop_tid: %x, event_pipe(%d,%d)\n", desktop_tid, event_pipe[0], event_pipe[1] );
 }
 
 
@@ -850,6 +851,7 @@ enum ohos_system_cursors
     TYPE_GRABBING = 18,                            /* kHandGrabbing */
     TYPE_ALIAS = 15,                               /* no dedicated alias style, reuse Copy */
     TYPE_WAIT = 43,                                /* kLoading */
+    TYPE_APPSTARTING = 44,                          /* kRunning */
     TYPE_CONTEXT_MENU = 1,                         /* no equivalent, fall back to Arrow */
     TYPE_CELL = 1,                                 /* no equivalent, fall back to Arrow */
     TYPE_VERTICAL_TEXT = 40,                       /* kHorizontalTextCursor */
@@ -875,6 +877,13 @@ static const struct system_cursors user32_cursors[] =
     { OCR_SIZENS,      TYPE_VERTICAL_DOUBLE_ARROW },
     { OCR_NO,          TYPE_NO_DROP },
     { OCR_HAND,        TYPE_HAND },
+    /*
+     * OCR_APPSTARTING represents background activity (arrow with progress),
+     * so map it to kRunning instead of treating it as a custom ARGB cursor.
+     * This keeps sizing under the system pointer style and avoids applying
+     * display-density scaling to the Windows bitmap.
+     */
+    { OCR_APPSTARTING, TYPE_APPSTARTING },
     { OCR_HELP,        TYPE_HELP },
     { 0 }
 };
@@ -1039,7 +1048,7 @@ BOOL OHOS_CreateWindow( HWND hwnd )
         release_win_data( data );
     }
 
-    if ((event_pipe[0] == 0 || event_pipe[1] == 0) && IsMainProcess()) {
+    if ((event_pipe[0] == 0 || event_pipe[1] == 0)) {
         init_event_queue();
     }
     return TRUE;

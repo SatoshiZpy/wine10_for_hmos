@@ -70,7 +70,7 @@ export class FakeWineProxy implements WineProxy {
   updateAvoidAreaStatus(isFullScreen: boolean) {}
 
   isUIAbility(): boolean {
-    return true;
+    return false;
   }
 
   getWindowStyles(): WindowStyles {

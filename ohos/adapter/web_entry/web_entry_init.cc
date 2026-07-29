@@ -28,7 +28,7 @@ static napi_value RunBrowser(napi_env env, napi_callback_info info) {
   uint32_t args_len = 0;
   napi_status status = napi_get_array_length(env, args[0], &args_len);
   if (status != napi_ok || args_len == 0) {
-    web_entry::RunBrowser(vec_args);
+    RunBrowser(vec_args);
     return nullptr;
   }
 
@@ -56,7 +56,7 @@ static napi_value RunBrowser(napi_env env, napi_callback_info info) {
     }
   }
   
-  web_entry::RunBrowser(vec_args);
+  RunBrowser(vec_args);
   return nullptr;
 }
 
@@ -92,7 +92,7 @@ static napi_value RunOtherProcessType(napi_env env, napi_callback_info info) {
   }
 
   TRACE_EVENT_1("RunOtherProcessType", "process_type", process_type);
-  web_entry::RunOtherProcessType(process_type);
+  RunOtherProcessType(process_type);
   return nullptr;
 }
 
@@ -167,15 +167,74 @@ static napi_value RunWine(napi_env env, napi_callback_info info) {
       delete[] element_value;
     }
   }
-  web_entry::RunWine(vec_args, env_args);
+
+  RunWine(ProcessType::kMainProcess, vec_args, env_args);
+  return nullptr;
+}
+
+static napi_value RunWineProcess(napi_env env, napi_callback_info info) {
+  TRACE_EVENT_0("RunWineProcess");
+  size_t argc = 2;
+  napi_value args[2] = {nullptr};
+
+  if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok) {
+    LOGE("RunWineProcess napi_get_cb_info failed");
+    return nullptr;
+  }
+
+  if (argc < 2) {
+    LOGE("RunWineProcess: need 2 arguments (env_args, sock_path)");
+    return nullptr;
+  }
+
+  std::vector<std::string> env_args;
+  uint32_t env_len = 0;
+  napi_status status = napi_get_array_length(env, args[0], &env_len);
+  if (status == napi_ok && env_len > 0) {
+    for (uint32_t i = 0; i < env_len; i++) {
+      napi_value element;
+      status = napi_get_element(env, args[0], i, &element);
+      if (status != napi_ok) break;
+      size_t str_len = 0;
+      status = napi_get_value_string_utf8(env, element, nullptr, 0, &str_len);
+      if (status != napi_ok) break;
+      char* buf = new char[str_len + 1];
+      status = napi_get_value_string_utf8(env, element, buf, str_len + 1, &str_len);
+      if (status != napi_ok) {
+        delete[] buf;
+        break;
+      }
+      env_args.push_back(buf);
+      delete[] buf;
+    }
+  }
+
+  size_t sock_len = 0;
+  status = napi_get_value_string_utf8(env, args[1], nullptr, 0, &sock_len);
+  if (status != napi_ok || sock_len == 0) {
+    LOGE("RunWineProcess: invalid sock_path");
+    return nullptr;
+  }
+  char* sock_buf = new char[sock_len + 1];
+  status = napi_get_value_string_utf8(env, args[1], sock_buf, sock_len + 1, &sock_len);
+  if (status != napi_ok) {
+    LOGE("RunWineProcess: get sock_path failed");
+    delete[] sock_buf;
+    return nullptr;
+  }
+  std::string sock_path(sock_buf);
+  delete[] sock_buf;
+
+  RunWineProcess(env_args, sock_path);
   return nullptr;
 }
 
 void Register(napi_env env, napi_value exports) {
   napi_property_descriptor desc[] = {
-      DECLARE_NAPI_METHOD("runBrowser", web_entry::RunBrowser),
-      DECLARE_NAPI_METHOD("runOtherProcessType", web_entry::RunOtherProcessType),
-      DECLARE_NAPI_METHOD("runWine", web_entry::RunWine)
+      DECLARE_NAPI_METHOD("runBrowser", RunBrowser),
+      DECLARE_NAPI_METHOD("runOtherProcessType", RunOtherProcessType),
+      DECLARE_NAPI_METHOD("runWine", RunWine),
+      DECLARE_NAPI_METHOD("runWineProcess", RunWineProcess)
   };
   if (napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]),
                              desc) != napi_ok) {

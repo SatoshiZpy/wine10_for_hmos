@@ -144,7 +144,16 @@ public:
 
     int CreateWindow(const ipc::WindowParam& param) override
     {
-        return ChildProcessHelper::CreateWindow(param);
+        NewWindowParam win_param;
+        win_param.window_type = param.window_type;
+        win_param.ability_type = (AbilityType)param.ability_type;
+        win_param.bounds = {param.left, param.top, param.width, param.height};
+        win_param.parent_id = param.parent_id;
+        win_param.hwnd = param.hwnd;
+        win_param.owner_pid = param.owner_pid;
+        win_param.feature_mask = param.features;
+        win_param.window_state_mask = param.window_state;
+        return ChildProcessHelper::CreateWindow(win_param);
     }
 
     int SetWindowBounds(int32_t widget_id, const WindowRect& rect) override
@@ -159,7 +168,16 @@ public:
 
     int UpdateWindow(int32_t widget_id, const ipc::WindowParam& param) override
     {
-        return ChildProcessHelper::UpdateWindow(widget_id, param);
+        NewWindowParam win_param;
+        win_param.window_type = param.window_type;
+        win_param.ability_type = (AbilityType)param.ability_type;
+        win_param.bounds = {param.left, param.top, param.width, param.height};
+        win_param.parent_id = param.parent_id;
+        win_param.hwnd = param.hwnd;
+        win_param.owner_pid = param.owner_pid;
+        win_param.feature_mask = param.features;
+        win_param.window_state_mask = param.window_state;
+        return ChildProcessHelper::UpdateWindow(widget_id, win_param);
     }
 
     int CloseWindow(int32_t widget_id) override

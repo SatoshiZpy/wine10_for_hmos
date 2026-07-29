@@ -53,7 +53,6 @@ class ADAPTER_EXPORT_API XComponentManager final : public XComponentDelegate {
   std::unordered_map<int32_t, std::shared_ptr<XComponentImpl>> render_map_;
   std::mutex mutex_;
   std::shared_ptr<InputEventCallBack> callback_;
-  int32_t widget_id_ = -1;
 };
 
 }  // namespace ohos::adapter::xcomponent

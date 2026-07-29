@@ -26,7 +26,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(ohos);
 unsigned int screen_width = 0;
 unsigned int screen_height = 0;
 RECT virtual_screen_rect = { 0, 0, 0, 0 };
-BOOL in_child_process = FALSE;
+BOOL in_child_process = FALSE;  /* this parameter is deprecated */
 
 static const unsigned int screen_bpp = 32;  /* we don't support other modes */
 
@@ -337,13 +337,11 @@ static HRESULT ohos_init( void *arg )
 
     if (IsMainProcess())  /* running under arkui */
     {
-        TRACE( "ohos_init: running under arkui\n" );
-        in_child_process = FALSE;
+        TRACE( "ohos_init: running under arkui main process\n" );
     }
     else
     {
-        WARN( "ohos_init: running (non-arkui) process\n" );
-        in_child_process = TRUE;
+        WARN( "ohos_init: running arkui isolate process\n" );
     }
 
     __wine_set_user_driver( &ohos_drv_funcs, WINE_GDI_DRIVER_VERSION );

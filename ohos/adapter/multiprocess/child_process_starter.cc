@@ -8,6 +8,7 @@
 #include <IPCKit/ipc_kit.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -20,6 +21,7 @@
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/multiprocess/isolate_process/isolate_process_helper.h"
 #include "ohos/adapter/multiprocess/isolate_process/native_child_process_library.h"
+#include "ohos/adapter/multiprocess/isolate_process/native_child_process_configs_wrapper.h"
 #include "ohos/adapter/multiprocess/child_process/child_process_helper.h"
 
 namespace ohos::adapter::multiprocess {
@@ -108,6 +110,43 @@ int ChildProcessStarter::StartGpuProcess(
   LogStartChildProcessFixesCommands(commands);
 
   return ChildProcessHelper::CreateProcess(commands, fds);
+}
+
+bool ChildProcessStarter::CreateProcess(
+    const std::string& processKey,
+    const std::string& sock_path) {
+  LOGI("ChildProcessStarter::CreateProcess key=%{public}s, "
+       "sock=%{public}s (empty impl)",
+       processKey.c_str(), sock_path.c_str());
+
+  auto promise = std::make_shared<std::promise<bool>>();
+  std::function<void(bool)> callback =
+    [promise](bool result) {
+      promise->set_value(result);
+    };
+
+  auto func = ohos::adapter::GetJSFunction("WineChildProcessStarter.CreateProcess");
+  if (!func) {
+    LOGE("WineChildProcessStarter.CreateProcess not defined");
+    return false;
+  }
+  func->Invoke<void>(processKey, sock_path, callback);
+  auto future = promise->get_future();
+  auto status = future.wait_for(std::chrono::seconds(3));
+  if (status == std::future_status::timeout) {
+    LOGE("CreateProcess:: Create timeout");
+    return false;
+  }
+  return future.get();
+}
+
+void ChildProcessStarter::KillProcess() {
+  auto func = ohos::adapter::GetJSFunction("WineChildProcessStarter.KillProcess");
+  if (!func) {
+    LOGE("WineChildProcessStarter.KillProcess not defined");
+    return;
+  }
+  func->Invoke<void>();
 }
 
 } // namespace ohos::adapter::multiprocess

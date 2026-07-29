@@ -14,7 +14,6 @@
 #include <string>
 #include <unordered_map>
 
-#include "ohos/adapter/ipc/window_param.h"
 #include "ohos/adapter/window/window_state_monitor.h"
 
 namespace ohos::adapter::window {
@@ -36,10 +35,10 @@ class WineWindow {
     virtual ~WineWindow();
 
     static std::shared_ptr<WineWindow> Create(
-      const ipc::WindowParam& param,
+      const NewWindowParam& param,
       int* widget_id);
 
-    bool Initialize(const ipc::WindowParam& param);
+    bool Initialize(const NewWindowParam& param);
 
     virtual WineFakeWindow* AsFakeWindow();
     virtual WineFloatWindow* AsFloatWindow();
@@ -91,11 +90,10 @@ class WineWindow {
     bool InitSurface();
 
   private:
-    virtual void OnInitialize(const ipc::WindowParam& param) {}
+    virtual void OnInitialize(const NewWindowParam& param) {}
     virtual int32_t OnCreateWindow() { return -1; }
 
-    WindowStyle BuilderStyle(const ipc::WindowParam& param);
-    NewWindowParam BuilderParam(const ipc::WindowParam& param);
+    WindowStyle BuilderStyle(const NewWindowParam& param);
 
     void RegistWindowEvent() {}
     void UnRegistWindowEvent() {}

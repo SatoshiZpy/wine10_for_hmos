@@ -9,11 +9,13 @@ import { NativeContext } from '../interface/CommonInterface';
 export default class JsBindingUtils {
   private static currentContext: NativeContext;
 
-  private static currentType: ContextType;
+  private static currentType: ContextType = -1;
 
   static initNativeContext(contextType: ContextType) {
-    JsBindingUtils.currentType = contextType;
-    JsBindingUtils.currentContext = adapter.getNativeContext(contextType);
+    if (JsBindingUtils.currentType !== contextType) {
+      JsBindingUtils.currentType = contextType;
+      JsBindingUtils.currentContext = adapter.getNativeContext(contextType);
+    }
   }
 
   static bindFunction(name: string, func: Function) {

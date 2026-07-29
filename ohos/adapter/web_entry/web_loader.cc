@@ -13,13 +13,13 @@ BasicLoader::BasicLoader(const std::string& dir, const std::string& name)
 bool BasicLoader::Initialize() { return true; }
 
 __attribute__((no_sanitize("cfi", "cfi-icall")))
-int BasicLoader::StartMainProcess(const std::vector<std::string>& args) {
+int BasicLoader::StartMainProcess(int process_type, const std::vector<std::string>& args) {
   if (!shared_library_.IsLoaded()) {
     LOGE("StartMainProcess shared_library_ load failed.");
     return -1;
   }
 
-  auto entry = GetEntryPoint(ProcessType::kMainProcess);
+  auto entry = GetEntryPoint(process_type);
   if (entry.empty()) {
     LOGE("Get Entry Point failed.");
     return -1;

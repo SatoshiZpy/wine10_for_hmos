@@ -191,7 +191,7 @@ static void fatal_error(const char* err, ...) {
     ERR("fatal_error: %s", buffer);
     free(buffer);
 
-    exit(1);
+    KillNativeProcess(1);
 }
 #else
 static void fatal_error( const char *err, ... )
@@ -2381,18 +2381,33 @@ static void check_command_line( int argc, char *argv[] )
 
     if (argc <= 1)
     {
+#ifdef __OHOS__
+        TRACE("%s\n", usage);
+        KillNativeProcess(1);
+#else
         fprintf( stderr, "%s\n", usage );
         exit(1);
+#endif
     }
     if (!strcmp( argv[1], "--help" ))
     {
+#ifdef __OHOS__
+        TRACE("%s\n", usage);
+        KillNativeProcess(0);
+#else
         printf( "%s\n", usage );
         exit(0);
+#endif
     }
     if (!strcmp( argv[1], "--version" ))
     {
+#ifdef __OHOS__
+        TRACE("%s\n", wine_build);
+        KillNativeProcess(0);
+#else
         printf( "%s\n", wine_build );
         exit(0);
+#endif
     }
 
     reexec_loader( argc, argv, NULL );

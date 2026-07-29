@@ -38,7 +38,7 @@ class BasicLoader {
 
   bool Initialize();
 
-  int StartMainProcess(const std::vector<std::string>& args);
+  int StartMainProcess(int process_type, const std::vector<std::string>& args);
   int StartChildProcess(int process_type, int argc, const char** argv);
 
   virtual std::string GetEntryPoint(int process_type) = 0;

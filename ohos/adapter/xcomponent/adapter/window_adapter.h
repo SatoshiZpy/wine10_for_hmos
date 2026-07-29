@@ -105,6 +105,7 @@ public:
 
     void OnWindowInitDone(int32_t widget_id);
     bool WindowHasInit(int32_t widget_id);
+    bool IsEmpty();
 
 private:
     WindowAdapter() = default;

@@ -20,7 +20,8 @@ class CommandLineHelper {
 
   static std::string BuildSharedFDCommand(const FdRemapVector& fds, std::vector<int>& share_fds);
 
-  static void WrapCommands(const std::vector<std::string>& args,
+  static void SetCommandLine(int process_type,
+    const std::vector<std::string>& args,
     const std::vector<std::string>& env);
 
   static std::string GetEnvString();
@@ -28,6 +29,10 @@ class CommandLineHelper {
   static bool IsMainProcess();
 
   static int32_t GetMainProcessId();
+
+  static std::string GetProcessName();
+
+  static int GetProcessType();
 };
 }  // namespace ohos::adapter::multiprocess
 #endif  // OHOS_ADAPTER_MULTIPROCESS_COMMAND_LINE_COMMAND_LINE_HELPER_H_

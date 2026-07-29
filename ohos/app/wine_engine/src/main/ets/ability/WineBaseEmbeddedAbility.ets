@@ -16,6 +16,7 @@ import { UIExtensionContentSession } from '@kit.AbilityKit';
 import { JSON } from '@kit.ArkTS';
 import { AbilityManager } from '../common/AbilityManager';
 import { WineBaseExtensionAbility } from './WineBaseExtensionAbility';
+import { WineLoaderAdapter } from '../adapter/WineLoaderAdapter';
 
 const TAG: string = 'WineBaseEmbeddedAbility';
 
@@ -24,6 +25,7 @@ export class WineBaseEmbeddedAbility extends WineBaseExtensionAbility {
   private abilityManager: AbilityManager | undefined = undefined;
   private displayAdapter : DisplayAdapter | undefined = undefined;
   private nativeThemeAdapter: NativeThemeAdapter | undefined = undefined;
+  private wineLoader: WineLoaderAdapter | undefined = undefined;
 
   onConfigurationUpdate(config: Configuration) {
     this.nativeThemeAdapter?.setSystemNativeTheme(config.colorMode);
@@ -35,6 +37,7 @@ export class WineBaseEmbeddedAbility extends WineBaseExtensionAbility {
     this.nativeThemeAdapter = Inject.get(NativeThemeAdapter);
     this.displayAdapter = Inject.get(DisplayAdapter);
     Inject.get(PermissionManagerAdapter).initPermissions();
+    this.wineLoader = Inject.get(WineLoaderAdapter);
   }
 
   onSessionCreate(want: Want, session: UIExtensionContentSession) {
@@ -77,6 +80,11 @@ export class WineBaseEmbeddedAbility extends WineBaseExtensionAbility {
     };
     let storage: LocalStorage = new LocalStorage(param);
     session.loadContent('pages/EmbeddedWindow', storage);
+
+    this.wineLoader?.loadWine(this.exePath, this.sockPath, this.startUri)
+      .catch((err: Object) => {
+        LogUtil.error(TAG, `loadWine failed: ${JSON.stringify(err)}`);
+      });
   }
 
   onSessionDestroy(session: UIExtensionContentSession) {

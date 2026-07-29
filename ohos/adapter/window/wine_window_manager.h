@@ -47,13 +47,16 @@ class WineWindowManager : public WindowStatusListener {
       return last_active_widget_id_;
     }
 
+    bool IsEmpty();
+    bool IsWindowAtLast();
+
   private:
     WineWindowManager();
     ~WineWindowManager();
 
     Mutex windows_mutex_;
     std::unordered_map<int32_t, std::shared_ptr<WineWindow>> windows_ GUARDED_BY(windows_mutex_);
-    int32_t last_active_widget_id_;
+    int32_t last_active_widget_id_ = -1;
 };
 
 }  // namespace ohos::adapter::window

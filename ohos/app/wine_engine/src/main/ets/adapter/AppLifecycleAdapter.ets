@@ -11,30 +11,30 @@ import LogMethod from '../common/LogDecorator';
 @injectable()
 export class AppLifecycleAdapter extends BaseAdapter {
   private abilityManager: AbilityManager;
-  private webStatus: WineStatus;
+  private status: WineStatus;
 
   constructor(
     @inject(AbilityManager) abilityManager: AbilityManager,
   ) {
     super();
     this.abilityManager = abilityManager;
-    this.webStatus = WineStatus.kInit;
+    this.status = WineStatus.kInit;
   }
 
   @LogMethod
-  onWineCreate() {
-    this.webStatus = WineStatus.kStart;
+  onCreate() {
+    this.status = WineStatus.kStart;
     this.start();
   }
 
   @LogMethod
-  onWineDestroy() {
-    this.webStatus = WineStatus.kDestroy;
+  onDestroy() {
+    this.status = WineStatus.kDestroy;
     this.destroy();
   }
 
-  getWineStatus(): number {
-    return this.webStatus;
+  getStatus(): number {
+    return this.status;
   }
 
   start() {}

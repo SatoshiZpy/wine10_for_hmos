@@ -71,6 +71,12 @@ void WineWindowManager::RemoveWindow(int32_t widget_id)
   windows_.erase(widget_id); 
 }
 
+bool WineWindowManager::IsEmpty()
+{
+  MutexLock lock_protect(windows_mutex_);
+  return windows_.empty();
+}
+
 std::shared_ptr<WineWindow> WineWindowManager::GetWindow(int32_t widget_id)
 {
   MutexLock lock_protect(windows_mutex_);
@@ -78,6 +84,18 @@ std::shared_ptr<WineWindow> WineWindowManager::GetWindow(int32_t widget_id)
     return nullptr;
   }
   return windows_[widget_id];
+}
+
+bool WineWindowManager::IsWindowAtLast()
+{
+  int top_window_count = 0;
+  for (const auto& pair : windows_) {
+    WineWindow* window = pair.second.get();
+    if (window && window->AsToplevelWindow()) {
+      top_window_count++;
+    }
+  }
+  return top_window_count == 1;
 }
 
 }  // namespace ohos::adapter::window

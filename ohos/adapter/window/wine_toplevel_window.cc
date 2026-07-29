@@ -6,6 +6,7 @@
 
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/window/adapter/app_window_adapter.h"
+#include "ohos/adapter/window/wine_window_manager.h"
 
 namespace ohos::adapter::window {
 
@@ -21,10 +22,11 @@ WineToplevelWindow* WineToplevelWindow::AsToplevelWindow()
 
 int32_t WineToplevelWindow::OnCreateWindow()
 {
+  // reuse the initial UI window
   if (GetWidget() == USER_DEFAULT_WIDGET_ID) {
+    LOGI("reuse the initial UI window");
     if (!WineWindow::InitSurface()) {
-        LOGE("init surface failed");
-        return -1;
+        LOGW("init failed: surface not ready");
     }
     return USER_DEFAULT_WIDGET_ID;
   }
@@ -43,7 +45,13 @@ void WineToplevelWindow::Hide()
 
 void WineToplevelWindow::Close()
 {
-  AppWindowAdapter::GetInstance().Close(GetWidget());
+  if (WineWindowManager::GetInstance().IsWindowAtLast()) {
+    LOGW("waiting for the app thread to exit safely, cache last window");
+    AppWindowAdapter::GetInstance().Hide(GetWidget());
+    WineWindowManager::GetInstance().SetLastActiveWidgetId(GetWidget());
+  } else {
+    AppWindowAdapter::GetInstance().Close(GetWidget());
+  }
 }
 
 void WineToplevelWindow::SetBounds(const WindowRect& rect)

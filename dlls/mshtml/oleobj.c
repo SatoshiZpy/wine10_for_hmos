@@ -3699,7 +3699,11 @@ static const cpc_entry_t HTMLDocumentObj_cpc[] = {
     {NULL}
 };
 
+#ifdef __OHOS__
+HRESULT create_document_object(BOOL is_mhtml, IUnknown *outer, REFIID riid, void **ppv)
+#else
 static HRESULT create_document_object(BOOL is_mhtml, IUnknown *outer, REFIID riid, void **ppv)
+#endif
 {
     HTMLDocumentObj *doc;
     HRESULT hres;

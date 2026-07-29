@@ -14,9 +14,9 @@
 #include <vector>
 
 #include "ohos/adapter/common/logging.h"
+#include "ohos/adapter/common/unix_socket_utils.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/multiprocess/scoped_socket.h"
-#include "ohos/adapter/multiprocess/unix_domain_socket_helper.h"
 
 namespace ohos::adapter::multiprocess {
 namespace {
@@ -47,11 +47,11 @@ int RecvRequest(int fd, pid_t pid) {
   std::vector<int> ret_fds;
   pid_t ret_pid = -1;
 
-  if (UnixDomainSocketHelper::RecvMsgWithPid(fd,
-                                             buff,
-                                             sizeof(buff),
-                                             ret_fds,
-                                             &ret_pid) == -1) {
+  if (common::UnixSocketUtils::RecvMsgWithFdsAndPid(fd,
+                                                   buff,
+                                                   sizeof(buff),
+                                                   ret_fds,
+                                                   &ret_pid) < 0) {
     LOGE("RecvMsgWithPid failed, pid = %{public}d, ret_pid = %{public}d, sizeof(buff) = %{public}lu",
          pid, ret_pid, sizeof(buff));
     return -1;
@@ -114,18 +114,17 @@ bool AppSpawnCommunication::PrepareResponseData(
 }
 
 bool AppSpawnCommunication::PrepareCommunication() {
-  ScopedSocket server_socket =
-      UnixDomainSocketHelper::CreateServerUnixDomainSocket(kDomainSocketPath);
-  if (!server_socket.Valid()) {
+  int server_fd = common::UnixSocketUtils::CreateServerSocket(kDomainSocketPath);
+  if (server_fd < 0) {
     LOGE("%{public}s, create server socket failed", __FUNCTION__);
     return false;
   }
-  if (!UnixDomainSocketHelper::EnableReceiveProcessId(
-          server_socket.GetSocket())) {
+  if (!common::UnixSocketUtils::EnableReceiveProcessId(server_fd)) {
     LOGE("EnableReceiveProcessId Failed");
+    close(server_fd);
     return false;
   }
-  this->server_socket_ = std::make_unique<ScopedSocket>(server_socket);
+  this->server_socket_ = std::make_unique<ScopedSocket>(server_fd);
   return true;
 }
 
@@ -139,10 +138,10 @@ bool AppSpawnCommunication::HandleRequestAfterChildProcStart(pid_t child_pid) {
       case RequstCommandType::kRequestLength: {
         // step 1: Handle Requst Data Length Command and Send Data Length
         std::string length = std::to_string(this->GetCmdLinesSize());
-        send_msg_result = UnixDomainSocketHelper::SendMsg(cs.GetSocket(),
-                                                          length.data(),
-                                                          length.size(),
-                                                          {});
+        send_msg_result = common::UnixSocketUtils::SendMsgWithFds(cs.GetSocket(),
+                                                                  length.data(),
+                                                                  length.size(),
+                                                                  {});
         if (!send_msg_result) {
           LOGE("[%{public}s#%{public}s], send request length failed",
                __FILE__, __FUNCTION__);
@@ -151,10 +150,10 @@ bool AppSpawnCommunication::HandleRequestAfterChildProcStart(pid_t child_pid) {
       }
       case RequstCommandType::kRequestData:
         // step 2: Handle Requst Data Command and Send Data
-        send_msg_result = UnixDomainSocketHelper::SendMsg(cs.GetSocket(),
-                                                          this->GetCmdLinesData(),
-                                                          this->GetCmdLinesSize(),
-                                                          this->share_fds_);
+        send_msg_result = common::UnixSocketUtils::SendMsgWithFds(cs.GetSocket(),
+                                                                  this->GetCmdLinesData(),
+                                                                  this->GetCmdLinesSize(),
+                                                                  this->share_fds_);
         if (!send_msg_result) {
           LOGE("[%{public}s#%{public}s], send request data failed",
                __FILE__, __FUNCTION__);
@@ -175,13 +174,18 @@ AppSpawnCommunication::~AppSpawnCommunication() {
   if (this->server_socket_) {
     this->server_socket_->Close();
   }
-  UnixDomainSocketHelper::DeleteFile(kDomainSocketPath);
+  common::UnixSocketUtils::DeleteSocketFile(kDomainSocketPath);
 }
 
 bool AppSpawnCommunication::RequestCommandline(
     std::vector<std::string>& commands) {
-  auto remote_fd =
-      UnixDomainSocketHelper::CreateClientUnixDomainSocket(kDomainSocketPath);
+  int remote_fd =
+      common::UnixSocketUtils::CreateClientSocket(kDomainSocketPath);
+  if (remote_fd < 0) {
+    LOGE("CreateClientSocket failed");
+    return false;
+  }
+  ScopedSocket remote_socket(remote_fd);
 
   size_t mem_length = kDefaultBufferSize;
   std::vector<int> fds;
@@ -189,37 +193,39 @@ bool AppSpawnCommunication::RequestCommandline(
     auto command = RequstCommandList[i];
     auto request = std::to_string((int)command);
     std::vector<char> mem_buf(mem_length);
-    UnixDomainSocketHelper::SendMsg(remote_fd.GetSocket(), request.data(),
-                                    request.size(), {});
-    int recv_result = UnixDomainSocketHelper::KRecvMsgFailed;
+    common::UnixSocketUtils::SendMsgWithFds(remote_socket.GetSocket(),
+                                            request.data(),
+                                            request.size(),
+                                            {});
+    ssize_t recv_result = -1;
     switch (command) {
       case RequstCommandType::kRequestLength:
-        // step 1: Requst data length
-        recv_result = UnixDomainSocketHelper::RecvMsg(remote_fd.GetSocket(),
+        recv_result = common::UnixSocketUtils::RecvMsgWithFdsAndPid(
+                                                      remote_socket.GetSocket(),
                                                       &mem_buf[0],
                                                       mem_length,
                                                       fds);
-        if (recv_result == UnixDomainSocketHelper::KRecvMsgFailed) {
+        if (recv_result < 0) {
           LOGE("receivce data length error, recvMsg failed");
-          remote_fd.Close();
+          remote_socket.Close();
           return false;
         }
         mem_length = std::stoi(&mem_buf[0]) + 1;
         if (mem_length > static_cast<size_t>(std::numeric_limits<int>::max())) {
           LOGE("receivce data length error");
-          remote_fd.Close();
+          remote_socket.Close();
           return false;
         }
         break;
       case RequstCommandType::kRequestData: {
-        // step 2: Requst command data and call dup2
-        recv_result = UnixDomainSocketHelper::RecvMsg(remote_fd.GetSocket(),
+        recv_result = common::UnixSocketUtils::RecvMsgWithFdsAndPid(
+                                                      remote_socket.GetSocket(),
                                                       &mem_buf[0],
                                                       mem_length,
                                                       fds);
-        if (recv_result == UnixDomainSocketHelper::KRecvMsgFailed) {
+        if (recv_result < 0) {
           LOGE("receivce data error, recvMsg failed");
-          remote_fd.Close();
+          remote_socket.Close();
           return false;
         }
         LOGI("receivce commandlines length: %{public}zu, data: %{public}s",
@@ -232,7 +238,7 @@ bool AppSpawnCommunication::RequestCommandline(
                "%{public}lu",
                fds.size(),
                fd_map_ids.size());
-          remote_fd.Close();
+          remote_socket.Close();
           return false;
         }
         for (size_t j = 0; j < fds.size(); j++) {
@@ -245,7 +251,7 @@ bool AppSpawnCommunication::RequestCommandline(
         break;
     }
   }
-  remote_fd.Close();
+  remote_socket.Close();
   return true;
 }
 

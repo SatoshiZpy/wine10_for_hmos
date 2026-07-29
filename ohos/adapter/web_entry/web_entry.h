@@ -13,8 +13,11 @@ namespace ohos::adapter::web_entry {
 void RunBrowser(const std::vector<std::string>& args);
 int RunOtherProcessType(int process_type);
 int RunIsolateProcessType(int process_type, const std::vector<std::string>& args);
-void RunWine(const std::vector<std::string>& args,
+void RunWine(int process_type,
+             const std::vector<std::string>& args,
              const std::vector<std::string>& env);
+int RunWineProcess(const std::vector<std::string>& env_args,
+                   const std::string& ipc_socket_path);
 
 }  // namespace ohos::adapter::web_entry
 #endif  // OHOS_ADAPTER_WEB_ENTRY_H_

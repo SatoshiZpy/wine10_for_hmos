@@ -50,6 +50,9 @@
 #ifdef HAVE_SYS_UCONTEXT_H
 # include <sys/ucontext.h>
 #endif
+#ifdef __OHOS__
+#include <errno.h>
+#endif
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -59,6 +62,9 @@
 #include "wine/asm.h"
 #include "unix_private.h"
 #include "wine/debug.h"
+#ifdef __OHOS__
+#include "ohos_adapter.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(seh);
 
@@ -1431,8 +1437,13 @@ void signal_init_process(void)
     return;
 
  error:
+#ifdef __OHOS__
+    ERR("sigaction: %s\n", strerror(errno));
+    KillNativeProcess(1);
+#else
     perror("sigaction");
     exit(1);
+#endif
 }
 
 

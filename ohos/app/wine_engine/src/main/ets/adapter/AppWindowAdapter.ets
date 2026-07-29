@@ -62,11 +62,7 @@ export class AppWindowAdapter extends BaseAdapter {
     this.windowStyle = windowStyle;
 
     try {
-      bundleManager.getBundleInfoForSelf(this.bundleFlags).then((data) => {
-        this.bundleName = data?.name;
-      }).catch((err: BusinessError) => {
-        LogUtil.error(TAG, `getBundleInfoForSelf failed. Cause: ${err.message}`);
-      });
+      this.bundleName = bundleManager.getBundleInfoForSelfSync(this.bundleFlags).name;
     } catch (err) {
       let message = (err as BusinessError).message;
       LogUtil.error(TAG, `getBundleInfoForSelf failed.: ${message}`);
@@ -94,7 +90,7 @@ export class AppWindowAdapter extends BaseAdapter {
         'widgetId': param.widget_id,
         'features': param.feature_mask,
         'window_state': param.window_state_mask,
-        instanceKey: param.widget_id,
+        'instanceKey': `${param.process_key}:${param.widget_id}`,
         'ownerPid': param.owner_pid,
       }
     };

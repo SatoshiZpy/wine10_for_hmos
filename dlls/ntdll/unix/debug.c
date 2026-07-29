@@ -42,6 +42,9 @@
 #include "unix_private.h"
 #include "wine/debug.h"
 #include "wine/logging.h"
+#ifdef __OHOS__
+#include "ohos_adapter.h"
+#endif
 
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(timestamp);
@@ -194,8 +197,14 @@ static void debug_usage(void)
         "Example: WINEDEBUG=+relay,warn-heap\n"
         "    turns on relay traces, disable heap warnings\n"
         "Available message classes: err, warn, fixme, trace\n";
+
+#ifdef __OHOS__
+    ERR("%s\n", usage);
+    KillNativeProcess(1);
+#else
     write( 2, usage, sizeof(usage) - 1 );
     exit(1);
+#endif
 }
 
 /* initialize all options at startup */

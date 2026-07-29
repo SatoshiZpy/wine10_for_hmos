@@ -1241,7 +1241,12 @@ void manage_desktop( WCHAR *arg )
 
     enable_shell = name ? get_default_enable_shell( name ) : FALSE;
     enable_launchers = get_default_enable_launchers();
+#ifdef __OHOS__
+    // disable the windows tray on OHOS.
+    show_systray = FALSE;
+#else
     show_systray = get_default_show_systray( name );
+#endif
     no_tray_items = get_no_tray_items_display();
 
     UuidCreate( &guid );

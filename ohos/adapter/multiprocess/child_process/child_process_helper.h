@@ -34,7 +34,7 @@
 
 #include "ohos/adapter/common/constants.h"
 #include "ohos/adapter/ipc/display_param.h"
-#include "ohos/adapter/ipc/window_param.h"
+#include "ohos/adapter/window/window_common.h"
 
 namespace ohos::adapter::multiprocess {
 class ChildProcessHelper {
@@ -42,8 +42,8 @@ public:
     static int CreateProcess(const std::vector<std::string>& command,
                              const std::vector<std::pair<int, int>>& fds);
     static int KillProcess(int32_t pid);
-    static int CreateWindow(const ipc::WindowParam& param);
-    static int UpdateWindow(int32_t widget_id, const ipc::WindowParam& param);
+    static int CreateWindow(const NewWindowParam& param);
+    static int UpdateWindow(int32_t widget_id, const NewWindowParam& param);
     static int SetWindowBounds(int32_t widget_id, const WindowRect& rect);
     static int SetWindowVisible(int widget_id, int visible);
     static int CloseWindow(int32_t widget_id);

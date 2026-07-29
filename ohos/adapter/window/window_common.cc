@@ -33,6 +33,8 @@ JSBIND_CLASS(WindowStyle) {
 }
 
 JSBIND_CLASS(NewWindowParam) {
+  JSBIND_PROPERTY(process_key);
+  JSBIND_PROPERTY(window_type);
   JSBIND_PROPERTY(ability_type);
   JSBIND_PROPERTY(parent_id);
   JSBIND_PROPERTY(widget_id);
