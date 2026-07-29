@@ -541,7 +541,11 @@ NTSTATUS WINAPI __wine_unix_spawnvp( char * const argv[], int wait )
     }
     else
     {
-        ERR( "__wine_unix_spawnvp: OHOS has no adapter for %s\n", argv[0] );
+        /* Try opening as a local file, let user choose the app */
+        if (OpenNativeFileWithChooser( argv[last] ) == 0)
+            return STATUS_SUCCESS;
+
+        ERR( "__wine_unix_spawnvp: OpenNativeFileWithChooser failed for %s\n", argv[last] );
         return STATUS_NOT_SUPPORTED;
     }
 }

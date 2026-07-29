@@ -9,6 +9,8 @@ import { BaseAdapter } from '../common/BaseAdapter';
 import LogMethod from '../common/LogDecorator';
 import LaunchHelper from '../utils/LaunchHelper';
 import { ContextAdapter } from './ContextAdapter';
+import { MimeTypeAdapter } from './MimeTypeAdapter';
+import Inject from '../common/InjectModule';
 import { fileUri } from '@kit.CoreFileKit';
 import LogUtil from '../utils/LogUtil';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -61,6 +63,23 @@ export class FileManagerAdapter extends BaseAdapter {
              wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION,
       action: "ohos.want.action.viewData",
       uri: uri
+    }
+    LaunchHelper.Launch(this.ctxAdapter.getActiveContext(), want);
+  }
+
+  @LogMethod
+  openVerifiedItemWithChooser(filePath: string) {
+    let uri = fileUri.getUriFromPath(filePath);
+    let baseName = filePath.substring(filePath.lastIndexOf('/') + 1);
+    let dotIndex = baseName.lastIndexOf('.');
+    let ext = dotIndex > 0 ? baseName.substring(dotIndex + 1) : '';
+    let mimeTypes = ext.length > 0 ? Inject.getOrCreate(MimeTypeAdapter).GetMimeTypeByExtension(ext) : [];
+    const want: Want = {
+      flags: wantConstant.Flags.FLAG_AUTH_WRITE_URI_PERMISSION |
+             wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION,
+      action: "ohos.want.action.viewData",
+      uri: uri,
+      type: mimeTypes.length > 0 ? mimeTypes[0] : '*/*'
     }
     LaunchHelper.Launch(this.ctxAdapter.getActiveContext(), want);
   }

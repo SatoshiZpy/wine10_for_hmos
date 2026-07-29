@@ -22,6 +22,7 @@ class ADAPTER_EXPORT_API FileManagerAdapter {
 
   void OpenItemInFolder(const std::string& full_path);
   void OpenVerifiedItem(const std::string& full_path);
+  void OpenVerifiedItemWithChooser(const std::string& full_path);
   void GetPathForUri(const char* uri, std::string& path);
 
  private:

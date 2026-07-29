@@ -14,6 +14,7 @@
 #include "ohos/adapter/cursor/cursor.h"
 #include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/external_protocol/external_protocol_adapter.h"
+#include "ohos/adapter/file_manager/file_manager_adapter.h"
 #include "ohos/adapter/ime_adapter/input_method_adapter.h"
 #include "ohos/adapter/ime_adapter/wine_ime_delegate.h"
 #include "ohos/adapter/life_cycle/lifecycle_init.h"
@@ -529,6 +530,17 @@ int OpenNativeUrl(const char *url)
         return -1;
     }
     ohos::adapter::ExternalProtocolAdapter::GetInstance().OpenExternal(std::string(url));
+    return 0;
+}
+
+int OpenNativeFileWithChooser(const char *path)
+{
+    LOGI("OpenNativeFileWithChooser: path=%{public}s", path ? path : "(null)");
+    if (!path) {
+        LOGE("OpenNativeFileWithChooser: path is nullptr");
+        return -1;
+    }
+    ohos::adapter::FileManagerAdapter::GetInstance().OpenVerifiedItemWithChooser(std::string(path));
     return 0;
 }
 
