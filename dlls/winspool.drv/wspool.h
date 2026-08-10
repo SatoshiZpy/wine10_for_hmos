@@ -37,12 +37,32 @@ extern void WINSPOOL_LoadSystemPrinters(void);
 #define FILENAME_DIALOG  100
 #define EDITBOX 201
 
+#ifdef __OHOS__
+    struct ohos_printer_details
+    {
+        WCHAR *id;
+        WCHAR *make;
+        WCHAR *uri;
+
+        WCHAR *page_sizes;
+        WCHAR *options;
+
+        DWORD status;
+        DWORD color_modes;
+        DWORD duplex_modes;
+    };
+#endif
+
 struct printer_info
 {
     WCHAR *name;
     WCHAR *comment;
     WCHAR *location;
     BOOL is_default;
+
+#ifdef __OHOS__
+    struct ohos_printer_details *ohos_info;
+#endif
 };
 
 struct enum_printers_params

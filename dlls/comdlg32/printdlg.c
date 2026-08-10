@@ -1115,6 +1115,13 @@ static BOOL PRINTDLG_ChangePrinterA(HWND hDlg, char *name, PRINT_PTRA *PrintStru
 	return FALSE;
     }
     dm_tmp = malloc(dmSize);
+#ifdef __OHOS__
+    if (!dm_tmp)
+    {
+        ERR("Failed to allocate %ld bytes for printer %s\n", dmSize, debugstr_a(name));
+        return FALSE;
+    }
+#endif
     dmSize = DocumentPropertiesA(0, 0, name, dm_tmp, NULL,
 				 DM_OUT_BUFFER);
     if(lppd->hDevMode)
@@ -1324,6 +1331,15 @@ static BOOL PRINTDLG_ChangePrinterW(HWND hDlg, WCHAR *name,
     dm_tmp = malloc(dmSize);
     dmSize = DocumentPropertiesW(0, 0, name, dm_tmp, NULL,
 				 DM_OUT_BUFFER);
+#ifdef __OHOS__
+    if (dmSize < 0)
+    {
+        ERR("DocumentProperties output failed for %s, error %lu\n",
+                debugstr_w(name), GetLastError());
+        free(dm_tmp);
+        return FALSE;
+    }
+#endif
     if(lppd->hDevMode)
     {
         lpdm = GlobalLock(lppd->hDevMode);
@@ -1334,7 +1350,24 @@ static BOOL PRINTDLG_ChangePrinterW(HWND hDlg, WCHAR *name,
         lppd->hDevMode = GlobalReAlloc(lppd->hDevMode, dm_tmp->dmSize + dm_tmp->dmDriverExtra, GMEM_MOVEABLE);
     }else
         lppd->hDevMode = GlobalAlloc(GMEM_MOVEABLE, dm_tmp->dmSize + dm_tmp->dmDriverExtra);
+#ifdef __OHOS__
+    if (!lppd->hDevMode)
+    {
+        ERR("Failed to allocate devmode for %s\n", debugstr_w(name));
+        free(dm_tmp);
+        return FALSE;
+    }
+#endif
     lpdm = GlobalLock(lppd->hDevMode);
+#ifdef __OHOS__
+    if (!lpdm)
+    {
+        ERR("Failed to lock devmode for %s\n", debugstr_w(name));
+        free(dm_tmp);
+        return FALSE;
+    }
+#endif
+
     memcpy(lpdm, dm_tmp, dm_tmp->dmSize + dm_tmp->dmDriverExtra);
     free(dm_tmp);
 
@@ -1720,8 +1753,19 @@ static LRESULT PRINTDLG_WMInitDialogW(HWND hDlg,
 	/* Now find selected printer and update rest of dlg */
 	/* ansi is ok here */
 	name = malloc(256 * sizeof(WCHAR));
+#ifdef __OHOS__
+	if (GetDlgItemTextW(hDlg, comboID, name, 255) &&
+	    !PRINTDLG_ChangePrinterW(hDlg, name, PrintStructures))
+	{
+	    ERR("Failed to initialize printer %s\n", debugstr_w(name));
+	    free(name);
+	    EndDialog(hDlg, FALSE);
+	    return FALSE;
+	}
+#else
 	if (GetDlgItemTextW(hDlg, comboID, name, 255))
 	    PRINTDLG_ChangePrinterW(hDlg, name, PrintStructures);
+#endif
 	free(name);
     } else {
 	/* else use default printer */
@@ -1730,7 +1774,18 @@ static LRESULT PRINTDLG_WMInitDialogW(HWND hDlg,
 	BOOL ret = GetDefaultPrinterW(name, &dwBufLen);
 
 	if (ret)
+#ifdef __OHOS__
+	{
+	    if (!PRINTDLG_ChangePrinterW(hDlg, name, PrintStructures))
+	    {
+	        ERR("Failed to initialize default printer %s\n", debugstr_w(name));
+	        EndDialog(hDlg, FALSE);
+	        return FALSE;
+	    }
+	}
+#else
 	    PRINTDLG_ChangePrinterW(hDlg, name, PrintStructures);
+#endif
 	else
 	    FIXME("No default printer found, expect problems!\n");
     }

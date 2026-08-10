@@ -1082,7 +1082,12 @@ static monitor_t * monitor_load_by_port(LPCWSTR portname)
 
     /* wine specific ports */
     if (portname[0] == '|' || portname[0] == '/' ||
+#ifdef __OHOS__
+            !wcsncmp(portname, L"LPR:", 4) || !wcsncmp(portname, L"CUPS:", 5) ||
+            !wcsncmp(portname, L"OHOS:", 5))
+#else
             !wcsncmp(portname, L"LPR:", 4) || !wcsncmp(portname, L"CUPS:", 5))
+#endif
         return monitor_load(L"Local Port", NULL);
 
     /* Try the Local Monitor first */
