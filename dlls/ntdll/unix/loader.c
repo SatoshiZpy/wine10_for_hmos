@@ -2433,10 +2433,12 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
     int socketfd = GetGlobalDescriptor(SERVER_IPC_CHANNEL);
     if (socketfd > 0) {
         char socket_env[64];
-        snprintf( socket_env, sizeof(socket_env), "WINESERVERSOCKET=%u", socketfd );
+        snprintf( socket_env, sizeof(socket_env), "%u", socketfd );
 
         TRACE("socket_env = %s\n", socket_env);
-        putenv( socket_env );
+        /* setenv copies the value; block-local buffer must not be passed to
+         * putenv (environ would point at dead stack after the block exits) */
+        setenv( "WINESERVERSOCKET", socket_env, 1 );
     }
 #endif
 
