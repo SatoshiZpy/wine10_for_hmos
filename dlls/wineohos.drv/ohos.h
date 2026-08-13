@@ -24,20 +24,30 @@ struct ohos_win_data
     HWND                hwnd;          /* hwnd that this private data belongs to */
     HWND                parent;        /* parent hwnd for child windows */
     struct window_rects rects;         /* window rects in monitor DPI, relative to parent client area */
-    ohos_window         window;        /* native window wrapper that forwards calls to the desktop process */
+    int                 widget_id;     /* native window id */
     unsigned int        on_screen;     /* is window ordered in? (minimized or not) */
     unsigned int        shaped;        /* is window using a custom region shape? */
     unsigned int        layered;       /* is window layered and with valid attributes? */
     unsigned int        minimized;     /* is window minimized? */
     unsigned int        lazy_created;
     unsigned int        ignored;
+    unsigned int        pending_change;
+    unsigned int        pending_configure;  /* Wine-initiated size change, awaiting OS confirmation */
+    DWORD               pending_configure_time; /* tick when pending_configure was set */
+    RECT                pending_rect;       /* Wine-initiated target rect */
+    int                 buffer_width;       /* last SET_BUFFER_GEOMETRY width */
+    int                 buffer_height;      /* last SET_BUFFER_GEOMETRY height */
+    RECT                os_pending_rect;    /* OS callback pending rect */
+    int                 os_pending_reason;  /* OS callback RectChangeReason */
+    BOOL                os_rect_pending;    /* whether OS rect change is pending */
+    unsigned int        has_shown;          /* is window has already called show(), Only shown windows can request surface */
 };
 
 struct ohos_client_surface
 {
     struct client_surface client;
     HWND                  hwnd;
-    ohos_window           window;
+    int                   widget_id;
     RECT                  rect;
 };
 
@@ -50,7 +60,7 @@ extern UINT OHOS_OpenGLInit( UINT version, const struct opengl_funcs *opengl_fun
 
 extern void create_native_window( struct ohos_win_data *data );
 extern void destroy_native_window( HWND hwnd );
-extern ohos_window create_client_window( HWND hwnd );
+extern int create_client_window( HWND hwnd );
 extern int window_pos_changed( HWND hwnd, const struct window_rects *rects,
                                const struct window_rects *old_rects,
                                UINT style, UINT flags );
@@ -63,6 +73,7 @@ extern int set_window_visible( HWND hwnd, int visible);
 extern void set_window_title( HWND hwnd, const WCHAR *text);
 extern BOOL is_tooltips_hwnd(HWND hwnd);
 extern int perform( HWND hwnd, int operation, ... );
+extern int cancelBuffer( HWND hwnd, int buffer_id );
 
 extern pthread_mutex_t win_data_mutex;
 extern void OHOS_SetCursor( HWND hwnd, HCURSOR handle );
@@ -80,6 +91,7 @@ extern BOOL init_ohos_pasteboard(void);
 extern void OHOS_UpdateClipboard(void);
 extern LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 extern BOOL OHOS_WindowPosChanging( HWND hwnd, UINT swp_flags, BOOL shaped, const struct window_rects *rects );
+extern BOOL OHOS_GetWindowStateUpdates( HWND hwnd, UINT *state_cmd, UINT *config_cmd, RECT *rect, HWND *foreground );
 extern BOOL OHOS_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_rect, struct window_surface **surface );
 extern void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags, BOOL fullscreen,
                                       const struct window_rects *new_rects, struct window_surface *surface );
@@ -167,10 +179,11 @@ union event_data
     {
         enum event_type type;
         HWND            hwnd;
-        ohos_window     window;
-        BOOL            client;
+        int             left;
+        int             top;
         unsigned int    width;
         unsigned int    height;
+        int             reason;
     } surface;
     struct
     {

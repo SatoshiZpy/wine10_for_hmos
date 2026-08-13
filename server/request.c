@@ -63,6 +63,10 @@
 #include "request_handlers.h"
 #include "logging.h"
 
+#ifdef __OHOS__
+# include "ohos_adapter.h"
+#endif
+
 /* Some versions of glibc don't define this */
 #ifndef SCM_RIGHTS
 #define SCM_RIGHTS 1
@@ -160,10 +164,10 @@ void fatal_error(const char* err, ...) {
     vsnprintf(buffer, length + 1, err, args);
     va_end(args);
     
-    LOGE("wineserver: %{public}s", buffer);
+    ERR("wineserver: %{public}s", buffer);
     free(buffer);
 
-    exit(1);
+    KillNativeProcess(1);
 }
 #else
 void fatal_error( const char *err, ... )
@@ -830,7 +834,11 @@ static void acquire_lock(void)
             if (fcntl( fd, F_GETLK, &fl ) == -1) break;
             /* fall through */
         case EAGAIN:
+#ifdef __OHOS__
+            KillNativeProcess(2);
+#else
             exit(2); /* we didn't get the lock, exit with special status */
+#endif
         default:
             fatal_error( "fcntl %s/%s: %s\n", server_dir, server_lock_name, strerror( errno ));
         }
@@ -851,7 +859,11 @@ static void acquire_lock(void)
         {
             if (got_lock)
                 fatal_error( "couldn't bind to the socket even though we hold the lock\n" );
+#ifdef __OHOS__
+            KillNativeProcess(2);
+#else
             exit(2); /* we didn't get the lock, exit with special status */
+#endif
         }
         fatal_error( "bind: %s\n", strerror( errno ));
     }
@@ -935,7 +947,7 @@ void open_master_socket(void)
     if (!env_fd) fatal_error( "WINESYNCPIPE set to invalid value\n" );
 
     sync_fd = atoi( env_fd );
-    LOGD("get sync_fd=%{public}d", sync_fd);
+    TRACE("get sync_fd=%{public}d", sync_fd);
     if (fcntl( sync_fd, F_SETFD, FD_CLOEXEC ) == -1)
         fatal_error( "Bad sync fd %d\n", sync_fd );
 
@@ -962,7 +974,11 @@ static void close_socket_timeout( void *arg )
 #ifdef DEBUG_OBJECTS
     close_objects();  /* shut down everything properly */
 #endif
+#ifdef __OHOS__
+    KillNativeProcess(0);
+#else
     exit( 0 );
+#endif
 }
 
 /* close the master socket and stop waiting for new clients */

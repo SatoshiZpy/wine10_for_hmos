@@ -314,6 +314,7 @@ static const struct user_driver_funcs ohos_drv_funcs =
     .pWindowPosChanging = OHOS_WindowPosChanging,
     .pCreateWindowSurface = OHOS_CreateWindowSurface,
     .pWindowPosChanged = OHOS_WindowPosChanged,
+    .pGetWindowStateUpdates = OHOS_GetWindowStateUpdates,
     .pOpenGLInit = OHOS_OpenGLInit,
     .pClipboardWindowProc = OHOS_ClipboardWindowProc,
     .pUpdateClipboard = OHOS_UpdateClipboard,

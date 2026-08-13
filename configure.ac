@@ -1029,12 +1029,22 @@ case $host_os in
     LDEXECFLAGS="-Wl,-pie"
     enable_wineohos_drv=${enable_wineohos_drv:-yes}
     dnl declare needed libs
-    AC_SUBST(OHOS_LIBS,"-lhilog_ndk.z -lnative_window -ludmf -lpasteboard -lace_ndk.z")
+    AC_SUBST(OHOS_LIBS,"-lhilog_ndk.z -lnative_window -ludmf -lpasteboard -lace_ndk.z -lohaudio")
     AC_SUBST(ADAPTER_LIBS,"-ladapter")
     AC_SUBST(OHOS_NETCONN_LIBS,"-lnet_connection")
     WINE_TRY_CFLAGS([-Wl,-z,defs],[UNIXLDFLAGS="$UNIXLDFLAGS -Wl,-z,defs"])
     WINE_TRY_CFLAGS([-fPIC -Wl,--export-dynamic],[WINELOADER_LDFLAGS="-Wl,--export-dynamic"])
     WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
+
+    dnl Check for OHOS audio
+    if test "x$with_ohaudio" != "xno";
+    then
+        AC_CHECK_HEADER([ohaudio/native_audiorenderer.h],
+                        [enable_wineohaudio_drv=${enable_wineohaudio_drv:-yes}],
+                        [enable_wineohaudio_drv=no])
+    fi
+    WINE_NOTICE_WITH(ohaudio, [test "x$enable_wineohaudio_drv" = xno],
+        [OHOS audio development files not found, OHOS audio won't be supported.])
 
     WINE_CHECK_SONAME(GLESv2,glFlush)
     WINE_CHECK_SONAME(GLESv3,glFlush)
@@ -1108,6 +1118,7 @@ enable_winecoreaudio_drv=${enable_winecoreaudio_drv:-no}
 enable_wineandroid_drv=${enable_wineandroid_drv:-no}
 enable_winemac_drv=${enable_winemac_drv:-no}
 enable_wineohos_drv=${enable_wineohos_drv:-no}
+enable_wineohaudio_drv=${enable_wineohaudio_drv:-no}
 
 dnl **** External libraries ****
 
@@ -1944,8 +1955,8 @@ WINE_NOTICE_WITH(netapi,[test "x$ac_cv_lib_soname_netapi" = "x"],
 
 
 dnl **** Check for any sound system ****
-if test "x$enable_winealsa_drv$enable_winecoreaudio_drv$enable_winepulse_drv$enable_wineoss_drv$enable_wineandroid_drv" = xnonononono -a \
-        "x$with_alsa$with_coreaudio$with_oss$with_pulse" != xnononono
+if test "x$enable_winealsa_drv$enable_winecoreaudio_drv$enable_winepulse_drv$enable_wineoss_drv$enable_wineandroid_drv$enable_wineohaudio_drv" = xnononononono -a \
+        "x$with_alsa$with_coreaudio$with_oss$with_pulse$with_ohaudio" != xnonononono
 then
     WINE_WARNING([No sound system was found. Windows applications will be silent.])
 fi
@@ -3387,6 +3398,7 @@ WINE_CONFIG_MAKEFILE(dlls/winehid.sys)
 WINE_CONFIG_MAKEFILE(dlls/winemac.drv)
 WINE_CONFIG_MAKEFILE(dlls/winemapi)
 WINE_CONFIG_MAKEFILE(dlls/wineohos.drv)
+WINE_CONFIG_MAKEFILE(dlls/wineohaudio.drv)
 WINE_CONFIG_MAKEFILE(dlls/wineoss.drv)
 WINE_CONFIG_MAKEFILE(dlls/wineps.drv)
 WINE_CONFIG_MAKEFILE(dlls/wineps16.drv16)

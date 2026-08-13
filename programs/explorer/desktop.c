@@ -1210,6 +1210,16 @@ void manage_desktop( WCHAR *arg )
     HANDLE thread;
     DWORD id;
     NTSTATUS status;
+#ifdef __OHOS__
+    HANDLE event;
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING nameW = RTL_CONSTANT_STRING( L"\\KernelObjects\\__explorer_event" );
+
+    InitializeObjectAttributes( &attr, &nameW, OBJ_OPENIF | OBJ_INHERIT, 0, NULL );
+    NtCreateEvent( &event, EVENT_ALL_ACCESS, &attr, NotificationEvent, 0 );
+
+    ResetEvent( event );
+#endif
 
     /* get the rest of the command line (if any) */
     while (*p && !is_whitespace(*p)) p++;
@@ -1303,6 +1313,10 @@ void manage_desktop( WCHAR *arg )
         {
             pShellDDEInit( TRUE );
         }
+#ifdef __OHOS__
+        TRACE( "desktop window created, hwnd %p\n", hwnd );
+        SetEvent( event );
+#endif
     }
 
     /* if we have a command line, execute it */

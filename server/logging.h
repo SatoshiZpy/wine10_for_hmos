@@ -9,26 +9,32 @@
 #include <hilog/log.h>
 #define LOG_DOMAIN 0x3200
 #define LOG_TAG "OHWineServer"
-#define LOGI(...)                                                     \
-  ((void)OH_LOG_Print(LOG_APP, LOG_INFO, LOG_DOMAIN, LOG_TAG, \
-                      __VA_ARGS__))
+#define LOGI(fmt, ...)                                                                                                  \
+    ((void)OH_LOG_Print(LOG_APP, LOG_INFO, LOG_DOMAIN, LOG_TAG, "wineserver: (%{public}s:%{public}d):%{public}s " fmt,  \
+                        __FILE_NAME__, __LINE__, __FUNCTION__, ##__VA_ARGS__))
 
-#define LOGD(...)                                                      \
-  ((void)OH_LOG_Print(LOG_APP, LOG_DEBUG, LOG_DOMAIN, LOG_TAG, \
-                      __VA_ARGS__))
+#define LOGD(fmt, ...)                                                                                                  \
+    ((void)OH_LOG_Print(LOG_APP, LOG_DEBUG, LOG_DOMAIN, LOG_TAG, "wineserver: (%{public}s:%{public}d):%{public}s " fmt, \
+                        __FILE_NAME__, __LINE__, __FUNCTION__, ##__VA_ARGS__))
 
-#define LOGW(...)                                                     \
-  ((void)OH_LOG_Print(LOG_APP, LOG_WARN, LOG_DOMAIN, LOG_TAG, \
-                      __VA_ARGS__))
+#define LOGW(fmt, ...)                                                                                                  \
+    ((void)OH_LOG_Print(LOG_APP, LOG_WARN, LOG_DOMAIN, LOG_TAG, "wineserver: (%{public}s:%{public}d):%{public}s " fmt,  \
+                        __FILE_NAME__, __LINE__, __FUNCTION__, ##__VA_ARGS__))
 
-#define LOGE(...)                                                      \
-  ((void)OH_LOG_Print(LOG_APP, LOG_ERROR, LOG_DOMAIN, LOG_TAG, \
-                      __VA_ARGS__))
+#define LOGE(fmt, ...)                                                                                                  \
+    ((void)OH_LOG_Print(LOG_APP, LOG_ERROR, LOG_DOMAIN, LOG_TAG, "wineserver: (%{public}s:%{public}d):%{public}s " fmt, \
+                        __FILE_NAME__, __LINE__, __FUNCTION__, ##__VA_ARGS__))
 #else
 #define LOGI(...)   do { } while(0)
 #define LOGD(...)   do { } while(0)
 #define LOGW(...)   do { } while(0)
 #define LOGE(...)   do { } while(0)
 #endif
+
+#define TRACE       LOGI
+#define WARN        LOGW
+#define FIXME       LOGW
+#define ERR         LOGE
+#define MESSAGE     LOGD
 
 #endif  // __WINE_SERVER_LOGGING_H_

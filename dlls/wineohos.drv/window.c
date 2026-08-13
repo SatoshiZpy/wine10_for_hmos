@@ -83,8 +83,8 @@ void free_win_data( struct ohos_win_data *data )
 {
     win_data_context[context_idx( data->hwnd )] = NULL;
     pthread_mutex_unlock( &win_data_mutex );
-    if (data->window) destroy_native_window( data->hwnd );
-    data->window = NULL;
+    if (data->widget_id > 0) destroy_native_window( data->hwnd );
+    data->widget_id = -1;
     data->on_screen = FALSE;
     free( data );
 }
@@ -121,13 +121,13 @@ void release_win_data( struct ohos_win_data *data )
 /***********************************************************************
  *           get_window
  */
-static ohos_window get_window( HWND hwnd )
+static int get_window( HWND hwnd )
 {
     struct ohos_win_data *data = get_win_data( hwnd );
 
-    if (!data || !data->window) return NULL;
+    if (!data || data->widget_id <= 0) return -1;
     release_win_data( data );
-    return data->window;
+    return data->widget_id;
 }
 
 static inline BOOL can_window_become_foreground(HWND hwnd)
@@ -230,37 +230,122 @@ static void sync_window_opacity(struct ohos_win_data *data, BYTE alpha,
 
     if (flags & LWA_ALPHA) opacity = alpha / 255.0;
 
-    TRACE("setting window %p/%p alpha to %g\n", data->hwnd, data->window, opacity);
+    TRACE("setting window %p/%d alpha to %g\n", data->hwnd, data->widget_id, opacity);
     SetWindowAlpha(get_widget_id(data->hwnd), opacity);
 }
 
-static BOOL ohos_window_size_change_notify( HWND hwnd, const RECT *rect )
+static BOOL ohos_window_size_change_notify( HWND hwnd, const RECT *rect, int reason )
 {
     struct ohos_win_data *data;
 
     if (!hwnd) return FALSE;
     if (!(data = get_win_data( hwnd ))) return FALSE;
 
-    TRACE( "ConfigureNotify hwnd %p rect %s\n", hwnd, wine_dbgstr_rect(rect) );
+    TRACE( "hwnd %p rect %s reason %d\n", hwnd, wine_dbgstr_rect(rect), reason );
+
+    /* When Wine has initiated a position/size change (pending_configure),
+     * ignore OS callbacks whose rect doesn't match the expected pending_rect.
+     * The OHOS compositor may send stale cached positions (reason=0) for
+     * sub-windows after destroy->create reuse, or generate self-correction
+     * callbacks with wrong positions after multiple rapid SetWindowBounds.
+     * Only callbacks matching pending_rect are accepted; others are dropped
+     * to prevent Wine from adopting incorrect positions. */
+    if (data->pending_configure && !EqualRect( rect, &data->pending_rect ))
+    {
+        TRACE( "hwnd %p: ignoring stale OS rect %s while pending %s\n",
+               hwnd, wine_dbgstr_rect(rect), wine_dbgstr_rect(&data->pending_rect) );
+        release_win_data( data );
+        return FALSE;
+    }
+
+    data->os_pending_rect = *rect;
+    data->os_pending_reason = reason;
+    data->os_rect_pending = TRUE;
 
     release_win_data( data );
 
-    /* Send internal message to notify Wine message queue.
-     * This will trigger WM_WINE_WINDOW_STATE_CHANGED handling in handle_internal_message. */
-    NtUserSetRawWindowPos(hwnd, *rect, 0, 0);
     return NtUserPostMessage( hwnd, WM_WINE_WINDOW_STATE_CHANGED, 0, 0 );
 }
 
-/* Handling of events coming from the Java side */
+/***********************************************************************
+ *           OHOS_GetWindowStateUpdates
+ */
+BOOL OHOS_GetWindowStateUpdates( HWND hwnd, UINT *state_cmd, UINT *config_cmd,
+                                  RECT *rect, HWND *foreground )
+{
+    struct ohos_win_data *data;
 
-struct java_event
+    *state_cmd = *config_cmd = 0;
+    *foreground = 0;
+
+    if (!(data = get_win_data( hwnd ))) return FALSE;
+
+    if (!data->os_rect_pending)
+    {
+        release_win_data( data );
+        return FALSE;
+    }
+    data->os_rect_pending = FALSE;
+
+    RECT old_rect = data->rects.window;
+    *rect = data->os_pending_rect;
+    int reason = data->os_pending_reason;
+
+    if (data->pending_configure)
+    {
+        data->pending_configure = FALSE;
+        data->pending_configure_time = 0;
+        if (EqualRect( rect, &data->pending_rect ))
+        {
+            TRACE( "hwnd %p: confirmation for Wine-initiated change, skip\n", hwnd );
+            release_win_data( data );
+            return FALSE;
+        }
+        /* The OS reported a rect different from what Wine set while
+         * pending_configure was still TRUE.  This means the compositor
+         * sent a stale/wrong position.  Reject it. */
+        TRACE( "hwnd %p: OS rect %s differs from pending %s, rejecting\n",
+               hwnd, wine_dbgstr_rect(rect), wine_dbgstr_rect(&data->pending_rect) );
+        release_win_data( data );
+        return FALSE;
+    }
+
+    release_win_data( data );
+
+    UINT flags = SWP_NOACTIVATE | SWP_NOZORDER;
+    if (old_rect.left == rect->left && old_rect.top == rect->top)
+        flags |= SWP_NOMOVE;
+    if ((old_rect.right - old_rect.left == rect->right - rect->left) &&
+        (old_rect.bottom - old_rect.top == rect->bottom - rect->top))
+        flags |= SWP_NOSIZE;
+
+    if ((flags & (SWP_NOSIZE | SWP_NOMOVE)) == (SWP_NOSIZE | SWP_NOMOVE))
+        return FALSE;
+
+    flags |= SWP_NOSENDCHANGING;
+    *config_cmd = MAKELONG( SC_MOVE, flags );
+
+    if (reason == 2) /* RECOVER */
+        *state_cmd = SC_RESTORE;
+    else if (old_rect.left <= -32000 && old_rect.top <= -32000 &&
+             rect->left > -32000 && rect->top > -32000)
+        *state_cmd = SC_RESTORE;
+
+    TRACE( "hwnd %p, config_cmd %#x, state_cmd %#x, rect %s, reason %d\n",
+           hwnd, *config_cmd, *state_cmd, wine_dbgstr_rect(rect), reason );
+    return TRUE;
+}
+
+/* Handling of events coming from the arkui side */
+
+struct ui_event
 {
     struct list      entry;
     union event_data data;
 };
 
 static struct list event_queue = LIST_INIT( event_queue );
-static struct java_event *current_event;
+static struct ui_event *current_event;
 static int event_pipe[2];
 static DWORD desktop_tid;
 
@@ -320,7 +405,7 @@ static void init_event_queue(void)
  */
 static void pull_events(void)
 {
-    struct java_event *event;
+    struct ui_event *event;
     int res;
 
     for (;;)
@@ -340,7 +425,7 @@ static void pull_events(void)
  */
 static int process_events( DWORD mask )
 {
-    struct java_event *event, *next, *previous;
+    struct ui_event *event, *next, *previous;
     unsigned int count = 0;
 
     assert( GetCurrentThreadId() == desktop_tid );
@@ -349,7 +434,7 @@ static int process_events( DWORD mask )
 
     previous = current_event;
 
-    LIST_FOR_EACH_ENTRY_SAFE( event, next, &event_queue, struct java_event, entry )
+    LIST_FOR_EACH_ENTRY_SAFE( event, next, &event_queue, struct ui_event, entry )
     {
         switch (event->data.type)
         {
@@ -398,12 +483,15 @@ static int process_events( DWORD mask )
 
         case SURFACE_CHANGED: {
             RECT rect;
-            TRACE("SURFACE_CHANGED %p %p %s size %ux%u\n", event->data.surface.hwnd, event->data.surface.window,
-                  event->data.surface.client ? "client" : "whole", event->data.surface.width,
-                  event->data.surface.height);
+            int left = event->data.surface.left;
+            int top = event->data.surface.top;
+            unsigned int width = event->data.surface.width;
+            unsigned int height = event->data.surface.height;
+            TRACE("SURFACE_CHANGED %p size %d,%d %ux%u reason %d\n", event->data.surface.hwnd,
+                  left, top, width, height, event->data.surface.reason);
 
-            SetRect(&rect, 0, 0, event->data.surface.width, event->data.surface.height);
-            ohos_window_size_change_notify(event->data.surface.hwnd, &rect);
+            SetRect(&rect, left, top, left + width, top + height);
+            ohos_window_size_change_notify(event->data.surface.hwnd, &rect, event->data.surface.reason);
             break;
         }
         case MOTION_EVENT: {
@@ -479,7 +567,7 @@ static int process_events( DWORD mask )
         free( event );
         count++;
         /* next may have been removed by a recursive call, so reset it to the beginning of the list */
-        next = LIST_ENTRY( event_queue.next, struct java_event, entry );
+        next = LIST_ENTRY( event_queue.next, struct ui_event, entry );
     }
     current_event = previous;
     return count;
@@ -513,7 +601,7 @@ static int wait_events( int timeout )
 struct ohos_window_surface
 {
     struct window_surface header;
-    ohos_window           window;
+    int                   widget_id;
     UINT                  clip_count;
     RECT                  *clip_rects;
 };
@@ -590,8 +678,56 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         locked.bottom = rc.bottom;
         intersect_rect(&locked, &locked, rect);
 
-        TRACE("hwnd %p, surface_rect %s, dirty %s, surface %p\n", window_surface->hwnd, wine_dbgstr_rect(&rc),
-              wine_dbgstr_rect(dirty), surface);
+        TRACE("hwnd %p, surface_rect %s, dirty %s, locked %s, surface %p\n", window_surface->hwnd,
+              wine_dbgstr_rect(&rc), wine_dbgstr_rect(dirty), wine_dbgstr_rect(&locked), surface);
+
+        /* Check pending_configure BEFORE dequeuing a buffer.
+        * If a Wine-initiated resize is pending OS confirmation, skip the
+        * entire flush.  SET_BUFFER_GEOMETRY has changed the buffer size
+        * but SetWindowBounds (async) may not have updated the OHOS window
+        * display area yet.  Dequeueing and then returning the buffer
+        * (via cancelBuffer or FlushBuffer with empty region) is problematic:
+        * - FlushBuffer with empty region still moves the buffer into the
+        *   compositor's display queue, causing stretching
+        * - cancelBuffer returning the buffer improperly can cause buffer
+        *   leaks and yellow/uninitialized content
+        * By checking before dequeue, we avoid both problems entirely. */
+        {
+            struct ohos_win_data *win_data = get_win_data(window_surface->hwnd);
+            if (win_data)
+            {
+                if (win_data->pending_configure)
+                {
+                    /* If pending_configure has been set for too long without OS
+                     * confirmation, clear it to avoid permanent render skip.
+                     * This can happen when the OS does not send SURFACE_CHANGED
+                     * for unchanged bounds, or the callback is lost. */
+                    DWORD now = NtGetTickCount();
+                    if (now - win_data->pending_configure_time > 500)
+                    {
+                        TRACE("hwnd %p: pending_configure timeout, clearing\n", window_surface->hwnd);
+                        win_data->pending_configure = FALSE;
+                        win_data->pending_configure_time = 0;
+                    }
+                    else
+                    {
+                        TRACE("hwnd %p: resize pending, skip flush to avoid stretching\n",
+                              window_surface->hwnd);
+                        release_win_data(win_data);
+                        perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, NULL);
+                        return FALSE;
+                    }
+                }
+                release_win_data(win_data);
+            }
+        }
+
+        if (IsRectEmpty(&locked))
+        {
+            /* no dirty area, skip copy and just submit empty buffer */
+            perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, NULL);
+            return TRUE;
+        }
 
         BufferHandle *buffer_handle = buffer.buffer_handle;
         if (!buffer_handle) {
@@ -647,7 +783,13 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
             dst += buffer.stride;
         }
 
-        perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST);
+        /* Always pass the full locked rect as damage to the compositor.
+         * OHOS NativeWindowFlushBuffer's region parameter is a constraint,
+         * not a hint, the compositor only composites the specified region
+         * and ignores the rest of the buffer.  Passing only the dirty rect
+         * causes uninitialized (yellow/green) pixels outside the dirty area
+         * and breaks edit controls that update small regions. */
+        perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &locked);
 
         int result = munmap(mapped_addr, buffer_handle->size);
         if (result == -1) {
@@ -655,7 +797,7 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
             return FALSE;
         }
     } else {
-        TRACE("Unable to lock surface %p window %p buffer %p\n", surface, window_surface->hwnd, surface->window);
+        TRACE("Unable to lock surface %p window %p buffer %d\n", surface, window_surface->hwnd, surface->widget_id);
     }
 
     return TRUE;
@@ -707,7 +849,7 @@ static struct window_surface *create_surface( HWND hwnd, const RECT *rect )
     if ((window_surface = window_surface_create( sizeof(*surface), &ohos_surface_funcs, hwnd, rect, info, 0 )))
     {
         surface = get_ohos_surface( window_surface );
-        surface->window = get_window( hwnd );
+        surface->widget_id = get_window( hwnd );
     }
 
     return window_surface;
@@ -1094,7 +1236,7 @@ static struct ohos_win_data *create_win_data( HWND hwnd, const struct window_rec
     {
         if (data->ignored)
         {
-            data->window = NULL;
+            data->widget_id = -1;
             FIXME("win %p/%p window %s whole %s client %s in child process\n",
                 hwnd, parent, wine_dbgstr_rect(&data->rects.window),
                 wine_dbgstr_rect(&data->rects.visible), wine_dbgstr_rect(&data->rects.client));
@@ -1102,14 +1244,14 @@ static struct ohos_win_data *create_win_data( HWND hwnd, const struct window_rec
         else
         {
             create_native_window( data );
-            TRACE("win %p/%p %p window %s whole %s client %s\n",
-                hwnd, parent, data->window, wine_dbgstr_rect( &data->rects.window ),
+            TRACE("win %p/%p %d window %s whole %s client %s\n",
+                hwnd, parent, data->widget_id, wine_dbgstr_rect( &data->rects.window ),
                 wine_dbgstr_rect( &data->rects.visible ), wine_dbgstr_rect( &data->rects.client));
         }
     }
     else
     {
-        data->window = NULL;
+        data->widget_id = -1;
         FIXME("win %p/%p window %s whole %s client %s\n",
                hwnd, parent, wine_dbgstr_rect(&data->rects.window),
                wine_dbgstr_rect(&data->rects.visible), wine_dbgstr_rect(&data->rects.client));
@@ -1120,12 +1262,12 @@ static struct ohos_win_data *create_win_data( HWND hwnd, const struct window_rec
 
 static void show_window(struct ohos_win_data *data)
 {
-    if (data->window)
+    if (data->widget_id > 0)
     {
         HWND prev = NULL;
         HWND next = NULL;
-        ohos_window prev_window = NULL;
-        ohos_window next_window = NULL;
+        int prev_window = -1;
+        int next_window = -1;
 
         /* find window that this one must be after */
         prev = NtUserGetWindowRelative(data->hwnd, GW_HWNDPREV);
@@ -1141,19 +1283,68 @@ static void show_window(struct ohos_win_data *data)
                 next = NtUserGetWindowRelative(next, GW_HWNDNEXT);
         }
 
-        TRACE("win %p/%p below %p/%p above %p/%p\n",
-              data->hwnd, data->window, prev, prev_window, next, next_window);
+        TRACE("win %p/%d below hwnd %p/%d, above hwnd %p/%d\n",
+              data->hwnd, data->widget_id, prev, prev_window, next, next_window);
+
+        /* Flush a white frame before showing the window to prevent
+         * the compositor from stretching a stale/wrong-sized buffer.
+         * When the same hwnd is destroy -> created with different sizes
+         * (dropdown list switching), SetWindowBounds resizes the OHOS
+         * window before SetWindowVisible makes it visible.  Without a
+         * correctly-sized buffer in the compositor queue, it stretches
+         * the old (smaller) buffer to fill the new (larger) window.
+         * This pre-show white flush ensures the compositor has a
+         * correctly-sized buffer, eliminating the stretch.
+         * Only flush when pending_configure is set (size changed),
+         * otherwise the old buffer size matches the window and no
+         * stretching can occur ¡ª a white flush would only cause an
+         * unnecessary flash. */
+        if (!data->on_screen && data->pending_configure)
+        {
+            struct native_buffer buffer;
+            RECT rc;
+            /* Clear pending_configure so that the subsequent Wine flush
+             * (with actual content) is not skipped.  The pre-show white
+             * flush ensures the compositor has a correctly-sized buffer,
+             * so there is no risk of stretching anymore. */
+            data->pending_configure = FALSE;
+            data->pending_configure_time = 0;
+            if (!perform(data->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc))
+            {
+                BufferHandle *buffer_handle = buffer.buffer_handle;
+                if (buffer_handle)
+                {
+                    void *mapped_addr = mmap(buffer_handle->virAddr, buffer_handle->size,
+                        PROT_READ | PROT_WRITE, MAP_SHARED, buffer_handle->fd, 0);
+                    if (mapped_addr != MAP_FAILED)
+                    {
+                        DWORD *bits = (DWORD *)mapped_addr;
+                        int y;
+                        for (y = 0; y < buffer.height; y++)
+                        {
+                            int x;
+                            for (x = 0; x < buffer.width; x++)
+                                bits[x] = 0xFFFFFFFF;
+                            bits += buffer.stride;
+                        }
+                        munmap(mapped_addr, buffer_handle->size);
+                    }
+                }
+                perform(data->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &rc);
+            }
+        }
 
         set_window_visible(data->hwnd, TRUE);
         data->on_screen = TRUE;
+        data->has_shown = TRUE;
     }
 }
 
 static void hide_window(struct ohos_win_data *data)
 {
-    TRACE("win %p/%p\n", data->hwnd, data->window);
+    TRACE("win %p/%d\n", data->hwnd, data->widget_id);
 
-    if (data->window)
+    if (data->widget_id > 0)
         set_window_visible(data->hwnd, FALSE);
     data->on_screen = FALSE;
 }
@@ -1169,7 +1360,7 @@ static void ohos_client_surface_destroy( struct client_surface *client )
 
     TRACE( "%s\n", debugstr_client_surface( client ) );
 
-    if (surface->window) 
+    if (surface->widget_id > 0) 
         destroy_native_window( surface->hwnd );
 }
 
@@ -1206,7 +1397,8 @@ struct ohos_client_surface *ohos_client_surface_create( HWND hwnd, BOOL force )
     if (!force) return surface;
 
     // TODO: Implement the nesting of window surface into client surface.
-    if (!(surface->window = create_client_window( hwnd )))
+    surface->widget_id = create_client_window( hwnd );
+    if (surface->widget_id <= 0)
     {
         ERR("Failed to create client surface\n");
         client_surface_release(&surface->client);
@@ -1231,15 +1423,15 @@ BOOL OHOS_WindowPosChanging( HWND hwnd, UINT swp_flags, BOOL shaped, const struc
     // Defer window creation for the top-level window until needed
     if (!data->parent)
     {
-        if (!IsRectEmpty(&rects->window) && data->lazy_created && !data->window) {
+        if (!IsRectEmpty(&rects->window) && data->lazy_created && data->widget_id <= 0) {
             data->rects = *rects;
             data->lazy_created = FALSE;
             create_native_window( data );
-            TRACE("lazy create win %p %p window_rects %s\n", hwnd, data->window, debugstr_window_rects( &data->rects ));
+            TRACE("lazy create win %p %d window_rects %s\n", hwnd, data->widget_id, debugstr_window_rects( &data->rects ));
         }
     }
 
-    ret = !!data->window;
+    ret = data->widget_id > 0;
     release_win_data(data);
 
     TRACE( "hwnd %p, ret %d\n", hwnd, ret );
@@ -1285,10 +1477,10 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
     old_rects = data->rects;
     data->rects = *new_rects;
 
-    TRACE("win %p/%p new_rects %s style %08x flags %08x surface %p\n", hwnd, data->window,
+    TRACE("win %p/%d new_rects %s style %08x flags %08x surface %p\n", hwnd, data->widget_id,
           debugstr_window_rects(new_rects), new_style, swp_flags, surface);
 
-    if (!data->window) goto done;
+    if (data->widget_id <= 0) goto done;
 
     if (data->on_screen)
     {
@@ -1299,24 +1491,42 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
         }
     }
 
-    if (is_tooltips_hwnd(hwnd) && !EqualRect(&old_rects.window, &new_rects->window))
+    if (data->pending_change)
     {
-        WARN("win %p old_rects %s --> new_rects %s\n", hwnd,
-            debugstr_window_rects(&old_rects), debugstr_window_rects(new_rects));
-        /* destroy the old ohos window */
-        destroy_native_window(hwnd);
-
-        /* new tool tips window */
-        create_native_window(data);
+        data->pending_change = FALSE;
+        WARN("Maximize, minimize, and restore are handled by the OS, with duplicate events filtered.\n");
+    }
+    else if (swp_flags & SWP_NOSENDCHANGING)
+    {
+        TRACE("hwnd %p: OS-initiated change via GetWindowStateUpdates, skip window_pos_changed\n", hwnd);
     }
     else
     {
+        int old_width = old_rects.visible.right - old_rects.visible.left;
+        int old_height = old_rects.visible.bottom - old_rects.visible.top;
+        int new_width = new_rects->visible.right - new_rects->visible.left;
+        int new_height = new_rects->visible.bottom - new_rects->visible.top;
+        if (old_width != new_width || old_height != new_height)
+        {
+            TRACE("window size changed %d-%d --> %d-%d\n", old_width, old_height, new_width, new_height);
+            if (data->has_shown)
+            {
+                // surface can only be requested for shown window.
+                perform(hwnd, SET_BUFFER_GEOMETRY, new_width, new_height);
+            }
+            data->buffer_width = new_width;
+            data->buffer_height = new_height;
+
+            data->pending_configure = TRUE;
+            data->pending_configure_time = NtGetTickCount();
+            data->pending_rect = new_rects->window;
+        }
         window_pos_changed( hwnd, new_rects, &old_rects, new_style, swp_flags );
     }
 
     if (new_style & WS_VISIBLE)
     {
-        if (data->window)
+        if (data->widget_id > 0)
         {
             if (!data->on_screen || (swp_flags & (SWP_FRAMECHANGED | SWP_STATECHANGED)))
                 set_window_properties(data);
@@ -1352,7 +1562,7 @@ void OHOS_SetWindowStyle(HWND hwnd, INT offset, STYLESTRUCT *style)
     if (hwnd == NtUserGetDesktopWindow()) return;
     if (!(data = get_win_data(hwnd))) return;
 
-    if (data->window)
+    if (data->widget_id > 0)
     {
         DWORD changed = style->styleNew ^ style->styleOld;
 
@@ -1380,7 +1590,7 @@ void OHOS_SetWindowText(HWND hwnd, LPCWSTR text)
 
     TRACE("%p, %s\n", hwnd, debugstr_w(text));
 
-    if (!data || !data->window) goto done;
+    if (!data || data->widget_id <= 0) goto done;
 
     text_len = (lstrlenW(text) + 1) * sizeof(WCHAR);
 
@@ -1402,19 +1612,40 @@ done:
 UINT OHOS_ShowWindow( HWND hwnd, INT cmd, RECT *rect, UINT swp )
 {
     struct ohos_win_data *data = get_win_data(hwnd);
+    int widget_id;
 
-    TRACE("win %p/%p cmd %d at %s flags %08x\n",
-          hwnd, data ? data->window : NULL, cmd, wine_dbgstr_rect(rect), swp);
+    TRACE("win %p/%d cmd %d at %s flags %08x\n",
+          hwnd, data ? data->widget_id : -1, cmd, wine_dbgstr_rect(rect), swp);
 
-    if (!data || !data->window) goto done;
-    if (!(NtUserGetWindowLongW( hwnd, GWL_STYLE ) & WS_MINIMIZE)) goto done;
-    /* always hide icons off-screen */
-    if (rect->left != -32000 || rect->top != -32000)
+    if (!data || data->widget_id <= 0) goto done;
+    widget_id = get_widget_id(data->hwnd);
+
+    switch (cmd)
     {
-        OffsetRect( rect, -32000 - rect->left, -32000 - rect->top );
-        swp &= ~(SWP_NOMOVE | SWP_NOCLIENTMOVE);
+    case SW_MINIMIZE:
+    case SW_SHOWMINIMIZED:
+        MinimizeWindow(widget_id);
+        /* hide icons off-screen (standard Windows minimize behavior) */
+        if (rect->left != -32000 || rect->top != -32000)
+        {
+            OffsetRect( rect, -32000 - rect->left, -32000 - rect->top );
+            swp &= ~(SWP_NOMOVE | SWP_NOCLIENTMOVE);
+        }
+        data->pending_change = TRUE;
+        break;
+    case SW_MAXIMIZE: /* = SW_SHOWMAXIMIZED (value 3) */
+        MaximizeWindow(widget_id);
+        data->pending_change = TRUE;
+        break;
+    case SW_RESTORE:
+        RestoreWindow(widget_id);
+        data->pending_change = TRUE;
+        break;
+    default:
+        break;
     }
 
+    TRACE("win %p rect %s flags %08x\n", hwnd, wine_dbgstr_rect(rect), swp);
 done:
     release_win_data(data);
     return swp;
@@ -1457,7 +1688,7 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
              * show_window() call uses a dead handle in set_window_visible()
              * (no-op) and the window never appears after a top-to-child
              * reparent. Mirror free_win_data() and reset both fields here. */
-            data->window = NULL;
+            data->widget_id = -1;
             data->on_screen = FALSE;
         }
     }

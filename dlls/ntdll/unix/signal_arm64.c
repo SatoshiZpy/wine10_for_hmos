@@ -1268,12 +1268,9 @@ static void int_handler( int signal, siginfo_t *siginfo, void *sigcontext )
  */
 static void abrt_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
-#ifndef __OHOS__
-    // TODO: Fix the issue where DFX_SigchainHandler abnormally triggers signo6
     EXCEPTION_RECORD rec = { EXCEPTION_WINE_ASSERTION, EXCEPTION_NONCONTINUABLE };
 
     setup_exception( sigcontext, &rec );
-#endif
 }
 
 
