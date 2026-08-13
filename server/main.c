@@ -254,13 +254,18 @@ __attribute((visibility("default"))) int wine_main(int argc, char *argv[])
        LOGD("args: %{public}s\n", argv[i]); 
     }
 
+    /* Note: use setenv() rather than putenv() -- putenv stores a pointer to the
+     * caller's buffer without copying, and these buffers are block-local, so the
+     * env would point to dead stack memory by the time open_master_socket() reads
+     * it (stack-use-after-scope, caught by ASan). setenv copies into persistent
+     * env storage, which the later unsetenv() in open_master_socket() frees. */
+    char fd_env[64];
     int fd = GetGlobalDescriptor(FILE_DIR_DESCRIPTOR);
     if (fd > 0) {
-        char fd_env[64];
-        snprintf( fd_env, sizeof(fd_env), "WINESYNCPIPE=%u", fd );
+        snprintf( fd_env, sizeof(fd_env), "%u", fd );
 
         LOGD("get fd_env = %{public}s\n", fd_env);
-        putenv( fd_env );
+        setenv( "WINESYNCPIPE", fd_env, 1 );
     }
 #endif
     return main(argc, argv);

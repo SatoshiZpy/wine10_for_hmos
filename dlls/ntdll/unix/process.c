@@ -83,10 +83,12 @@ static UINT process_error_mode;
 
 static char **build_argv( const UNICODE_STRING *cmdline, int reserved )
 {
-    char **argv, *arg, *src, *dst;
+    char **argv, *arg, *src, *src_base, *dst;
     int argc, in_quotes = 0, bcount = 0, len = cmdline->Length / sizeof(WCHAR);
 
     if (!(src = malloc( len * 3 + 1 ))) return NULL;
+    /* the parse loop below advances src; keep the base so we can free() it later */
+    src_base = src;
     len = ntdll_wcstoumbs( cmdline->Buffer, len, src, len * 3, FALSE );
     src[len++] = 0;
 
@@ -144,7 +146,7 @@ static char **build_argv( const UNICODE_STRING *cmdline, int reserved )
     *dst = 0;
     argv[argc++] = arg;
     argv[argc] = NULL;
-    free(src);
+    free(src_base);
     return argv;
 }
 

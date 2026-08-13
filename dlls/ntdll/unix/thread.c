@@ -1104,6 +1104,67 @@ static void contexts_from_server( CONTEXT *context, struct context_data server_c
 }
 
 
+#ifdef __OHOS__
+/*
+ * OHOS musl reserves a per-thread signal stack at thread entry
+ * (__pthread_reserve_signal_stack): the mmap base is stored in
+ * struct pthread.signal_stack (pthread_impl.h:67).  On aarch64,
+ * TLS_ABOVE_TP puts the pthread struct below TPIDR, so the field
+ * is at TPIDR - OHOS_MUSL_SIGNAL_STACK_TP_OFFSET.
+ *
+ * At thread exit __pthread_release_signal_stack() calls
+ * sigaltstack(SS_DISABLE, &old), but the kernel SS_DISABLE short
+ * path does NOT write *old; musl then reads the uninitialized
+ * old_stack (old.ss_sp=0, old.ss_size=TPIDR+0xeac0) and its
+ * second munmap unmaps the running thread's own stack ->
+ * deterministic SIGSEGV.
+ *
+ * Our fix: free the reserved region for real, then NULL the stored
+ * base so musl's __pthread_release_signal_stack() hits the
+ * "if (self->signal_stack == NULL) return;" early-exit.  The rest
+ * of pthread_exit (TSD dtors, cleanup handlers, robust list, stack
+ * unmap, joiner wake) all runs normally.
+ *
+ * The total mmap size is derived at runtime from sigaltstack(2):
+ *   mmap layout: [guard (PROT_NONE)] [altstack (ss_sp..ss_sp+ss_size)]
+ *   base = signal_stack = ss_sp - guard_size
+ *   total_size = guard_size + ss_size
+ * This avoids hardcoding musl's RESERVE_SIGNAL_STACK_SIZE.
+ */
+
+/* Offset from TPIDR to struct pthread.signal_stack (aarch64, TLS_ABOVE_TP).
+ * Derived as sizeof(struct pthread) - offsetof(struct pthread, signal_stack)
+ * with musl commit f13409b1 (libc build-id 0b3062194513a0486111e9fc20a2a3ab).
+ * Must be updated if musl struct pthread layout changes. */
+#define OHOS_MUSL_SIGNAL_STACK_TP_OFFSET 200
+
+static void ohos_release_signal_stack( void )
+{
+    stack_t current;
+    uintptr_t *signal_stack_p = (uintptr_t *)((char *)__builtin_thread_pointer()
+                                              - OHOS_MUSL_SIGNAL_STACK_TP_OFFSET);
+    uintptr_t base = *signal_stack_p;
+
+    /* Query the current alt-stack before disabling it.
+     * ss_sp = mmap_base + guard_size, ss_size = usable alt-stack size.
+     * Together with base (mmap_base) we can derive the total mmap size. */
+    sigaltstack( NULL, &current );
+
+    /* Detach the kernel's alt-stack reference.  old=NULL on purpose:
+     * the SS_DISABLE path may not write *old, and we never read it. */
+    sigaltstack( &(stack_t){ .ss_flags = SS_DISABLE }, NULL );
+
+    if (base)
+    {
+        /* Derive total mmap size: guard_size + altstack_size.
+         * guard_size = ss_sp - mmap_base (the PROT_NONE region before ss_sp). */
+        size_t total = (uintptr_t)current.ss_sp - base + current.ss_size;
+        munmap( (void *)base, total );
+    }
+    *signal_stack_p = 0;
+}
+#endif
+
 /***********************************************************************
  *           pthread_exit_wrapper
  */
@@ -1113,6 +1174,9 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
     close( ntdll_get_thread_data()->wait_fd[1] );
     close( ntdll_get_thread_data()->reply_fd );
     close( ntdll_get_thread_data()->request_fd );
+#ifdef __OHOS__
+    ohos_release_signal_stack();
+#endif
     pthread_exit( UIntToPtr(status) );
 }
 
