@@ -512,7 +512,6 @@ static void init_paths(void)
 #ifdef __OHOS__
     TRACE("loaded bin_dir: %s\n", bin_dir);
     TRACE("loaded dll_dir: %s\n", dll_dir);
-    TRACE("loaded system_dll_paths: %s\n", (system_dll_paths));
     TRACE("loaded ntdll_dir: %s\n", ntdll_dir);
     TRACE("loaded alt_build_dir: %s\n", (alt_build_dir));
     TRACE("loaded home_dir: %s\n", (home_dir));

@@ -2401,7 +2401,7 @@ static BOOL freetype_load_font( struct gdi_font *font )
 #ifdef __OHOS__
     if (!data_ptr || !data_size)
     {
-        ERR("Invalid font data: ptr=%p, size=%u\n", data_ptr, data_size);
+        ERR("Invalid font data: ptr=%p, size=%lu\n", data_ptr, data_size);
         return FALSE;
     }
 #endif

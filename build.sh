@@ -150,12 +150,12 @@ rm -rf ${INSTALL_DIR}
 # 6. 编译依赖组件
 # ============================================================
 
-# Build adapter
 if [ "${DEBUG_MODE}" -eq 1 ]; then
-    export ADAPTER_BUILD_TYPE=Debug
+    export BUILD_TYPE=Debug
 else
-    export ADAPTER_BUILD_TYPE=Release
+    export BUILD_TYPE=Release
 fi
+# Build adapter
 source ${ROOT_DIR}/ohos/script/build_adapter.sh
 
 # GStreamer support for OHOS
@@ -186,8 +186,8 @@ export CC="${OHOS_TOOLCHAIN}/bin/clang --target=aarch64-linux-ohos"
 export CXX="${OHOS_TOOLCHAIN}/bin/clang++ --target=aarch64-linux-ohos"
 
 if [ "${DEBUG_MODE}" -eq 1 ]; then
-    export CFLAGS="-fPIC -D__MUSL__=1 -g"
-    export CXXFLAGS="-fPIC -D__MUSL__=1 -g"
+    export CFLAGS="-fPIC -D__MUSL__=1 -O0 -fno-ident -fdata-sections -ffunction-sections -fno-omit-frame-pointer -g2 -ggnu-pubnames -funwind-tables -no-canonical-prefixes"
+    export CXXFLAGS="-fPIC -D__MUSL__=1 -O0 -fno-ident -fdata-sections -ffunction-sections -fno-omit-frame-pointer -g2 -ggnu-pubnames -funwind-tables -no-canonical-prefixes"
 else
     export CFLAGS="-fPIC -D__MUSL__=1"
     export CXXFLAGS="-fPIC -D__MUSL__=1"

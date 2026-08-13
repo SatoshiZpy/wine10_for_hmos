@@ -1103,7 +1103,6 @@ static void contexts_from_server( CONTEXT *context, struct context_data server_c
     else context_from_server( wow_context, &server_contexts[0], main_image_info.Machine );
 }
 
-
 #ifdef __OHOS__
 /*
  * OHOS musl reserves a per-thread signal stack at thread entry
