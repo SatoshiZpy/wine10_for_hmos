@@ -75,8 +75,8 @@ void OnWindowRectChange(int32_t widget_id,
   event->reason = reason;
   event->top = window_size["top"].As<int>();
   event->left = window_size["left"].As<int>();
-  event->width = window_size["width"].As<int64_t>();
-  event->height = window_size["height"].As<int64_t>();
+  event->width = window_size["width"].As<int>();
+  event->height = window_size["height"].As<int>();
   WindowAdapter::GetInstance().NotifyWindowEvent(widget_id, event);
 }
 
@@ -86,8 +86,8 @@ void OnWindowSizeChange(int32_t widget_id,
   auto event = std::make_shared<WindowSizeChangeEvent>();
   event->top = window_size["top"].As<int>();
   event->left = window_size["left"].As<int>();
-  event->width = window_size["width"].As<int64_t>();
-  event->height = window_size["height"].As<int64_t>();
+  event->width = window_size["width"].As<int>();
+  event->height = window_size["height"].As<int>();
   WindowAdapter::GetInstance().NotifyWindowEvent(widget_id, event);
 }
 
@@ -109,7 +109,7 @@ void OnWindowEvent(int32_t widget_id,
   if (!handle) {
     return;
   }
-  auto event = std::make_shared<WindowChangeEvent>(type);
+  auto event = std::make_shared<WindowEvent>(type);
   WindowAdapter::GetInstance().NotifyWindowEvent(widget_id, event);
 }
 
@@ -118,7 +118,7 @@ void OnWindowVisibilityChange(int32_t widget_id,
   TRACE_EVENT_1("OnWindowVisibilityChange", "widget_id", widget_id);
   WindowEventType type = window_visible ? WindowEventType::WINDOW_VISIBLE
                                         : WindowEventType::WINDOW_OCCLUDED;
-  auto event = std::make_shared<WindowChangeEvent>(type);
+  auto event = std::make_shared<WindowEvent>(type);
   WindowAdapter::GetInstance().NotifyWindowEvent(widget_id, event);
 }
 
@@ -133,8 +133,8 @@ void OnCaptionButtonRectChange(int32_t widget_id,
   auto event = std::make_shared<WindowCaptionButtonRectChangeEvent>();
   event->top = caption_button_rect["top"].As<int>();
   event->right = caption_button_rect["right"].As<int>();
-  event->width = caption_button_rect["width"].As<int64_t>();
-  event->height = caption_button_rect["height"].As<int64_t>();
+  event->width = caption_button_rect["width"].As<int>();
+  event->height = caption_button_rect["height"].As<int>();
   WindowAdapter::GetInstance().NotifyWindowEvent(widget_id, event);
 }
 

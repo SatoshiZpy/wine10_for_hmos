@@ -4,7 +4,9 @@
 
 import JsBindingUtils from '../utils/JsBindingUtils';
 import Inject from '../common/InjectModule';
-import lazy { DisplayAdapter, CompleteDisplay } from '../adapter/DisplayAdapter';
+import lazy { DisplayAdapter } from '../adapter/DisplayAdapter';
+import { CompleteDisplay } from '../interface/CommonInterface';
+
 
 function implDisplayAdapter(): DisplayAdapter {
   return Inject.getOrCreate(DisplayAdapter);

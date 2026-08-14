@@ -77,6 +77,7 @@ typedef struct {
     int32_t top;
     int32_t width;
     int32_t height;
+    int32_t reason;
 } window_rect_change_event_param;
 
 typedef struct {
@@ -93,7 +94,8 @@ typedef union {
 
 typedef struct {
     input_event_type type;
-    int widget_id;
+    int32_t hwnd;
+    int32_t widget_id;
     event_data data;
 } input_event;
 

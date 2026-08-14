@@ -24,7 +24,8 @@ enum EventType : int32_t {
   ET_WINDOW_RECT_CHANGE = 5,
   ET_WINDOW_STATUS_CHANGE = 6,
   ET_WINDOW_CAPTION_BUTTON_RECT_CHANGE = 7,
-  ET_DEVICE_MODE_CHANGED = 8
+  ET_DEVICE_MODE_CHANGED = 8,
+  ET_WINDOW_DISPLAY_ID_CHANGE = 9
 };
 
 enum class WindowEventType {
@@ -79,8 +80,8 @@ class ADAPTER_EXPORT_API SurfaceEvent : public Event {
   explicit SurfaceEvent(EventType type)
     : Event(type) {}
   std::string ToString() override;
-  uint64_t width = 0;
-  uint64_t height = 0;
+  int width = 0;
+  int height = 0;
 };
 
 class ADAPTER_EXPORT_API WindowRectChangeEvent : public Event {
@@ -90,8 +91,8 @@ class ADAPTER_EXPORT_API WindowRectChangeEvent : public Event {
   std::string ToString() override;
   int top = 0;
   int left = 0;
-  uint64_t width = 0;
-  uint64_t height = 0;
+  int width = 0;
+  int height = 0;
   RectChangeReason reason = RectChangeReason::UNDEFINED;
 };
 
@@ -110,13 +111,13 @@ class ADAPTER_EXPORT_API WindowSizeChangeEvent : public Event {
   std::string ToString() override;
   int top = 0;
   int left = 0;
-  uint64_t width = 0;
-  uint64_t height = 0;
+  int width = 0;
+  int height = 0;
 };
 
-class ADAPTER_EXPORT_API WindowChangeEvent : public Event {
+class ADAPTER_EXPORT_API WindowEvent : public Event {
  public:
-  explicit WindowChangeEvent(WindowEventType type)
+  explicit WindowEvent(WindowEventType type)
     : Event(EventType::ET_WINDOW_CHANGE), window_event_type_(type) {}
   std::string ToString() override;
   const WindowEventType window_event_type_;
@@ -129,8 +130,8 @@ class ADAPTER_EXPORT_API WindowCaptionButtonRectChangeEvent : public Event {
   std::string ToString() override;
   int top = 0;
   int right = 0;
-  uint64_t width = 0;
-  uint64_t height = 0;
+  int width = 0;
+  int height = 0;
 };
 
 class ADAPTER_EXPORT_API DeviceInfoChangeEvent : public Event {
@@ -140,6 +141,15 @@ class ADAPTER_EXPORT_API DeviceInfoChangeEvent : public Event {
   std::string ToString() override;
   ChangeEventType change_event_type_;
 };
+
+class ADAPTER_EXPORT_API WindowDisplayIdChangeEvent : public event {
+ public:
+  explicit WindowDisplayIdChangeEvent()
+    : Event(EventType::ET_WINDOW_DISPLAY_ID_CHANGE) {}
+  std::string ToString() override;
+  int display_id = 0;
+};
+
 
 std::string EventTypeName(EventType type);
 std::string WindowEventToString(WindowEventType eventType);

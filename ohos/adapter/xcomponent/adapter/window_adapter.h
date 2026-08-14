@@ -80,7 +80,6 @@ public:
     void UnregistWindowEvent(int32_t widget_id);
     void RegistWindowStatus(WindowStatusListener*);
     void NotifyWindowEvent(int32_t widget_id, std::shared_ptr<Event>);
-    void RegisterGlobalWindowEvent(WindowEventCallBack callback);
     int32_t NextWindowWidgetId();
     int32_t GetWindowWidgetId();
 
@@ -116,7 +115,6 @@ private:
     std::atomic<int32_t> next_window_id_ = 0;
     WindowStatusListener* window_status_observer_ = nullptr;
     std::unordered_map<int32_t, WindowInfo> windows_;
-    WindowEventCallBack global_window_event_callback_ GUARDED_BY(windows_mutex_) = nullptr;
 
     Mutex keyboard_height_mutex_;
     std::unordered_map<int32_t, KeyboardHeightCallBack> keyboard_height_callbacks_ GUARDED_BY(keyboard_height_mutex_);

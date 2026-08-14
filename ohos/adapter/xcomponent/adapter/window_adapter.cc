@@ -120,12 +120,6 @@ void WindowAdapter::UnregistWindowEvent(int32_t widget_id)
     window_event_callbacks_.erase(widget_id);
 }
 
-void WindowAdapter::RegisterGlobalWindowEvent(WindowEventCallBack callback)
-{
-    MutexLock lock(windows_mutex_);
-    global_window_event_callback_ = callback;
-}
-
 void WindowAdapter::NotifyWindowEvent(int32_t widget_id, std::shared_ptr<Event> event)
 {
     MutexLock lock(windows_mutex_);
@@ -135,11 +129,6 @@ void WindowAdapter::NotifyWindowEvent(int32_t widget_id, std::shared_ptr<Event> 
         callback(widget_id, event);
     } else {
         cached_event_dispatcher_.SaveCacheEvent(widget_id, event);
-    }
-
-    // 同时调用全局窗口事件回调
-    if (global_window_event_callback_ != nullptr) {
-        global_window_event_callback_(widget_id, event);
     }
 }
 
@@ -245,7 +234,7 @@ WindowAdapter& WindowAdapter::GetInstance()
 void WindowCachedEventQueue::AddCacheEventToQueue(std::shared_ptr<Event> event)
 {
     if (event->type() == EventType::ET_WINDOW_CHANGE && !first_occluded_event_received_) {
-        auto window_event = static_pointer_cast<WindowChangeEvent>(event);
+        auto window_event = static_pointer_cast<WindowEvent>(event);
         if (window_event->window_event_type_ == WindowEventType::WINDOW_OCCLUDED) {
             first_occluded_event_received_ = true;
             return;

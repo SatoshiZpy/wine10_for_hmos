@@ -329,8 +329,7 @@ int IpcHelper::SetWindowTitle(int32_t widget_id,
 int IpcHelper::GetDisplay(DisplayParam& param)
 {
     Display default_display;
-    ScreenAdapter::GetInstance().GetDefaultDisplay(default_display);
-    if (default_display.id == -1) {
+    if (!ScreenAdapter::GetInstance().GetDefaultDisplay(default_display)) {
         LOGE("GetDefaultDisplay failed");
         return -1;
     }

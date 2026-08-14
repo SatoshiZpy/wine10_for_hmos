@@ -65,9 +65,52 @@ void SubWindowAdapter::Hide(int32_t id) {
   }
 }
 
+void SubWindowAdapter::Activate(int32_t id) {
+  auto func = ohos::adapter::GetJSFunction("SubWindow.ActivateWindow");
+  if (func) {
+    func->Invoke<void>(id);
+  }
+}
+
+void SubWindowAdapter::SetFullScreen(int32_t id) {
+  auto func = ohos::adapter::GetJSFunction("SubWindow.SetFullScreen");
+  if (func) {
+    func->Invoke<void>(id);
+  }
+}
+
 void SubWindowAdapter::SetBounds(int32_t id, const WindowRect& rect) {
   if (auto func = ohos::adapter::GetJSFunction("SubWindow.SetBounds")) {
     func->Invoke<void>(id, rect);
   }
 }
+
+void SubWindowAdapter::Maximize(int32_t id) {
+  auto func = ohos::adapter::GetJSFunction("SubWindow.Maximize");
+  if (func) {
+    func->Invoke<void>(id);
+  }
+}
+
+void SubWindowAdapter::UnMaximize(int32_t id) {
+  auto func = ohos::adapter::GetJSFunction("SubWindow.UnMaximize");
+  if (func) {
+    func->Invoke<void>(id);
+  }
+}
+
+void SubWindowAdapter::Minimize(int32_t id) {
+  auto func = ohos::adapter::GetJSFunction("SubWindow.Minimize");
+  if (func) {
+    func->Invoke<void>(id);
+  }
+}
+
+void SubWindowAdapter::Restore(int32_t id) {
+  auto func = ohos::adapter::GetJSFunction("SubWindow.Restore");
+  if (func) {
+    func->Invoke<void>(id);
+  }
+}
+
 }  // namespace ohos::adapter::window

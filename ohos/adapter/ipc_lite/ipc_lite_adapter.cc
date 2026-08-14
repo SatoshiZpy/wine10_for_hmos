@@ -19,6 +19,7 @@
 #include "ohos/adapter/multiprocess/child_process_starter.h"
 
 using namespace ohos::adapter::common;
+using namespace ohos::adapter::multiprocess;
 
 namespace ohos::adapter::ipc_lite {
 
@@ -42,7 +43,10 @@ static std::string GetProcessName(const std::vector<std::string>& commands)
         if (pos == std::string::npos) { pos = image.rfind('/'); }
         if (pos != std::string::npos) { image = image.substr(pos + 1); }
         if (image.size() > 4 && image.substr(image.size() - 4) == ".exe") {
-            return image.substr(0, image.size() - 4) + "-" + GenerateRandomName();
+            image = image.substr(0, image.size() - 4);
+        }
+        if (!image.empty()) {
+            return image + "-" + GenerateRandomName();
         }
     }
     return GenerateRandomName();
@@ -107,11 +111,7 @@ int IpcLiteHelper::CreateProcess(
         LOGE("IpcLiteHelper CreateProcess: StartServer failed");
         return -1;
     }
-    if (!multiprocess::ChildProcessStarter::GetInstance().CreateProcess(processKey, socket_path)) {
-        LOGE("IpcLiteHelper CreateProcess: CreateProcess failed");
-        ChildProcessLiteHost::Instance().Close();
-        return -1;
-    }
+    ChildProcessStarter::GetInstance().CreateProcess(processKey, socket_path);
     int32_t pid = ChildProcessLiteHost::Instance().AcceptAndSetup(commands, fds);
     ChildProcessLiteHost::Instance().Close();
     if (pid <= 0) {
@@ -126,7 +126,7 @@ int IpcLiteHelper::CreateProcess(
 void IpcLiteHelper::KillProcess()
 {
     LOGI("IpcLiteHelper::KillProcess");
-    multiprocess::ChildProcessStarter::GetInstance().KillProcess();
+    ChildProcessStarter::GetInstance().KillProcess();
 }
 
 ChildProcessLiteHost& ChildProcessLiteHost::Instance()

@@ -68,7 +68,7 @@ void WineWindowManager::RemoveWindow(int32_t widget_id)
     return;
   }
 
-  windows_.erase(widget_id); 
+  windows_.erase(widget_id);
 }
 
 bool WineWindowManager::IsEmpty()
