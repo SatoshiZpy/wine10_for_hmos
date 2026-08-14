@@ -470,14 +470,14 @@ static int process_events( DWORD mask )
         switch (event->data.type)
         {
         case DESKTOP_CHANGED:
-            TRACE( "DESKTOP_CHANGED %ux%u\n", event->data.desktop.width, event->data.desktop.height );
+            TRACE("DESKTOP_CHANGED %ux%u\n", event->data.desktop.width, event->data.desktop.height);
             screen_width = event->data.desktop.width;
             screen_height = event->data.desktop.height;
             init_monitors( screen_width, screen_height );
             break;
 
         case CONFIG_CHANGED:
-            TRACE( "CONFIG_CHANGED dpi %u\n", event->data.cfg.dpi );
+            TRACE("CONFIG_CHANGED dpi %u\n", event->data.cfg.dpi);
             set_screen_dpi( event->data.cfg.dpi );
             break;
 
@@ -549,7 +549,7 @@ static int process_events( DWORD mask )
             HWND focused_hwnd = NtUserGetGUIThreadInfo(GetCurrentThreadId(), &info) ? info.hwndFocus : 0;
 
             TRACE("WINDOW_FOCUS_EVENT: hwnd=%p, gained=%d, current_focus=%p\n", hwnd, gained, focused_hwnd);
-            
+
             if (gained) {
                 HWND root = NtUserGetAncestor(hwnd, GA_ROOT);
                 if (root && root != focused_hwnd) {
@@ -1297,7 +1297,7 @@ static void show_window(struct ohos_win_data *data)
          * correctly-sized buffer, eliminating the stretch.
          * Only flush when pending_configure is set (size changed),
          * otherwise the old buffer size matches the window and no
-         * stretching can occur ¡ª a white flush would only cause an
+         * stretching can occur a white flush would only cause an
          * unnecessary flash. */
         if (!data->on_screen && data->pending_configure)
         {
