@@ -180,6 +180,7 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
       const subWindowOpts: window.SubWindowOptions = {
         title: 'This is a subwindow',
         decorEnabled: false,
+        maximizeSupported: true,
         zLevelAboveParentLoosened: true
       };
       this.windowStage.createSubWindowWithOptions(name, subWindowOpts)

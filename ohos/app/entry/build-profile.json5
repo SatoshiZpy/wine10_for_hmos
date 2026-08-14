@@ -1,8 +1,12 @@
 {
   "apiType": "stageMode",
   "buildOption": {
-    "arkOptions": {
-    },
+    "nativeLib": {
+      "debugSymbol": {
+        "strip": false,
+        "exclude": []
+      }
+    }
   },
   "buildOptionSet": [
     {

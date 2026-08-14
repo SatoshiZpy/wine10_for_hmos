@@ -11,11 +11,7 @@ import LogMethod from '../common/LogDecorator';
 import { ContextAdapter } from './ContextAdapter';
 import { common } from '@kit.AbilityKit';
 
-export interface CompleteDisplay {
-  id: number;
-  baseDisplay: display.Display | undefined;
-  availArea: display.Rect | undefined;
-}
+import { CompleteDisplay } from '../interface/CommonInterface';
 
 @injectable()
 export class DisplayAdapter extends BaseAdapter {

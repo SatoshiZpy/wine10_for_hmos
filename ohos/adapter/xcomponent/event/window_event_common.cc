@@ -181,7 +181,7 @@ std::string WindowSizeChangeEvent::ToString() {
   return oss.str();
 }
 
-std::string WindowChangeEvent::ToString() {
+std::string WindowEvent::ToString() {
   std::ostringstream oss;
   oss << GetName() << "(type: " << WindowEventToString(window_event_type_) << ")";
   return oss.str();

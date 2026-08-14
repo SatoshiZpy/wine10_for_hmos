@@ -9,6 +9,8 @@
 
 namespace ohos::adapter::window {
 
+using namespace ohos::adapter::xcomponent;
+
 class WineToplevelWindow : public WineWindow {
   public:
     WineToplevelWindow();
@@ -22,10 +24,13 @@ class WineToplevelWindow : public WineWindow {
     WineToplevelWindow* AsToplevelWindow() override;
 
     int32_t OnCreateWindow() override;
+    void TriggerStateChanges() override;
+    void UpdateStateChanges() override;
 
     void Show() override;
     void Hide() override;
     void Close() override;
+    bool IsVisible() const override;
     void SetBounds(const WindowRect& rect) override;
 };
 

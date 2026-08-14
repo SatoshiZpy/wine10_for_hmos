@@ -217,8 +217,7 @@ int ChildProcessHelper::SetWindowTitle(int widget_id, const std::string& title)
 int ChildProcessHelper::GetDisplay(ipc::DisplayParam& param)
 {
     Display default_display;
-    ScreenAdapter::GetInstance().GetDefaultDisplay(default_display);
-    if (default_display.id == -1) {
+    if (!ScreenAdapter::GetInstance().GetDefaultDisplay(default_display)) {
       LOGE("get default display failed");
       return -1;
     }

@@ -116,6 +116,7 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
       const subWindowOpts: window.SubWindowOptions = {
         title: 'This is a subwindow',
         decorEnabled: false,
+        maximizeSupported: true,
         zLevelAboveParentLoosened: true
       };
       windowProxy?.createSubWindowWithOptions(name, subWindowOpts)

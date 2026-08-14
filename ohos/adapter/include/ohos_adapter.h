@@ -35,15 +35,17 @@ extern "C" {
 # define ADAPTER_API ADAPTER_IMPORT
 #endif
 
-typedef struct ohosdrv_opaque_window* ohos_window;
 typedef OHNativeWindow* ohos_native_window;
 typedef OHNativeWindowBuffer* ohos_window_buffer;
 typedef BufferHandle* ohos_buffer_handle;
 
 /* window */
-ADAPTER_API ohos_window CreateNativeWindow(const struct window_param* param, int* widget_id);
+ADAPTER_API int CreateNativeWindow(const struct window_param* param);
 ADAPTER_API void CloseNativeWindow(int widget_id);
 ADAPTER_API void SetWindowBounds(int widget_id, const struct window_bounds* bounds);
+ADAPTER_API void MaximizeWindow(int widget_id);
+ADAPTER_API void MinimizeWindow(int widget_id);
+ADAPTER_API void RestoreWindow(int widget_id);
 ADAPTER_API void SetParentWindow(int widget_id, int parent_id);
 ADAPTER_API void SetWindowFeatures(int widget_id, const struct window_features* wf);
 ADAPTER_API void SetWindowState(int widget_id, const struct window_state* state);
@@ -51,7 +53,7 @@ ADAPTER_API void SetWindowAlpha(int widget_id, float opacity);
 ADAPTER_API void SetWindowTitle(int widget_id, const char* title);
 ADAPTER_API void SetWindowVisible(int widget_id, int visible);
 ADAPTER_API struct window_bounds GetInitialBounds(void);
-ADAPTER_API ohos_native_window GetNativeWindow(ohos_window w);
+ADAPTER_API ohos_native_window GetNativeWindow(int widget_id);
 ADAPTER_API int GetFocusWindow(void);
 
 /* process */
@@ -108,9 +110,6 @@ ADAPTER_API void StartListeningForScreenlock(screenlock_event_callback callback)
 
 /* url */
 ADAPTER_API int OpenNativeUrl(const char *url);
-
-/* file */
-ADAPTER_API int OpenNativeFileWithChooser(const char *path);
 
 #ifdef __cplusplus
 }

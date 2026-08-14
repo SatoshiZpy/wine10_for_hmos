@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import fileUri from '@ohos.file.fileuri';
-import fs from '@ohos.file.fs';
 import LogUtil from '../utils/LogUtil';
 import LogMethod from '../common/LogDecorator';
 import picker from '@ohos.file.picker';

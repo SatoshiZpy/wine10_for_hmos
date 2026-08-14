@@ -110,16 +110,13 @@ void CommandLineHelper::SetCommandLine(int process_type,
     if (colon_pos != std::string::npos) {
         process_name_ = full_name.substr(colon_pos + 1);
     } else {
-        process_name_ = "";
+        process_name_ = "main_process";
     }
-    LOGI("SetCommandLine process_name: %{public}s, full_name: %{public}s",
+    LOGD("SetCommandLine process_name: %{public}s, full_name: %{public}s",
          process_name_.c_str(), full_name.c_str());
 
     for (size_t i = 0; i < args.size(); i++) {
-      LOGI("SetCommandLine arg[%{public}zu]: %{public}s", i, args[i].c_str());
-    }
-    for (size_t i = 0; i < env.size(); i++) {
-      LOGI("SetCommandLine env[%{public}zu]: %{public}s", i, env[i].c_str());
+      LOGD("SetCommandLine arg[%{public}zu]: %{public}s", i, args[i].c_str());
     }
 
     if (!env.empty()) {
