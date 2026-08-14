@@ -59,7 +59,7 @@ void WinePopupWindow::TriggerStateChanges() {
   if (state_ == PlatformWindowState::kMinimized) {
     SubWindowAdapter::GetInstance().Minimize(GetWidget());
   } else if (state_ == PlatformWindowState::kFullScreen) {
-    SubWindowAdapter::GetInstance().SetFullScreen(GetWidget());
+    SubWindowAdapter::GetInstance().SetFullscreen(GetWidget());
   } else if (state_ == PlatformWindowState::kMaximized) {
     SubWindowAdapter::GetInstance().Maximize(GetWidget());
   } else if (state_ == PlatformWindowState::kNormal) {

@@ -72,8 +72,8 @@ void SubWindowAdapter::Activate(int32_t id) {
   }
 }
 
-void SubWindowAdapter::SetFullScreen(int32_t id) {
-  auto func = ohos::adapter::GetJSFunction("SubWindow.SetFullScreen");
+void SubWindowAdapter::SetFullscreen(int32_t id) {
+  auto func = ohos::adapter::GetJSFunction("SubWindow.SetFullscreen");
   if (func) {
     func->Invoke<void>(id);
   }

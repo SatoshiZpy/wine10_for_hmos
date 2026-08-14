@@ -15,7 +15,7 @@ export default class LaunchHelper {
                            options: StartOptions): Promise<boolean> {
     return new Promise<boolean>((resolve, reject) => {
       try {
-        if (!uicontext) {
+        if (!uiContext) {
           LogUtil.error(TAG, `excute failed, want: ${JSON.stringify(want)}, options: ${JSON.stringify(options)}`);
           resolve(false);
           return;

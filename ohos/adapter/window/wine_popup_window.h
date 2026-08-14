@@ -20,7 +20,6 @@ class WinePopupWindow : public WineWindow {
     ~WinePopupWindow() override;
 
     WinePopupWindow* AsPopupWindow() override;
-
     int32_t OnCreateWindow() override;
     void TriggerStateChanges() override;
     void UpdateStateChanges() override;

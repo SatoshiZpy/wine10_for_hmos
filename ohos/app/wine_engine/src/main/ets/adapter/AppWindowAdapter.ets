@@ -120,7 +120,7 @@ export class AppWindowAdapter extends BaseAdapter {
     LaunchHelper.LaunchWithOptions(activeCtx, want, options)
       .then((result) => {
         if (result) {
-          this.WindowList.push({
+          this.windowList.push({
             id: param.widget_id,
             localStorage: subStorage
           });
@@ -248,6 +248,7 @@ export class AppWindowAdapter extends BaseAdapter {
       LogUtil.error(TAG, 'Failed to obtain the main window.');
       return;
     }
+
     try {
       const windowProp = windowClass.getWindowProperties();
       let xComBorder: number = windowProp?.drawableRect.left || 0;
@@ -256,7 +257,6 @@ export class AppWindowAdapter extends BaseAdapter {
       bounds.top -= xComTop;
       bounds.width = bounds.width + xComBorder + xComBorder;
       bounds.height = bounds.height + xComBorder + xComTop;
-
 
       windowClass.moveWindowToAsync(bounds.left, bounds.top)
         .then(() => {
@@ -302,7 +302,6 @@ export class AppWindowAdapter extends BaseAdapter {
       const windowProp = windowClass.getWindowProperties();
       let xComBorder: number = windowProp?.drawableRect.left || 0;
       let xComTop: number = windowProp?.drawableRect.top || 0;
-
       let windowLimits: window.WindowLimits = {
         minWidth: minWidth === 0 ? minWidth : minWidth + xComBorder + xComBorder,
         minHeight: minHeight === 0 ? minHeight : minHeight + xComTop + xComBorder,

@@ -352,7 +352,7 @@ void WineWindow::OnWindowEvent(std::shared_ptr<Event> event) {
 
   switch (window_type) {
     case WindowEventType::WINDOW_SHOWN:
-      if (state_ == PlatformWindowState::Kminimized) {
+      if (state_ == PlatformWindowState::kMinimized) {
         SetWindowState(previous_enter_minimize_state_, false);
         pending_reason_ = 2; /* RectChangeReason::RECOVER */
         Applied(previous_bounds_, bounds_, true);
@@ -416,7 +416,6 @@ void WineWindow::OnWindowRectChangeEvent(std::shared_ptr<Event> event) {
       break;
   }
 
-
   if (handle) {
     // This event is from ArkUI, the changes of state is already triggered.
     SetWindowState(new_state, false);
@@ -449,6 +448,7 @@ void WineWindow::SetWindowState(PlatformWindowState new_state, bool isTrigger) {
     // Record the state before minimize.
     previous_enter_minimize_state_ = state_;
   }
+
   previous_state_ = state_;
   state_ = new_state;
 

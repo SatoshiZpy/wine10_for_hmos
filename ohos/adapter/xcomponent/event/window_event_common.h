@@ -142,14 +142,13 @@ class ADAPTER_EXPORT_API DeviceInfoChangeEvent : public Event {
   ChangeEventType change_event_type_;
 };
 
-class ADAPTER_EXPORT_API WindowDisplayIdChangeEvent : public event {
+class ADAPTER_EXPORT_API WindowDisplayIdChangeEvent : public Event {
  public:
   explicit WindowDisplayIdChangeEvent()
     : Event(EventType::ET_WINDOW_DISPLAY_ID_CHANGE) {}
   std::string ToString() override;
   int display_id = 0;
 };
-
 
 std::string EventTypeName(EventType type);
 std::string WindowEventToString(WindowEventType eventType);

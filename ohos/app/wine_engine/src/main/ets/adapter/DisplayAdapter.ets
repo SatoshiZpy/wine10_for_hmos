@@ -10,7 +10,6 @@ import LogUtil from '../utils/LogUtil';
 import LogMethod from '../common/LogDecorator';
 import { ContextAdapter } from './ContextAdapter';
 import { common } from '@kit.AbilityKit';
-
 import { CompleteDisplay } from '../interface/CommonInterface';
 
 @injectable()
@@ -66,7 +65,7 @@ export class DisplayAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  getALLDisplays(callback: (completeDisplays: Array<CompleteDisplay>,
+  getAllDisplays(callback: (completeDisplays: Array<CompleteDisplay>,
                             length: number) => void) {
     try {
       display.getAllDisplays((err: BusinessError, baseDisplays: Array<display.Display>) => {

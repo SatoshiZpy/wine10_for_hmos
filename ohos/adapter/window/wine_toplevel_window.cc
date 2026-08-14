@@ -69,6 +69,7 @@ void WineToplevelWindow::SetBounds(const WindowRect& rect)
 {
   previous_bounds_ = bounds_;
   bounds_ = rect;
+
   AppWindowAdapter::GetInstance().SetBounds(GetWidget(), rect, []{});
 }
 
@@ -76,7 +77,7 @@ void WineToplevelWindow::TriggerStateChanges() {
   if (state_ == PlatformWindowState::kMinimized) {
     AppWindowAdapter::GetInstance().Minimize(GetWidget());
   } else if (state_ == PlatformWindowState::kFullScreen) {
-    AppWindowAdapter::GetInstance().SetFullScreen(GetWidget());
+    AppWindowAdapter::GetInstance().SetFullscreen(GetWidget());
   } else if (state_ == PlatformWindowState::kMaximized) {
     AppWindowAdapter::GetInstance().Maximize(GetWidget());
   } else if (state_ == PlatformWindowState::kNormal) {
