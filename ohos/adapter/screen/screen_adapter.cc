@@ -39,7 +39,7 @@ static void ConvertDisplay(aki::Value complete_display, Display& display) {
 
 bool ScreenAdapter::GetDefaultDisplay(Display& display) {
   if (default_display_.id > 0) {
-    Display = default_display_;
+    display = default_display_;
     return true;
   }
 
@@ -59,7 +59,7 @@ bool ScreenAdapter::GetDefaultDisplay(Display& display) {
     ConvertDisplay(complete_display, display);
     promise.set_value(true);
   };
-  
+
   func->Invoke<void>(callback);
   return promise.get_future().get();
 }
@@ -79,6 +79,7 @@ bool ScreenAdapter::GetAllDisplays(std::vector<Display>& ohos_displays) {
     LOGE("GetAllDisplays: JSFunction not available");
     return false;
   }
+
   std::promise<bool> promise;
   std::function<void(aki::Value, int32_t)> callback =
     [&](aki::Value complete_displays, int32_t len) {

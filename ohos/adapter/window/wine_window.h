@@ -207,7 +207,7 @@ class WineWindow {
     int32_t current_display_id_ = -1;
     WindowRect caption_button_bounds_;
 
-    // RectChangereason, passed to Applied
+    // RectChangeReason, passed to Applied
     int32_t pending_reason_ = 0;
     bool is_visible_ = false;
 };

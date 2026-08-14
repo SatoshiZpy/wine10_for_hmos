@@ -113,7 +113,7 @@ export interface NativeContext {
   ClearWindowEventFilter: (origin_window_id: number) => void;
 
   UpdateWindowDeviceModeSwitchCB: (mode: DeviceMode) => void;
-  setDefaultDisplay: (display: CompleteDisplay) => void;
+  SetDefaultDisplay: (display: CompleteDisplay) => void;
 }
 
 export interface IParams {

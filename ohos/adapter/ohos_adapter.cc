@@ -287,10 +287,10 @@ void MaximizeWindow(int widget_id)
 {
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
-        LOGE("MaximizeWindow: window not exists, widgetID %{public}d", widget_id);
+        LOGE("MaximizeWindow: window not exists, widgetId %{public}d", widget_id);
         return;
     }
-    LOGI("MaximizeWindow widgetID %{public}d", widget_id);
+    LOGI("MaximizeWindow widgetId %{public}d", widget_id);
     window->Maximize();
 }
 
@@ -298,10 +298,10 @@ void MinimizeWindow(int widget_id)
 {
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
-        LOGE("MinimizeWindow: window not exists, widgetID %{public}d", widget_id);
+        LOGE("MinimizeWindow: window not exists, widgetId %{public}d", widget_id);
         return;
     }
-    LOGI("MinimizeWindow widgetID %{public}d", widget_id);
+    LOGI("MinimizeWindow widgetId %{public}d", widget_id);
     window->Minimize();
 }
 
@@ -309,10 +309,10 @@ void RestoreWindow(int widget_id)
 {
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
-        LOGE("RestoreWindow: window not exists, widgetID %{public}d", widget_id);
+        LOGE("RestoreWindow: window not exists, widgetId %{public}d", widget_id);
         return;
     }
-    LOGI("RestoreWindow widgetID %{public}d", widget_id);
+    LOGI("RestoreWindow widgetId %{public}d", widget_id);
     window->Restore();
 }
 
@@ -378,7 +378,7 @@ ohos_native_window GetNativeWindow(int widget_id)
 {
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
-        LOGE("GetNativeWindow: window not exists, widgetID %{public}d", widget_id);
+        LOGE("GetNativeWindow: window not exists, widgetId %{public}d", widget_id);
         return nullptr;
     }
     return window->GetNativeWindow();

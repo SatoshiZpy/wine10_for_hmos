@@ -317,7 +317,6 @@ export class SubWindowAdapter extends BaseAdapter {
     }
   }
 
-
   private async resizeSubWindow(windowClass: window.Window, width: number, height: number) {
     return await windowClass.resizeAsync(width, height)
       .then(() => {
@@ -430,6 +429,7 @@ export class SubWindowAdapter extends BaseAdapter {
       LogUtil.error(TAG, 'Failed to obtain the SubWindow.');
       return;
     }
+
     windowClass.minimize().catch((err: BusinessError) => {
       LogUtil.error(TAG, 'Failed to hide SubWindow. Cause: ' + JSON.stringify(err));
     });
@@ -442,6 +442,7 @@ export class SubWindowAdapter extends BaseAdapter {
       LogUtil.error(TAG, 'Failed to obtain the SubWindow.');
       return;
     }
+
     windowClass.showWindow().catch((err: BusinessError) => {
       LogUtil.error(TAG, 'Failed to show SubWindow. Cause: ' + JSON.stringify(err));
     });
@@ -464,7 +465,7 @@ export class SubWindowAdapter extends BaseAdapter {
             LogUtil.error(TAG, 'Failed to move the subwindow. Cause:' + JSON.stringify(err));
           });
       }).catch((err: BusinessError) => {
-      LogUtil.error(TAG, 'Failed to change the subWindow size. Cause: ' + JSON.stringify(err));
+      LogUtil.error(TAG, 'Failed to change the subWindow size. Cause:' + JSON.stringify(err));
     });
   }
 

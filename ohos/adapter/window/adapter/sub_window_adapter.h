@@ -25,7 +25,7 @@ class ADAPTER_EXPORT_API SubWindowAdapter {
   void Hide(int32_t id);
 
   void Activate(int32_t id);
-  void SetFullScreen(int32_t id);
+  void SetFullscreen(int32_t id);
   void SetBounds(int32_t id, const WindowRect& rect);
   void Maximize(int32_t id);
   void UnMaximize(int32_t id);

@@ -22,7 +22,6 @@ class WineToplevelWindow : public WineWindow {
     ~WineToplevelWindow() override;
 
     WineToplevelWindow* AsToplevelWindow() override;
-
     int32_t OnCreateWindow() override;
     void TriggerStateChanges() override;
     void UpdateStateChanges() override;

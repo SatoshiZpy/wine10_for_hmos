@@ -67,11 +67,11 @@ export class SubWindowAdapterBind {
     JsBindingUtils.bindFunction("SubWindow.CloseWindow", closeWindow);
     JsBindingUtils.bindFunction("SubWindow.DestroyWindow", destroyWindow);
     JsBindingUtils.bindFunction("SubWindow.SetBounds", setBounds);
-    JsBindingUtils.bindFunction("SubWindow.setFullscreen", setFullscreen);
-    JsBindingUtils.bindFunction("SubWindow.maximize", maximize);
-    JsBindingUtils.bindFunction("SubWindow.unMaximize", unMaximize);
-    JsBindingUtils.bindFunction("SubWindow.minimize", minimize);
-    JsBindingUtils.bindFunction("SubWindow.restore", restore);
-    JsBindingUtils.bindFunction("SubWindow.activateWindow", activateWindow);
+    JsBindingUtils.bindFunction("SubWindow.SetFullscreen", setFullscreen);
+    JsBindingUtils.bindFunction("SubWindow.Maximize", maximize);
+    JsBindingUtils.bindFunction("SubWindow.UnMaximize", unMaximize);
+    JsBindingUtils.bindFunction("SubWindow.Minimize", minimize);
+    JsBindingUtils.bindFunction("SubWindow.Restore", restore);
+    JsBindingUtils.bindFunction("SubWindow.ActivateWindow", activateWindow);
   }
 }
