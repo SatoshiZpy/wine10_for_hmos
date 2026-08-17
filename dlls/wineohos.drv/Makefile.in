@@ -12,4 +12,5 @@ SOURCES = \
 	init.c \
 	keyboard.c \
 	opengl.c \
+	vulkan.c \
 	window.c
