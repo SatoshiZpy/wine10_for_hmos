@@ -124,7 +124,7 @@ static BOOL ohos_doc_end(doc_t *doc)
 {
     return ohos_print_end_doc(doc->ohos);
 }
-#endif
+
 static BOOL ohos_doc_start(doc_t *doc, const WCHAR *printer_id,
         const WCHAR *document_title)
 {
@@ -133,6 +133,7 @@ static BOOL ohos_doc_start(doc_t *doc, const WCHAR *printer_id,
     doc->end_doc = ohos_doc_end;
     return TRUE;
 }
+#endif
 
 static BOOL pipe_write_doc(doc_t *doc, const BYTE *buf, unsigned int size)
 {
