@@ -8,814 +8,1212 @@
 
 #include "config.h"
 
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <pthread.h>
+
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include <database/pasteboard/oh_pasteboard.h>
+#include <database/udmf/udmf.h>
+#include <database/udmf/uds.h>
+#include <multimedia/image_framework/image/pixelmap_native.h>
 #include "windef.h"
 #include "winuser.h"
+#include "shlobj.h"
 #include "ntuser.h"
-// #include "shellapi.h"
-// #include "shlobj.h"
-#include "wine/list.h"
-// #include "wine/server.h"
-// #include "ohos.h"
+#include "winternl.h"
+#include "wine/unixlib.h"
 #include "wine/debug.h"
 
-
-
 WINE_DEFAULT_DEBUG_CHANNEL(ohos);
-/**************************************************************************
- *              Types
- **************************************************************************/
 
-
-typedef void *(*DRVIMPORTFUNC)(OH_UdmfData* data, size_t *ret_size);
-typedef OH_UdmfData* (*DRVEXPORTFUNC)(void *data, size_t size);
-typedef const char* OHOS_PasteType; // OHOS MIME 类型
-
-typedef struct _WINE_CLIPFORMAT
-{
-    struct list             entry;
-    UINT                    format_id;
-    OHOS_PasteType          type;
-    DRVIMPORTFUNC           import_func;
-    DRVEXPORTFUNC           export_func;
-    BOOL                    synthesized;
-    struct _WINE_CLIPFORMAT *natural_format;
-} WINE_CLIPFORMAT;
-
+#ifndef PASTEBOARD_MIMETYPE_TEXT_PLAIN
+#define PASTEBOARD_MIMETYPE_TEXT_PLAIN "text/plain"
+#endif
+#ifndef PASTEBOARD_MIMETYPE_TEXT_HTML
+#define PASTEBOARD_MIMETYPE_TEXT_HTML "text/html"
+#endif
+#ifndef PASTEBOARD_MIMETYPE_TEXT_URI
+#define PASTEBOARD_MIMETYPE_TEXT_URI "text/uri"
+#endif
+#ifndef PASTEBOARD_MIMETYPE_PIXELMAP
+#define PASTEBOARD_MIMETYPE_PIXELMAP "pixelMap"
+#endif
 
 /**************************************************************************
  *              Constants
  **************************************************************************/
 
+#define PBS_POLL_INTERVAL_MS 100
+#define CLIPBOARD_SYNC_MIN_INTERVAL_MS 50
 
-#define WM_OHOSDRV_PASTEBOARD_UPDATE (WM_USER + 101)
-
- /**************************************************************************
- *              Forward Function Declarations
- **************************************************************************/
-static void *import_utf8_to_unicodetext(OH_UdmfData* data, size_t *ret_size);
-static OH_UdmfData* export_unicodetext_to_utf8(void *data, size_t size);
-static WINE_CLIPFORMAT* format_for_type(const char *type);
-static WINE_CLIPFORMAT* natural_format_for_format(UINT format_id);
-static void advertise_pasteboard_to_win32(void);
-static BOOL open_clipboard_for_import(HWND hwnd);
-static void close_clipboard_for_import(void);
-
-
- /**************************************************************************
- *              Static Variables
+/**************************************************************************
+ *              Data carried between the pbs worker and wine threads
  **************************************************************************/
 
-static const WCHAR clipboard_classname[] =
-    {'_','_','w','i','n','e','_','c','l','i','p','b','o','a','r','d','_','m','a','n','a','g','e','r',0};
-/* Clipboard formats */
-static struct list format_list = LIST_INIT(format_list);
-
-static HWND clipboard_hwnd;
-static BOOL is_clipboard_owner;
-static volatile LONG pasteboard_notify_flag;   /* set by observer callback, cleared by clipboard thread */
-static volatile LONG exporting_to_ohos;        /* guard: TRUE while Win32->OHOS push is in flight */
-static volatile LONG importing_from_ohos;      /* guard: TRUE while OHOS->Win32 pull is in flight */
-static OH_Pasteboard* OHOS_pasteboard;
-static OH_PasteboardObserver* OHOS_observer;
-static WINE_CLIPFORMAT **current_ohos_formats;
-static unsigned int nb_current_ohos_formats;
-static uint32_t last_pasteboard_change_count;  /* OHOS pasteboard change counter for change detection */
-
-static const struct
+/* raw RGBA_8888 image, row stride = width * 4, caller frees bits */
+struct clip_image
 {
-    UINT            id;
-    OHOS_PasteType  type;
-    DRVIMPORTFUNC   import;
-    DRVEXPORTFUNC   export;
-    BOOL            synthesized;
-} builtin_format_ids[] =
-{
-    // 使用 UTF-8 作为 "text/plain" 的存储格式，映射到 CF_UNICODETEXT
-    { CF_UNICODETEXT, "text/plain", import_utf8_to_unicodetext, export_unicodetext_to_utf8, FALSE },
+    UINT width;
+    UINT height;
+    BYTE *bits;
 };
 
-static unsigned int clipboard_thread_id;
-static unsigned int last_clipboard_update;
+/* pending clipboard payload, one field per format kind; NULL = absent */
+struct pending_clip
+{
+    char *text;             /* UTF-8, NUL-terminated */
+    char *html;             /* UTF-8 html fragment, NUL-terminated */
+    char *urilist;          /* "file://...\r\n" lines, NUL-terminated */
+    struct clip_image *image;
+};
 
- /**************************************************************************
- *              Internal Clipboard implementation methods
+static pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* OHOS -> win32: written by the pbs worker, stolen by a wine thread */
+static struct pending_clip import_pending;
+
+/* win32 -> OHOS: written by a wine thread, taken by the pbs worker */
+static struct pending_clip export_pending;
+
+static pthread_t pbs_thread;
+static volatile LONG pbs_thread_started;
+
+static DWORD last_win32_seq; /* win32 clipboard sequence number (wine side) */
+
+
+/**************************************************************************
+ *              Shared-buffer helpers
  **************************************************************************/
 
-
-/**************************************************************************
- *              debugstr_format
- */
-static const char *debugstr_format(UINT id)
+static void free_clip_image( struct clip_image *image )
 {
-    WCHAR buffer[256];
+    if (!image) return;
+    free( image->bits );
+    free( image );
+}
 
-    if (NtUserGetClipboardFormatName(id, buffer, 256))
-        return wine_dbg_sprintf("0x%04x %s", id, debugstr_w(buffer));
+static void free_pending_clip( struct pending_clip *clip )
+{
+    free( clip->text );
+    free( clip->html );
+    free( clip->urilist );
+    free_clip_image( clip->image );
+    memset( clip, 0, sizeof(*clip) );
+}
 
-    switch (id)
-    {
-#define BUILTIN(id) case id: return #id;
-    BUILTIN(CF_TEXT)
-    BUILTIN(CF_BITMAP)
-    BUILTIN(CF_METAFILEPICT)
-    BUILTIN(CF_SYLK)
-    BUILTIN(CF_DIF)
-    BUILTIN(CF_TIFF)
-    BUILTIN(CF_OEMTEXT)
-    BUILTIN(CF_DIB)
-    BUILTIN(CF_PALETTE)
-    BUILTIN(CF_PENDATA)
-    BUILTIN(CF_RIFF)
-    BUILTIN(CF_WAVE)
-    BUILTIN(CF_UNICODETEXT)
-    BUILTIN(CF_ENHMETAFILE)
-    BUILTIN(CF_HDROP)
-    BUILTIN(CF_LOCALE)
-    BUILTIN(CF_DIBV5)
-    BUILTIN(CF_OWNERDISPLAY)
-    BUILTIN(CF_DSPTEXT)
-    BUILTIN(CF_DSPBITMAP)
-    BUILTIN(CF_DSPMETAFILEPICT)
-    BUILTIN(CF_DSPENHMETAFILE)
-#undef BUILTIN
-    default: return wine_dbg_sprintf("0x%04x", id);
-    }
+/* steal the pending import payload (caller frees), all-NULL if none */
+static struct pending_clip take_import_pending(void)
+{
+    struct pending_clip ret;
+
+    pthread_mutex_lock(&state_mutex);
+    ret = import_pending;
+    memset(&import_pending, 0, sizeof(import_pending));
+    pthread_mutex_unlock(&state_mutex);
+    return ret;
+}
+
+/* publish a freshly extracted import payload, replacing (and freeing) any stale one */
+static void put_import_pending( struct pending_clip *clip )
+{
+    pthread_mutex_lock(&state_mutex);
+    free_pending_clip(&import_pending);
+    import_pending = *clip;
+    pthread_mutex_unlock(&state_mutex);
+}
+
+/* steal the pending export payload (caller frees), all-NULL if none */
+static struct pending_clip take_export_pending(void)
+{
+    struct pending_clip ret;
+
+    pthread_mutex_lock(&state_mutex);
+    ret = export_pending;
+    memset(&export_pending, 0, sizeof(export_pending));
+    pthread_mutex_unlock(&state_mutex);
+    return ret;
+}
+
+/* publish win32 data for the worker to push, replacing any stale one */
+static void put_export_pending( struct pending_clip *clip )
+{
+    pthread_mutex_lock(&state_mutex);
+    free_pending_clip(&export_pending);
+    export_pending = *clip;
+    pthread_mutex_unlock(&state_mutex);
 }
 
 
-/**************************************************************************
- *              set_win32_clipboard_formats_from_ohos_pasteboard
- *
- * Given a list of MIME type strings from the OHOS pasteboard, look up
- * each one in format_list and set the corresponding Win32 clipboard format
- * via deferred rendering (WM_RENDERFORMAT).  The actual data retrieval
- * happens later in render_format().
- */
-static void set_win32_clipboard_formats_from_ohos_pasteboard(char** types, int count)
+ /**************************************************************************
+  *              OHOS UDMF helpers (called on the pbs worker only)
+  **************************************************************************/
+
+static char *dup_cstr( const char *s )
 {
-    WINE_CLIPFORMAT **new_formats = NULL;
-    UINT i, format_idx = 0;
+    size_t len;
+    char *ret;
 
-    if (!types || count <= 0) return;
+    if (!s || !*s) return NULL;
+    len = strlen(s);
+    if (!(ret = malloc(len + 1))) return NULL;
+    memcpy(ret, s, len + 1);
+    return ret;
+}
 
-    new_formats = calloc(count, sizeof(WINE_CLIPFORMAT*));
-    if (!new_formats) return;
+/**************************************************************************
+ *              worker_extract_import
+ *
+ * Read every supported format out of the current pasteboard data.
+ * Fills *out (ownership transferred to caller); returns TRUE if anything
+ * was found.
+ */
+static BOOL worker_extract_import( OH_Pasteboard *pbs, struct pending_clip *out )
+{
+    OH_UdmfData *ud;
+    int ret = 0;
+    BOOL any = FALSE;
 
-    for (i = 0; i < count; i++)
+    memset(out, 0, sizeof(*out));
+
+    if (!(ud = OH_Pasteboard_GetData(pbs, &ret)))
     {
-        struct set_clipboard_params params = { 0 };
-        WINE_CLIPFORMAT *fmt = format_for_type(types[i]);
+        WARN("DIAGCLIP import: GetData failed ret=%d\n", ret);
+        return FALSE;
+    }
 
-        if (!fmt)
+    /* plain text */
+    if (OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_PLAIN))
+    {
+        OH_UdsPlainText *plain_text = OH_UdsPlainText_Create();
+        if (plain_text)
         {
-            TRACE("no handler for type %s, skipping\n", types[i]);
-            continue;
+            if (OH_UdmfData_GetPrimaryPlainText(ud, plain_text) == 0)
+            {
+                const char *content = OH_UdsPlainText_GetContent(plain_text);
+                if (content && *content)
+                {
+                    out->text = dup_cstr(content);
+                    any = TRUE;
+                }
+            }
+            OH_UdsPlainText_Destroy(plain_text);
+        }
+    }
+
+    /* html */
+    if (OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_HTML))
+    {
+        OH_UdsHtml *html = OH_UdsHtml_Create();
+        if (html)
+        {
+            if (OH_UdmfData_GetPrimaryHtml(ud, html) == 0)
+            {
+                const char *content = OH_UdsHtml_GetContent(html);
+                if (content && *content)
+                {
+                    out->html = dup_cstr(content);
+                    any = TRUE;
+                }
+            }
+            OH_UdsHtml_Destroy(html);
+        }
+    }
+
+    /* file uris: walk the records.  GetRecord returns a borrowed pointer --
+     * never destroy it, the OH_UdmfData_Destroy below owns them all. */
+    if (OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_URI))
+    {
+        int count = OH_UdmfData_GetRecordCount(ud);
+        char *list = NULL;
+        size_t len = 0;
+        int i;
+
+        for (i = 0; i < count; i++)
+        {
+            OH_UdmfRecord *record = OH_UdmfData_GetRecord(ud, i);
+            OH_UdsFileUri *file_uri;
+            const char *uri;
+            size_t uri_len;
+            char *new_list;
+
+            if (!record) continue;
+            if (!(file_uri = OH_UdsFileUri_Create())) continue;
+            if (OH_UdmfRecord_GetFileUri(record, file_uri) != 0 ||
+                !(uri = OH_UdsFileUri_GetFileUri(file_uri)) ||
+                strncmp(uri, "file:", 5) != 0)
+            {
+                OH_UdsFileUri_Destroy(file_uri);
+                continue;
+            }
+            uri_len = strlen(uri);
+            if ((new_list = realloc(list, len + uri_len + 3)))
+            {
+                list = new_list;
+                memcpy(list + len, uri, uri_len);
+                len += uri_len;
+                list[len++] = '\r';
+                list[len++] = '\n';
+            }
+            OH_UdsFileUri_Destroy(file_uri);
         }
 
-        TRACE("adding format %s\n", debugstr_format(fmt->format_id));
-        NtUserSetClipboardData(fmt->format_id, 0, &params);
-        new_formats[format_idx++] = fmt;
+        if (list)
+        {
+            list[len] = 0;
+            out->urilist = list;
+            any = TRUE;
+        }
     }
 
-    free(current_ohos_formats);
-    current_ohos_formats = new_formats;
-    nb_current_ohos_formats = format_idx;
+    /* pixelmap import: FIXME -- the NDK API OH_UdsPixelMap_GetPixelMap()
+     * cannot hand out the OH_PixelmapNative* it holds (its "output"
+     * parameter is a plain pointer), so OHOS -> win32 image paste is not
+     * implementable with this SDK.  win32 -> OHOS image export is
+     * supported below. */
+
+    OH_UdmfData_Destroy(ud);
+
+    if (!any) WARN("DIAGCLIP import: pasteboard had no supported data\n");
+    return any;
 }
 
 
 /**************************************************************************
- *              render_format
+ *              worker_push_export
+ *
+ * Compose one multi-record OH_UdmfData out of the pending win32 payload
+ * and push it to the pasteboard.  Runs on the pbs worker only.
  */
-static void render_format(UINT id)
+static void worker_push_export( OH_Pasteboard *pbs, struct pending_clip *exp )
 {
-    unsigned int i;
-    for (i = 0; i < nb_current_ohos_formats; i++)
-    {
-        if (current_ohos_formats[i]->format_id != id) continue;
+    OH_UdmfData *data;
+    BOOL have_record = FALSE;
 
-        bool hasDataType = OH_Pasteboard_HasType(OHOS_pasteboard, current_ohos_formats[i]->type);
-        if (hasDataType) {
-            int ret = 0;
-            OH_UdmfData* udmfData = OH_Pasteboard_GetData(OHOS_pasteboard, &ret);
-            if (udmfData) {
-                struct set_clipboard_params params = { 0 };
-                params.data = current_ohos_formats[i]->import_func(udmfData, &params.size);
-                if (!params.data) continue;
-                NtUserSetClipboardData(id, 0, &params);
-                free(params.data);
-                break;
+    if (!exp->text && !exp->html && !exp->urilist && !exp->image) return;
+
+    if (!(data = OH_UdmfData_Create())) return;
+
+    /* plain text record */
+    if (exp->text)
+    {
+        OH_UdsPlainText *plain_text = OH_UdsPlainText_Create();
+        OH_UdmfRecord *record = NULL;
+
+        if (plain_text && OH_UdsPlainText_SetContent(plain_text, exp->text) == 0)
+            record = OH_UdmfRecord_Create();
+
+        if (record)
+        {
+            if (OH_UdmfRecord_AddPlainText(record, plain_text) == 0)
+            {
+                /* plain_text now owned by record */
+                if (OH_UdmfData_AddRecord(data, record) == 0)
+                    have_record = TRUE;             /* record owned by data */
+                else
+                    OH_UdmfRecord_Destroy(record);  /* frees plain_text too */
+            }
+            else
+            {
+                OH_UdmfRecord_Destroy(record);      /* plain_text not added */
+                OH_UdsPlainText_Destroy(plain_text);
+            }
+        }
+        else if (plain_text)
+            OH_UdsPlainText_Destroy(plain_text);
+
+        free(exp->text);
+        exp->text = NULL;
+    }
+
+    /* html record */
+    if (exp->html)
+    {
+        OH_UdsHtml *html = OH_UdsHtml_Create();
+        OH_UdmfRecord *record = NULL;
+
+        if (html && OH_UdsHtml_SetContent(html, exp->html) == 0)
+            record = OH_UdmfRecord_Create();
+
+        if (record)
+        {
+            if (OH_UdmfRecord_AddHtml(record, html) == 0)
+            {
+                if (OH_UdmfData_AddRecord(data, record) == 0)
+                    have_record = TRUE;
+                else
+                    OH_UdmfRecord_Destroy(record);
+            }
+            else
+            {
+                OH_UdmfRecord_Destroy(record);
+                OH_UdsHtml_Destroy(html);
+            }
+        }
+        else if (html)
+            OH_UdsHtml_Destroy(html);
+
+        free(exp->html);
+        exp->html = NULL;
+    }
+
+    /* file uri records: one record per uri line */
+    if (exp->urilist)
+    {
+        char *line = exp->urilist;
+
+        while (*line)
+        {
+            char *end = strstr(line, "\r\n");
+            size_t len = end ? (size_t)(end - line) : strlen(line);
+            OH_UdsFileUri *file_uri = OH_UdsFileUri_Create();
+            OH_UdmfRecord *record = NULL;
+
+            if (file_uri && len < 512)
+            {
+                char uri[512];
+                memcpy(uri, line, len);
+                uri[len] = 0;
+                if (OH_UdsFileUri_SetFileUri(file_uri, uri) == 0)
+                    record = OH_UdmfRecord_Create();
             }
 
+            if (record)
+            {
+                if (OH_UdmfRecord_AddFileUri(record, file_uri) == 0)
+                {
+                    if (OH_UdmfData_AddRecord(data, record) == 0)
+                        have_record = TRUE;
+                    else
+                        OH_UdmfRecord_Destroy(record);
+                }
+                else
+                {
+                    OH_UdmfRecord_Destroy(record);
+                    OH_UdsFileUri_Destroy(file_uri);
+                }
+            }
+            else if (file_uri)
+                OH_UdsFileUri_Destroy(file_uri);
+
+            if (!end) break;
+            line = end + 2;
         }
+
+        free(exp->urilist);
+        exp->urilist = NULL;
     }
-}
- 
 
-/**************************************************************************
- *              grab_win32_clipboard
- *
- * Grab the Win32 clipboard when a OHOS app has taken ownership of the
- * pasteboard, and fill it with the pasteboard data types.
- * 同步数据.
- */
-static void grab_win32_clipboard(void)
-{
-    char** types;
-
-    int ret = 0;
-    unsigned int count = 0;
-
-    OH_UdmfData* udmfData = OH_Pasteboard_GetData(OHOS_pasteboard, &ret);
-    types = OH_UdmfData_GetTypes(udmfData, &count);
-
-    if (!types)
+    /* pixelmap record (win32 CF_DIB -> RGBA_8888 pixelmap) */
+    if (exp->image)
     {
-        WARN("Failed to copy pasteboard types\n");
-        OH_UdmfData_Destroy(udmfData);
-        return;
-    }
+        OH_Pixelmap_InitializationOptions *opts = NULL;
+        OH_PixelmapNative *native = NULL;
 
-    if (!NtUserOpenClipboard(clipboard_hwnd, 0))
-    {
-        OH_UdmfData_Destroy(udmfData);
-        return;
-    }
-    NtUserEmptyClipboard();
-    is_clipboard_owner = TRUE;
-    last_clipboard_update = NtGetTickCount();
-    set_win32_clipboard_formats_from_ohos_pasteboard(types, count);
-    NtUserCloseClipboard();
+        if (OH_PixelmapInitializationOptions_Create(&opts) == IMAGE_SUCCESS)
+        {
+            OH_PixelmapInitializationOptions_SetWidth(opts, exp->image->width);
+            OH_PixelmapInitializationOptions_SetHeight(opts, exp->image->height);
+            OH_PixelmapInitializationOptions_SetPixelFormat(opts, PIXEL_FORMAT_RGBA_8888);
+            OH_PixelmapInitializationOptions_SetAlphaType(opts, PIXELMAP_ALPHA_TYPE_PREMULTIPLIED);
+            OH_PixelmapInitializationOptions_SetRowStride(opts, exp->image->width * 4);
 
-    OH_UdmfData_Destroy(udmfData);
-}
+            if (OH_PixelmapNative_CreatePixelmap(exp->image->bits,
+                                                 (size_t)exp->image->width * exp->image->height * 4,
+                                                 opts, &native) == IMAGE_SUCCESS && native)
+            {
+                OH_UdsPixelMap *pixel_map = OH_UdsPixelMap_Create();
+                OH_UdmfRecord *record = NULL;
 
-/**************************************************************************
- *              extract_plain_text_from_udmf
- *
- *  extract_plain_text_from_udmf.
- */
-static char* extract_plain_text_from_udmf(OH_UdmfData* udmf_data, size_t* out_len)
-{
-    if (!udmf_data || !out_len) {
-        *out_len = 0;
-        return NULL;
-    }
+                if (pixel_map && OH_UdsPixelMap_SetPixelMap(pixel_map, native) == 0)
+                    record = OH_UdmfRecord_Create();
 
-    // 1. 获取第一个 record（通常只有一个）
-    OH_UdmfRecord* record = OH_UdmfData_GetRecord(udmf_data, 0);
-    if (!record) {
-        *out_len = 0;
-        return NULL;
-    }
-
-    // 2. 创建 PlainText 解析器
-    OH_UdsPlainText* plain_text = OH_UdsPlainText_Create();
-    if (!plain_text) {
-        OH_UdmfRecord_Destroy(record);
-        *out_len = 0;
-        return NULL;
-    }
-
-    // 3. 从 record 中提取文本
-    int ret = OH_UdmfRecord_GetPlainText(record, plain_text);
-    if (ret != 0) { // 假设非 0 表示失败（请根据实际 API 调整）
-        OH_UdsPlainText_Destroy(plain_text);
-        OH_UdmfRecord_Destroy(record);
-        *out_len = 0;
-        return NULL;
-    }
-
-    const char* content = OH_UdsPlainText_GetContent(plain_text);
-    if (!content) {
-        OH_UdsPlainText_Destroy(plain_text);
-        OH_UdmfRecord_Destroy(record);
-        *out_len = 0;
-        return NULL;
-    }
-
-    size_t len = strlen(content);
-    char* copied = malloc(len + 1);
-    if (copied) {
-        memcpy(copied, content, len + 1);
-        *out_len = len;
-    } else {
-        *out_len = 0;
-    }
-
-    // 4. 清理临时对象
-    OH_UdsPlainText_Destroy(plain_text);
-    OH_UdmfRecord_Destroy(record);
-
-    return copied; // caller 必须 free()
-}
-
-
-/**************************************************************************
- *              create_udmf_data_from_utf8_text
- *
- *  create_udmf_data_from_utf8_text.
- */
-OH_UdmfData* create_udmf_data_from_utf8_text(const char* utf8_text)
-{
-    if (!utf8_text) {
-        return NULL;
-    }
-
-    int ret;
-
-    // 1. 创建 PlainText 对象
-    OH_UdsPlainText* plain_text = OH_UdsPlainText_Create();
-    if (!plain_text) {
-        return NULL;
-    }
-    OH_UdsPlainText_SetContent(plain_text, utf8_text);
-
-    // 2. 创建 Record 并添加文本
-    OH_UdmfRecord* record = OH_UdmfRecord_Create();
-    if (!record) {
-        OH_UdsPlainText_Destroy(plain_text);
-        return NULL;
-    }
-    ret = OH_UdmfRecord_AddPlainText(record, plain_text);
-
-    OH_UdsPlainText_Destroy(plain_text); // Add 后通常可释放
-
-    if (ret != 0) {
-        OH_UdmfRecord_Destroy(record);
-        return NULL;
-    }
-
-    // 3. 创建 UDMF Data 并添加 Record
-    OH_UdmfData* udmf_data = OH_UdmfData_Create();
-    if (!udmf_data) {
-        OH_UdmfRecord_Destroy(record);
-        return NULL;
-    }
-    ret = OH_UdmfData_AddRecord(udmf_data, record);
-    OH_UdmfRecord_Destroy(record); // Add 后可释放
-
-    if (ret != 0) {
-        OH_UdmfData_Destroy(udmf_data);
-        return NULL;
-    }
-
-    return udmf_data; // caller 负责 OH_UdmfData_Destroy
-}
-
-
-/**************************************************************************
- *              import_utf8_to_unicodetext
- *
- *  Import a UTF-8 string, converting the string to CF_UNICODETEXT.
- */
-static void *import_utf8_to_unicodetext(OH_UdmfData* data, size_t *ret_size)
-{
-    if (!data || !ret_size) {
-        if (ret_size) *ret_size = 0;
-        return NULL;
-    }
-
-    // Step 1: 从 UDMF 数据中提取 UTF-8 文本（会分配内存）
-    size_t src_len;
-    char *src_utf8 = extract_plain_text_from_udmf(data, &src_len);
-    if (!src_utf8 || src_len == 0) {
-        *ret_size = 0;
-        return NULL;
-    }
-
-    // Step 2: 统计有多少个 '\n'（用于转换为 \r\n）
-    unsigned long new_lines = 0;
-    for (size_t i = 0; i < src_len; i++) {
-        if (src_utf8[i] == '\n')
-            new_lines++;
-    }
-
-    // Step 3: 分配缓冲区，将 \n → \r\n
-    char *crlf_buffer = malloc(src_len + new_lines + 1);
-    if (!crlf_buffer) {
-        free(src_utf8);
-        *ret_size = 0;
-        return NULL;
-    }
-
-    size_t j = 0;
-    for (size_t i = 0; i < src_len; i++) {
-        if (src_utf8[i] == '\n') {
-            crlf_buffer[j++] = '\r';
+                if (record)
+                {
+                    if (OH_UdmfRecord_AddPixelMap(record, pixel_map) == 0)
+                    {
+                        if (OH_UdmfData_AddRecord(data, record) == 0)
+                            have_record = TRUE;
+                        else
+                            OH_UdmfRecord_Destroy(record);
+                    }
+                    else
+                    {
+                        OH_UdmfRecord_Destroy(record);
+                        OH_UdsPixelMap_Destroy(pixel_map);
+                    }
+                }
+                else if (pixel_map)
+                    OH_UdsPixelMap_Destroy(pixel_map);
+            }
+            OH_PixelmapInitializationOptions_Release(opts);
         }
-        crlf_buffer[j++] = src_utf8[i];
-    }
-    crlf_buffer[j] = '\0'; // 确保以 null 结尾
 
-    // Step 4: 将 UTF-8 (with CRLF) 转为 UTF-16
-    WCHAR *unicode_text = malloc((j + 1) * sizeof(WCHAR));
-    if (!unicode_text) {
-        free(crlf_buffer);
-        free(src_utf8);
-        *ret_size = 0;
-        return NULL;
+        free_clip_image(exp->image);
+        exp->image = NULL;
     }
 
-    DWORD unicode_byte_size;
-    RtlUTF8ToUnicodeN(unicode_text, (j + 1) * sizeof(WCHAR), &unicode_byte_size, crlf_buffer, j);
-    *ret_size = unicode_byte_size;
+    if (have_record)
+    {
+        int set_ret = OH_Pasteboard_SetData(pbs, data);
+        WARN("DIAGCLIP export: pushed multi-record data ret=%d change=%u\n",
+             set_ret, OH_Pasteboard_GetChangeCount(pbs));
+    }
 
-    // Step 5: 清理临时内存
-    free(crlf_buffer);
-    free(src_utf8); // ← 别忘了释放 extract 函数返回的内存！
-
-    return unicode_text; // 返回 UTF-16 字符串（caller 用完需 GlobalFree 或类似？但 Wine 通常由上层管理）
+    /* single owner: frees all records it holds */
+    OH_UdmfData_Destroy(data);
 }
 
 
 /**************************************************************************
- *              export_unicodetext_to_utf8
+ *              pbs_worker
  *
- *  Export CF_UNICODETEXT to UTF-8.
+ * Raw pthread owning the OHOS pasteboard object.  Binder-only world:
+ * never touches NtUser or the wineserver.  Polls the pasteboard,
+ * prefetches new content, and services export requests.
  */
-static OH_UdmfData* export_unicodetext_to_utf8(void *data, size_t size)
+static void *pbs_worker(void *arg)
 {
-    if (!data || size == 0) {
+    OH_Pasteboard *pbs;
+    uint32_t seen = 0;
+    struct pending_clip exp;
+
+    pbs = OH_Pasteboard_Create();
+    if (!pbs)
+    {
+        ERR("DIAGCLIP pbs_worker: OH_Pasteboard_Create failed\n");
         return NULL;
     }
+    WARN("DIAGCLIP pbs_worker started\n");
+    seen = OH_Pasteboard_GetChangeCount(pbs);
 
-    WCHAR *src = (WCHAR*)data;
-
-    // Step 1: 去掉末尾 null（如果存在）
-    if (size >= sizeof(WCHAR) && src[size / sizeof(WCHAR) - 1] == 0) {
-        size -= sizeof(WCHAR);
-    }
-
-    // Step 2: 计算 UTF-8 所需长度
-    DWORD utf8_len = 0;
-    RtlUnicodeToUTF8N(NULL, 0, &utf8_len, src, size);
-
-    // Step 3: 分配缓冲区并转换
-    char *utf8_buffer = malloc(utf8_len + 1);
-    if (!utf8_buffer) {
-        return NULL;
-    }
-
-    RtlUnicodeToUTF8N(utf8_buffer, utf8_len, &utf8_len, src, size);
-    utf8_buffer[utf8_len] = '\0'; // 确保以 null 结尾（方便后续处理）
-
-    // Step 4: 移除 \r（将 \r\n → \n）
-    size_t j = 0;
-    for (size_t i = 0; i < utf8_len; i++) {
-        if (utf8_buffer[i] == '\r' &&
-            (i + 1 >= utf8_len || utf8_buffer[i + 1] == '\n')) {
-            continue;
+    for (;;)
+    {
+        /* 1. push pending win32 data to the OHOS pasteboard */
+        exp = take_export_pending();
+        if (exp.text || exp.html || exp.urilist || exp.image)
+        {
+            worker_push_export(pbs, &exp);
+            /* don't import our own change back */
+            seen = OH_Pasteboard_GetChangeCount(pbs);
         }
-        utf8_buffer[j++] = utf8_buffer[i];
+
+        /* 2. check the OHOS pasteboard for new content, prefetch it */
+        {
+            uint32_t cc = OH_Pasteboard_GetChangeCount(pbs);
+            if (cc != seen)
+            {
+                struct pending_clip imp;
+
+                seen = cc;
+                if (OH_Pasteboard_HasData(pbs) &&
+                    (OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_PLAIN) ||
+                     OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_HTML) ||
+                     OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_URI)))
+                {
+                    if (worker_extract_import(pbs, &imp))
+                    {
+                        WARN("DIAGCLIP import: prefetched text=%d html=%d uri=%d change=%u\n",
+                             imp.text ? 1 : 0, imp.html ? 1 : 0, imp.urilist ? 1 : 0, cc);
+                        put_import_pending(&imp);
+                    }
+                }
+                else
+                    WARN("DIAGCLIP import: no supported type, skip change=%u\n", cc);
+            }
+        }
+
+        usleep(PBS_POLL_INTERVAL_MS * 1000);
     }
-    utf8_buffer[j] = '\0'; // 新字符串结束
-
-    // Step 5: 封装为 OH_UdmfData
-    OH_UdmfData* result = create_udmf_data_from_utf8_text(utf8_buffer);
-
-    free(utf8_buffer);
-    return result; // 返回给上层，由它调用 OH_Pasteboard_SetData
-}
-
-
-/**************************************************************************
- *              PasteboardNotifyImpl
- *
- * PasteboardNotifyImpl.
- * 定义剪贴板数据内容变更时的通知回调函数
- */
-static void PasteboardNotifyImpl(void* context, Pasteboard_NotifyType type)
-{
-    TRACE("Pasteboard_NotifyType, type: %d\n", type);
-
-    /* If we are currently exporting data from Win32 to OHOS,
-     * ignore the notification to avoid a feedback loop. */
-    if (InterlockedCompareExchange(&exporting_to_ohos, 0, 0)) return;
-
-    /* Also ignore if we are currently importing from OHOS to Win32 */
-    if (InterlockedCompareExchange(&importing_from_ohos, 0, 0)) return;
-
-    /* Post a custom message to the clipboard window to trigger sync.
-     * This avoids calling clipboard APIs directly from the observer callback
-     * which may be on a different thread. */
-    if (clipboard_hwnd)
-    {
-        NtUserPostMessage(clipboard_hwnd, WM_OHOSDRV_PASTEBOARD_UPDATE, (WPARAM)type, 0);
-    }
-}
-
-
-/**************************************************************************
- *              PasteboardFinalizeImpl
- *
- * PasteboardFinalizeImpl.
- * 定义剪贴板数据变更观察者对象销毁时的通知回调函数
- */
-static void PasteboardFinalizeImpl(void* context)
-{
-    TRACE("callback: Pasteboard_Finalize");
-}
-
-
-/**************************************************************************
- *              advertise_pasteboard_to_win32
- *
- * Pull data from OHOS pasteboard and advertise it to Win32 clipboard
- * via deferred rendering (WM_RENDERFORMAT).
- */
-static void advertise_pasteboard_to_win32(void)
-{
-    uint32_t change_count;
-
-    if (!OHOS_pasteboard || !clipboard_hwnd) return;
-    if (importing_from_ohos || exporting_to_ohos) return;
-
-    change_count = OH_Pasteboard_GetChangeCount(OHOS_pasteboard);
-    if (change_count && change_count == last_pasteboard_change_count) return;
-
-    if (!OH_Pasteboard_HasData(OHOS_pasteboard) ||
-        !OH_Pasteboard_HasType(OHOS_pasteboard, "text/plain"))
-    {
-        if (change_count && change_count != last_pasteboard_change_count)
-            TRACE("OHOS pasteboard has no plain text, change=%u\n", change_count);
-        if (change_count) last_pasteboard_change_count = change_count;
-        return;
-    }
-
-    if (!open_clipboard_for_import(clipboard_hwnd)) return;
-
-    NtUserEmptyClipboard();
-    is_clipboard_owner = TRUE;
-
-    /* Register CF_UNICODETEXT for deferred rendering */
-    struct set_clipboard_params params = { 0 };
-    NtUserSetClipboardData(CF_UNICODETEXT, 0, &params);
-
-    if (change_count) last_pasteboard_change_count = change_count;
-
-    close_clipboard_for_import();
-    TRACE("advertised OHOS pasteboard text to Win32, change=%u\n", change_count);
-}
-
-
-/**************************************************************************
- *              open_clipboard_for_import
- *
- * Open clipboard for importing data from OHOS. Uses a guard to prevent
- * reentrancy.
- */
-static BOOL open_clipboard_for_import(HWND hwnd)
-{
-    InterlockedIncrement(&importing_from_ohos);
-    if (NtUserOpenClipboard(hwnd, 0)) return TRUE;
-    InterlockedDecrement(&importing_from_ohos);
-    return FALSE;
-}
-
-
-/**************************************************************************
- *              close_clipboard_for_import
- *
- * Close clipboard after importing data from OHOS.
- */
-static void close_clipboard_for_import(void)
-{
-    NtUserCloseClipboard();
-    InterlockedDecrement(&importing_from_ohos);
-}
-
-
-/**************************************************************************
- *              natural_format_for_format
- *
- * Find the "natural" format for this format_id (the one which isn't
- * synthesized from another type).
- */
-static WINE_CLIPFORMAT* natural_format_for_format(UINT format_id)
-{
-    WINE_CLIPFORMAT *format;
-
-    LIST_FOR_EACH_ENTRY(format, &format_list, WINE_CLIPFORMAT, entry)
-        if (format->format_id == format_id && !format->synthesized) break;
-
-    if (&format->entry == &format_list)
-        format = NULL;
-
-    TRACE("%s -> %p/%s\n", debugstr_format(format_id), format, format ? format->type : NULL);
-    return format;
-}
-
-
-/**************************************************************************
- *              register_builtin_formats
- * register_builtin_formats.
- * 对齐数据类型
- */
-static void register_builtin_formats(void)
-{
-    UINT i;
-    WINE_CLIPFORMAT *format;
-
-    /* Register built-in formats */
-    for (i = 0; i < ARRAY_SIZE(builtin_format_ids); i++)
-    {
-        if (!(format = malloc(sizeof(*format)))) break;
-        format->format_id       = builtin_format_ids[i].id;
-        format->type            = builtin_format_ids[i].type;
-        format->import_func     = builtin_format_ids[i].import;
-        format->export_func     = builtin_format_ids[i].export;
-        format->synthesized     = builtin_format_ids[i].synthesized;
-        format->natural_format  = NULL;
-        list_add_tail(&format_list, &format->entry);
-    }
-
-
-    LIST_FOR_EACH_ENTRY(format, &format_list, WINE_CLIPFORMAT, entry)
-    {
-        if (format->synthesized)
-            format->natural_format = natural_format_for_format(format->format_id);
-    }
-}
-
-
-/**************************************************************************
- *              format_for_type
- */
-static WINE_CLIPFORMAT* format_for_type(const char *type)
-{
-    WINE_CLIPFORMAT *format;
-
-    if (list_empty(&format_list))
-        register_builtin_formats();
-
-    LIST_FOR_EACH_ENTRY(format, &format_list, WINE_CLIPFORMAT, entry)
-    {
-        if (!strcmp(format->type, type))
-            return format;
-    }
-
     return NULL;
 }
 
 
+ /**************************************************************************
+  *              Win32 clipboard side (wine threads only)
+  **************************************************************************/
 
-/**************************************************************************
- *              update_clipboard
- *
- * Check for clipboard updates when the clipboard is owned by a OHOS app.
- * Relies on OH_PasteboardObserver callback for change notifications.
- */
-static void update_clipboard(void)
+/* atom-based id for the registered "HTML Format" clipboard format */
+static UINT html_format_id(void)
 {
-    static BOOL updating;
-
-    TRACE("is_clipboard_owner %d pasteboard_notify_flag %d\n",
-          is_clipboard_owner, InterlockedCompareExchange(&pasteboard_notify_flag, 0, 0));
-
-    if (updating) return;
-    updating = TRUE;
-
-    if (is_clipboard_owner)
+    static UINT id;
+    if (!id)
     {
-        /* When we are the clipboard owner, check for OHOS-side changes via observer callback */
-        if (InterlockedCompareExchange(&pasteboard_notify_flag, 0, 0))
-        {
-            /* OHOS app changed the pasteboard while we were the owner */
-            InterlockedExchange(&pasteboard_notify_flag, 0);
-            advertise_pasteboard_to_win32();
-        }
+        static const WCHAR nameW[] = {'H','T','M','L',' ','F','o','r','m','a','t',0};
+        RTL_ATOM atom;
+        if (!NtAddAtom(nameW, (wcslen(nameW)) * sizeof(WCHAR), &atom)) id = atom;
     }
-    else if (InterlockedCompareExchange(&pasteboard_notify_flag, 0, 0))
-    {
-        /* external OHOS app changed the pasteboard -- pull data into Win32 */
-        InterlockedExchange(&pasteboard_notify_flag, 0);
-        advertise_pasteboard_to_win32();
-    }
-
-    updating = FALSE;
+    return id;
 }
 
+/* read raw clipboard data (clipboard must be open); caller frees */
+static void *read_clipboard_data( UINT format, size_t *ret_size )
+{
+    struct get_clipboard_params params = { .data_only = TRUE, .size = 1024 };
+    void *data;
+
+    for (;;)
+    {
+        if (!(data = malloc(params.size))) return NULL;
+        params.data = data;
+        if (NtUserGetClipboardData(format, &params))
+        {
+            *ret_size = params.size;
+            return data;
+        }
+        free(data);
+        if (!params.data_size) return NULL;
+        params.size = params.data_size;
+        params.data_size = 0;
+    }
+}
+
+/* UTF-8 (LF line endings) -> UTF-16 with CRLF, NUL-terminated;
+ * returns malloc'd buffer, *ret_size = byte size incl. final NUL */
+static WCHAR *utf8_to_crlf_uni( const char *utf8, DWORD *ret_size )
+{
+    size_t src_len = strlen(utf8), i, j, count = 0;
+    char *crlf;
+    WCHAR *text;
+    DWORD bytes;
+
+    for (i = 0; i < src_len; i++) if (utf8[i] == '\n') count++;
+    if (!(crlf = malloc(src_len + count + 1))) return NULL;
+    for (i = j = 0; i < src_len; i++)
+    {
+        if (utf8[i] == '\n') crlf[j++] = '\r';
+        crlf[j++] = utf8[i];
+    }
+    crlf[j] = 0;
+
+    text = malloc((j + 1) * sizeof(WCHAR));
+    if (!text) { free(crlf); return NULL; }
+    RtlUTF8ToUnicodeN(text, j * sizeof(WCHAR), &bytes, crlf, j);
+    text[bytes / sizeof(WCHAR)] = 0;
+    free(crlf);
+    *ret_size = bytes + sizeof(WCHAR);
+    return text;
+}
+
+/* UTF-16 CF_UNICODETEXT -> UTF-8 with LF line endings, NUL-terminated */
+static char *uni_to_lf_utf8( const WCHAR *src, size_t size )
+{
+    char *utf8;
+    DWORD utf8_len;
+    size_t i, j;
+
+    if (size >= sizeof(WCHAR) && src[size / sizeof(WCHAR) - 1] == 0)
+        size -= sizeof(WCHAR);
+
+    RtlUnicodeToUTF8N(NULL, 0, &utf8_len, src, size);
+    if (!(utf8 = malloc(utf8_len + 1))) return NULL;
+    RtlUnicodeToUTF8N(utf8, utf8_len, &utf8_len, src, size);
+    for (i = j = 0; i < utf8_len; i++)
+    {
+        if (utf8[i] == '\r' && (i + 1 >= utf8_len || utf8[i + 1] == '\n')) continue;
+        utf8[j++] = utf8[i];
+    }
+    utf8[j] = 0;
+    return utf8;
+}
+
+/* wrap an UTF-8 html fragment into the CF_HTML "HTML Format" layout;
+ * returns malloc'd buffer, *ret_size = byte size */
+static char *build_cf_html( const char *fragment )
+{
+    static const char header[] =
+        "Version:0.9\n"
+        "StartHTML:0000000100\n"
+        "EndHTML:%010lu\n"
+        "StartFragment:%010lu\n"
+        "EndFragment:%010lu\n"
+        "<!--StartFragment-->";
+    static const char trailer[] = "\n<!--EndFragment-->";
+    size_t frag_len = strlen(fragment);
+    size_t head_len = strlen(header) + 12;   /* extra chars from %010lu */
+    size_t total = head_len + frag_len + sizeof(trailer);
+    char *ret;
+
+    if (!(ret = malloc(total))) return NULL;
+    sprintf(ret, header, (unsigned long)(total - 1), (unsigned long)head_len,
+            (unsigned long)(head_len + frag_len + 1));
+    memcpy(ret + head_len, fragment, frag_len);
+    strcpy(ret + head_len + frag_len, trailer);
+    return ret;
+}
+
+/* extract the UTF-8 fragment out of a CF_HTML "HTML Format" blob */
+static char *parse_cf_html( const char *data, size_t size )
+{
+    const char *p = data;
+    const char *end = data + size;
+    const char *frag_start = NULL, *frag_end = NULL;
+    const char *body = NULL;
+    char *ret;
+    size_t len;
+
+    while (p < end && *p && *p != '<')
+    {
+        if (!strncmp(p, "StartFragment:", 14)) frag_start = data + atoi(p + 14);
+        else if (!strncmp(p, "EndFragment:", 12)) frag_end = data + atoi(p + 12);
+        if (!(p = strpbrk(p, "\r\n"))) break;
+        while (*p == '\r' || *p == '\n') p++;
+        if (p >= end) break;
+    }
+
+    if (frag_start && frag_end && frag_start < frag_end && frag_end <= end)
+    {
+        len = frag_end - frag_start;
+        if ((ret = malloc(len + 1)))
+        {
+            memcpy(ret, frag_start, len);
+            ret[len] = 0;
+        }
+        return ret;
+    }
+
+    /* no fragment markers: use the html body if present */
+    if (p && p < end && *p == '<') body = p;
+    if (!body) return NULL;
+    len = end - body;
+    if (!(ret = malloc(len + 1))) return NULL;
+    memcpy(ret, body, len);
+    ret[len] = 0;
+    return ret;
+}
+
+/**************************************************************************
+ *              get_nt_pathname / get_unix_file_name  (DOS -> unix)
+ *
+ * Ported from winex11.drv/clipboard.c for CF_HDROP export.
+ */
+static BOOL get_nt_pathname( const WCHAR *name, UNICODE_STRING *nt_name )
+{
+    static const WCHAR ntprefixW[] = {'\\','?','?','\\'};
+    static const WCHAR uncprefixW[] = {'U','N','C','\\'};
+    size_t len = wcslen(name);
+    WCHAR *ptr;
+
+    nt_name->MaximumLength = (len + 8) * sizeof(WCHAR);
+    if (!(ptr = malloc(nt_name->MaximumLength))) return FALSE;
+    nt_name->Buffer = ptr;
+
+    memcpy(ptr, ntprefixW, sizeof(ntprefixW));
+    ptr += ARRAY_SIZE(ntprefixW);
+    if (name[0] == '\\' && name[1] == '\\')
+    {
+        if ((name[2] == '.' || name[2] == '?') && name[3] == '\\')
+        {
+            name += 4;
+            len -= 4;
+        }
+        else
+        {
+            memcpy(ptr, uncprefixW, sizeof(uncprefixW));
+            ptr += ARRAY_SIZE(uncprefixW);
+            name += 2;
+            len -= 2;
+        }
+    }
+    memcpy(ptr, name, (len + 1) * sizeof(WCHAR));
+    nt_name->Length = ((ptr - nt_name->Buffer) + len) * sizeof(WCHAR);
+    return TRUE;
+}
+
+static char *get_unix_file_name( const WCHAR *dos_name )
+{
+    UNICODE_STRING nt_name;
+    OBJECT_ATTRIBUTES attr;
+    NTSTATUS status;
+    ULONG size = 256;
+    char *buffer;
+
+    if (!get_nt_pathname(dos_name, &nt_name)) return NULL;
+    InitializeObjectAttributes(&attr, &nt_name, 0, 0, NULL);
+    for (;;)
+    {
+        if (!(buffer = malloc(size)))
+        {
+            free(nt_name.Buffer);
+            return NULL;
+        }
+        status = wine_nt_to_unix_file_name(&attr, buffer, &size, FILE_OPEN_IF);
+        if (status != STATUS_BUFFER_TOO_SMALL) break;
+        free(buffer);
+    }
+    free(nt_name.Buffer);
+    if (status)
+    {
+        free(buffer);
+        return NULL;
+    }
+    return buffer;
+}
+
+/* percent-decode a URI and turn it into a DOS path; ported from winex11 */
+static WCHAR *get_dos_path_from_unix( const char *unix_path );
+static WCHAR *uri_to_dos( const char *encoded_uri )
+{
+    WCHAR *ret = NULL;
+    size_t i, j = 0, len = strlen(encoded_uri);
+    char *uri = calloc(len + 1, 1);
+
+    if (!uri) return NULL;
+    for (i = 0; encoded_uri[i]; i++)
+    {
+        if (encoded_uri[i] == '%')
+        {
+            if (encoded_uri[i + 1] && encoded_uri[i + 2])
+            {
+                char hex[3];
+                hex[0] = encoded_uri[i + 1];
+                hex[1] = encoded_uri[i + 2];
+                hex[2] = 0;
+                uri[j++] = (char)strtoul(hex, NULL, 16);
+                i += 2;
+            }
+            else
+            {
+                WARN("invalid URI encoding in %s\n", debugstr_a(encoded_uri));
+                free(uri);
+                return NULL;
+            }
+        }
+        else uri[j++] = encoded_uri[i];
+    }
+
+    if (!strncmp(uri, "file:///", 8))          ret = get_dos_path_from_unix(&uri[7]);
+    else if (!strncmp(uri, "file://", 7))      ret = get_dos_path_from_unix(strchr(uri + 7, '/'));
+    else if (!strncmp(uri, "file:/", 6))       ret = get_dos_path_from_unix(&uri[5]);
+    free(uri);
+    return ret;
+}
+
+/* unix char* path -> DOS WCHAR* path via ntdll */
+static WCHAR *get_dos_path_from_unix( const char *unix_path )
+{
+    WCHAR *dos = NULL;
+
+    if (!unix_path || !*unix_path) return NULL;
+    if (ntdll_get_dos_file_name( unix_path, &dos, FILE_OPEN ) && !dos) return NULL;
+    return dos;
+}
+
+/* CF_HDROP data -> "file://...\r\n" uri-list (malloc'd, NUL-terminated) */
+static char *hdrop_to_uri_list( const DROPFILES *drop )
+{
+    char *list = NULL;
+    size_t len = 0;
+    const WCHAR *ptr;
+    static const char hex[] = "0123456789abcdef";
+
+    if (!drop->fWide)
+    {
+        WARN("CF_HDROP with ANSI filenames not supported\n");
+        return NULL;
+    }
+    ptr = (const WCHAR *)((const char *)drop + drop->pFiles);
+
+    while (*ptr)
+    {
+        char *unix_name = get_unix_file_name(ptr);
+        size_t uri_size, u;
+        char *new_list;
+
+        ptr += wcslen(ptr) + 1;
+        if (!unix_name) continue;
+
+        uri_size = 8 + 3 * strlen(unix_name) + 3;
+        if ((new_list = realloc(list, len + uri_size + 1)))
+        {
+            list = new_list;
+            strcpy(list + len, "file:///");
+            len += 8;
+            for (u = 1; unix_name[u]; u++)   /* keep leading '/' */
+            {
+                list[len++] = '%';
+                list[len++] = hex[(unsigned char)unix_name[u] >> 4];
+                list[len++] = hex[(unsigned char)unix_name[u] & 0xf];
+            }
+            list[len++] = '\r';
+            list[len++] = '\n';
+        }
+        free(unix_name);
+    }
+
+    if (list) list[len] = 0;
+    return list;
+}
+
+/* "file://...\r\n" uri-list -> CF_HDROP DROPFILES (malloc'd);
+ * ported from winex11 uri_list_to_drop_files */
+static DROPFILES *uri_list_to_drop_files( const char *uri_list, size_t *ret_size )
+{
+    size_t size = strlen(uri_list);
+    WCHAR *out, *path;
+    char *uri;
+    int total = 0, capacity = 4096, start = 0, end = 0;
+    DROPFILES *drop_files = NULL;
+
+    if (!(out = malloc(capacity * sizeof(WCHAR)))) return NULL;
+
+    while (end < size)
+    {
+        while (end < size && uri_list[end] != '\r') end++;
+        if (end < (size - 1) && uri_list[end + 1] != '\n')
+        {
+            WARN("URI list line doesn't end in \\r\\n\n");
+            break;
+        }
+
+        if (!(uri = malloc(end - start + 1))) break;
+        memcpy(uri, &uri_list[start], end - start);
+        uri[end - start] = 0;
+        path = uri_to_dos(uri);
+        free(uri);
+
+        if (path)
+        {
+            int path_size = wcslen(path) + 1;
+            if (path_size > capacity - total)
+            {
+                WCHAR *new_out;
+                capacity = 2 * capacity + path_size;
+                new_out = realloc(out, (capacity + 1) * sizeof(WCHAR));
+                if (!new_out) { free(path); break; }
+                out = new_out;
+            }
+            memcpy(&out[total], path, path_size * sizeof(WCHAR));
+            total += path_size;
+            free(path);
+        }
+
+        start = end + 2;
+        end = start;
+    }
+
+    if (out && end >= size)
+    {
+        *ret_size = sizeof(DROPFILES) + (total + 1) * sizeof(WCHAR);
+        if ((drop_files = malloc(*ret_size)))
+        {
+            drop_files->pFiles = sizeof(DROPFILES);
+            drop_files->pt.x = 0;
+            drop_files->pt.y = 0;
+            drop_files->fNC = 0;
+            drop_files->fWide = TRUE;
+            out[total] = 0;
+            memcpy((char *)drop_files + drop_files->pFiles, out, (total + 1) * sizeof(WCHAR));
+        }
+    }
+    free(out);
+    return drop_files;
+}
+
+/* packed 24/32bpp DIB -> RGBA_8888 clip_image; NULL for other formats */
+static struct clip_image *dib_to_image( const BITMAPINFO *bmi, size_t size )
+{
+    struct clip_image *image;
+    int width, height, bpp, top_down;
+    LONG src_stride;
+    const BYTE *src_bits;
+    BYTE *dst;
+    UINT x, y;
+
+    if (size < sizeof(BITMAPINFOHEADER)) return NULL;
+    if (bmi->bmiHeader.biCompression != BI_RGB) return NULL;
+
+    width = bmi->bmiHeader.biWidth;
+    height = bmi->bmiHeader.biHeight;
+    top_down = height < 0;
+    if (top_down) height = -height;
+    bpp = bmi->bmiHeader.biBitCount;
+    if (bpp != 24 && bpp != 32) return NULL;
+    if (width <= 0 || height <= 0) return NULL;
+
+    src_stride = ((width * bpp + 31) / 32) * 4;
+    if (size < sizeof(BITMAPINFOHEADER) + src_stride * height) return NULL;
+    src_bits = (const BYTE *)bmi + sizeof(BITMAPINFOHEADER);
+
+    if (!(image = malloc(sizeof(*image)))) return NULL;
+    image->width = width;
+    image->height = height;
+    if (!(image->bits = malloc((size_t)width * height * 4)))
+    {
+        free(image);
+        return NULL;
+    }
+
+    dst = image->bits;
+    for (y = 0; y < height; y++)
+    {
+        const BYTE *src_row = src_bits + (top_down ? y : (height - 1 - y)) * src_stride;
+        BYTE *dst_row = dst + y * width * 4;
+        for (x = 0; x < width; x++)
+        {
+            dst_row[x * 4 + 0] = src_row[x * (bpp / 8) + 2];        /* R */
+            dst_row[x * 4 + 1] = src_row[x * (bpp / 8) + 1];        /* G */
+            dst_row[x * 4 + 2] = src_row[x * (bpp / 8) + 0];        /* B */
+            dst_row[x * 4 + 3] = (bpp == 32) ? src_row[x * 4 + 3] : 0xFF; /* A */
+        }
+    }
+    return image;
+}
+
+/* RGBA_8888 clip_image -> packed 32bpp top-down DIB (malloc'd) */
+static BITMAPINFO *image_to_dib( const struct clip_image *image, size_t *ret_size )
+{
+    BITMAPINFO *bmi;
+    BYTE *bits;
+    size_t i, count;
+    UINT stride;
+
+    stride = image->width * 4;
+    count = (size_t)stride * image->height;
+    *ret_size = sizeof(BITMAPINFOHEADER) + count;
+    if (!(bmi = malloc(*ret_size))) return NULL;
+
+    memset(&bmi->bmiHeader, 0, sizeof(bmi->bmiHeader));
+    bmi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi->bmiHeader.biWidth = image->width;
+    bmi->bmiHeader.biHeight = -(LONG)image->height;   /* top-down */
+    bmi->bmiHeader.biPlanes = 1;
+    bmi->bmiHeader.biBitCount = 32;
+    bmi->bmiHeader.biCompression = BI_RGB;
+    bmi->bmiHeader.biSizeImage = count;
+
+    bits = (BYTE *)bmi + sizeof(BITMAPINFOHEADER);
+    memcpy(bits, image->bits, count);
+    for (i = 0; i < count; i += 4)   /* RGBA -> BGRA */
+    {
+        BYTE r = bits[i];
+        bits[i] = bits[i + 2];
+        bits[i + 2] = r;
+    }
+    return bmi;
+}
+
+
+/**************************************************************************
+ *              materialize_import
+ *
+ * Store the prefetched OHOS content as real clipboard data (all formats
+ * at once) through an ownerless clipboard.  Runs on a wine thread.
+ */
+static void materialize_import( struct pending_clip *in )
+{
+    if (!NtUserOpenClipboard(NULL, 0))
+    {
+        WARN("DIAGCLIP materialize: could not open win32 clipboard\n");
+        return;
+    }
+
+    NtUserEmptyClipboard();
+
+    if (in->text)
+    {
+        DWORD bytes;
+        WCHAR *text = utf8_to_crlf_uni(in->text, &bytes);
+        if (text)
+        {
+            struct set_clipboard_params params = { 0 };
+            params.data = text;
+            params.size = bytes;
+            if (NtUserSetClipboardData(CF_UNICODETEXT, 0, &params))
+                WARN("DIAGCLIP materialize: text %lu bytes\n", (unsigned long)bytes);
+            free(text);
+        }
+    }
+
+    if (in->html)
+    {
+        char *cf_html = build_cf_html(in->html);
+        if (cf_html)
+        {
+            struct set_clipboard_params params = { 0 };
+            UINT id = html_format_id();
+            params.data = cf_html;
+            params.size = strlen(cf_html) + 1;
+            if (id && NtUserSetClipboardData(id, 0, &params))
+                WARN("DIAGCLIP materialize: html %lu bytes\n", (unsigned long)params.size);
+            free(cf_html);
+        }
+    }
+
+    if (in->urilist)
+    {
+        size_t size;
+        DROPFILES *drop = uri_list_to_drop_files(in->urilist, &size);
+        if (drop)
+        {
+            struct set_clipboard_params params = { 0 };
+            params.data = drop;
+            params.size = size;
+            if (NtUserSetClipboardData(CF_HDROP, 0, &params))
+                WARN("DIAGCLIP materialize: hdrop %lu bytes\n", (unsigned long)size);
+            free(drop);
+        }
+    }
+
+    if (in->image)
+    {
+        size_t size;
+        BITMAPINFO *bmi = image_to_dib(in->image, &size);
+        if (bmi)
+        {
+            struct set_clipboard_params params = { 0 };
+            params.data = bmi;
+            params.size = size;
+            if (NtUserSetClipboardData(CF_DIB, 0, &params))
+                WARN("DIAGCLIP materialize: dib %ux%u\n", in->image->width, in->image->height);
+            free(bmi);
+        }
+    }
+
+    NtUserCloseClipboard();
+}
+
+
+/**************************************************************************
+ *              export_win32_to_pasteboard
+ *
+ * If a win32 window (e.g. notepad) published new clipboard data, read
+ * every supported format and hand it to the pbs worker.  Runs on a wine
+ * thread.  Our own imports use an ownerless clipboard (owner == NULL)
+ * and don't end up here.
+ */
+static void export_win32_to_pasteboard(void)
+{
+    struct pending_clip exp;
+    DWORD seq = NtUserGetClipboardSequenceNumber();
+    UINT html_id = html_format_id();
+
+    if (seq == last_win32_seq) return;
+    last_win32_seq = seq;
+
+    if (!NtUserGetClipboardOwner()) return;  /* ownerless: our own import */
+
+    memset(&exp, 0, sizeof(exp));
+
+    if (!NtUserOpenClipboard(NULL, 0)) return;
+
+    /* CF_UNICODETEXT */
+    if (NtUserIsClipboardFormatAvailable(CF_UNICODETEXT))
+    {
+        size_t size;
+        WCHAR *data = read_clipboard_data(CF_UNICODETEXT, &size);
+        if (data)
+        {
+            exp.text = uni_to_lf_utf8(data, size);
+            free(data);
+        }
+    }
+
+    /* "HTML Format" */
+    if (html_id && NtUserIsClipboardFormatAvailable(html_id))
+    {
+        size_t size;
+        char *data = read_clipboard_data(html_id, &size);
+        if (data)
+        {
+            exp.html = parse_cf_html(data, size);
+            free(data);
+        }
+    }
+
+    /* CF_HDROP */
+    if (NtUserIsClipboardFormatAvailable(CF_HDROP))
+    {
+        size_t size;
+        DROPFILES *data = read_clipboard_data(CF_HDROP, &size);
+        if (data)
+        {
+            if (size >= sizeof(DROPFILES)) exp.urilist = hdrop_to_uri_list(data);
+            free(data);
+        }
+    }
+
+    /* CF_DIB */
+    if (NtUserIsClipboardFormatAvailable(CF_DIB))
+    {
+        size_t size;
+        BITMAPINFO *data = read_clipboard_data(CF_DIB, &size);
+        if (data)
+        {
+            exp.image = dib_to_image(data, size);
+            free(data);
+        }
+    }
+
+    NtUserCloseClipboard();
+
+    if (exp.text || exp.html || exp.urilist || exp.image)
+    {
+        WARN("DIAGCLIP export: text=%d html=%d hdrop=%d dib=%d\n",
+             exp.text ? 1 : 0, exp.html ? 1 : 0, exp.urilist ? 1 : 0, exp.image ? 1 : 0);
+        put_export_pending(&exp);
+    }
+}
+
+
+/**************************************************************************
+ *              clipboard_sync
+ *
+ * One sync round on a wine thread: materialize any prefetched OHOS data,
+ * then check the win32 side for new data to export.  Never blocks on
+ * binder IPC (only shared-buffer take/put).
+ *
+ * win32u calls pUpdateClipboard (-> OHOS_UpdateClipboard) from inside
+ * NtUserOpenClipboard/EmptyClipboard/etc., and our own NtUser calls can
+ * re-enter those -- a same-thread re-entry is simply skipped.
+ */
+static void clipboard_sync(void)
+{
+    static __thread int in_sync;
+    struct pending_clip imp;
+
+    if (in_sync) return;
+
+    in_sync = 1;
+
+    imp = take_import_pending();
+    if (imp.text || imp.html || imp.urilist || imp.image)
+    {
+        materialize_import(&imp);
+        free_pending_clip(&imp);
+    }
+
+    export_win32_to_pasteboard();
+
+    in_sync = 0;
+}
+
+
+ /**************************************************************************
+  *              OHOS User Driver Clipboard Exports
+  **************************************************************************/
 
 /**************************************************************************
  *              init_ohos_pasteboard
  *
- * Create the OHOS pasteboard and observer on the calling thread.
- * Called from ohos_init() during driver startup (UI thread).
+ * Start the pbs worker thread. Called from ohos_init() during driver
+ * startup.  All OH_Pasteboard object creation happens on the worker
+ * itself, keeping binder usage single-threaded.
  */
 BOOL init_ohos_pasteboard(void)
 {
-    int ret;
+    if (InterlockedCompareExchange(&pbs_thread_started, 1, 0)) return TRUE;
 
-    if (OHOS_pasteboard) return TRUE;  /* already initialized */
-
-    OHOS_pasteboard = OH_Pasteboard_Create();
-    if (!OHOS_pasteboard)
+    if (pthread_create(&pbs_thread, NULL, pbs_worker, NULL) != 0)
     {
-        ERR("Failed to create pasteboard instance\n");
+        ERR("DIAGCLIP failed to create pbs worker thread\n");
+        InterlockedExchange(&pbs_thread_started, 0);
         return FALSE;
     }
-
-    OHOS_observer = OH_PasteboardObserver_Create();
-    if (!OHOS_observer)
-    {
-        ERR("Failed to create pasteboard observer\n");
-        OH_Pasteboard_Destroy(OHOS_pasteboard);
-        OHOS_pasteboard = NULL;
-        return FALSE;
-    }
-
-    ret = OH_PasteboardObserver_SetData(OHOS_observer, (void*)OHOS_pasteboard,
-                                        PasteboardNotifyImpl, PasteboardFinalizeImpl);
-    if (ret != 0)
-    {
-        ERR("Failed to set pasteboard observer data, ret=%d\n", ret);
-        OH_PasteboardObserver_Destroy(OHOS_observer);
-        OHOS_observer = NULL;
-        OH_Pasteboard_Destroy(OHOS_pasteboard);
-        OHOS_pasteboard = NULL;
-        return FALSE;
-    }
-
-    TRACE("pasteboard and observer created\n");
-    return TRUE;
-}
-
-
-/**************************************************************************
- *              cleanup_pasteboard
- *
- * Unsubscribe and destroy the OHOS pasteboard and observer.
- * Called from WM_DESTROY when the clipboard manager window is destroyed.
- */
-static void cleanup_pasteboard(void)
-{
-    if (OHOS_pasteboard && OHOS_observer)
-    {
-        OH_Pasteboard_Unsubscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
-        OH_Pasteboard_Unsubscribe(OHOS_pasteboard, NOTIFY_REMOTE_DATA_CHANGE, OHOS_observer);
-        TRACE("pasteboard unsubscribed\n");
-    }
-
-    if (OHOS_observer)
-    {
-        OH_PasteboardObserver_Destroy(OHOS_observer);
-        OHOS_observer = NULL;
-    }
-
-    if (OHOS_pasteboard)
-    {
-        OH_Pasteboard_Destroy(OHOS_pasteboard);
-        OHOS_pasteboard = NULL;
-    }
-
-    TRACE("pasteboard cleaned up\n");
-}
-
-
-/**************************************************************************
- *              init_clipboard
- *
- * Initialize the clipboard manager window.  Called from WM_NCCREATE.
- * The pasteboard and observer must already exist from init_ohos_pasteboard().
- */
-static BOOL init_clipboard(HWND hwnd)
-{
-    static BOOL initialized = FALSE;
-
-    /* re-entrant guard: WM_NCCREATE may fire more than once */
-    if (initialized) return TRUE;
-
-    if (!OHOS_pasteboard)
-    {
-        ERR("pasteboard not initialized -- init_ohos_pasteboard() must be called first\n");
-        return FALSE;
-    }
-
-    clipboard_hwnd = hwnd;
-    clipboard_thread_id = GetCurrentThreadId();
-    NtUserAddClipboardFormatListener(clipboard_hwnd);
-
-    /* subscribe to OHOS pasteboard data change notifications (local and remote) */
-    {
-        int ret = OH_Pasteboard_Subscribe(OHOS_pasteboard, NOTIFY_LOCAL_DATA_CHANGE, OHOS_observer);
-        if (ret != 0)
-            WARN("Failed to subscribe to local pasteboard notifications, ret=%d\n", ret);
-        ret = OH_Pasteboard_Subscribe(OHOS_pasteboard, NOTIFY_REMOTE_DATA_CHANGE, OHOS_observer);
-        if (ret != 0)
-            WARN("Failed to subscribe to remote pasteboard notifications, ret=%d\n", ret);
-    }
-
-    /* register builtin format mappings (CF_UNICODETEXT <-> "text/plain") */
-    register_builtin_formats();
-
-    /* initial sync: pull data from OHOS pasteboard into Win32 clipboard */
-    advertise_pasteboard_to_win32();
-
-    TRACE("clipboard thread %04x running\n", clipboard_thread_id);
-    initialized = TRUE;
     return TRUE;
 }
 
@@ -823,160 +1221,53 @@ static BOOL init_clipboard(HWND hwnd)
 /**************************************************************************
  *              OHOS_ClipboardWindowProc
  *
- * Window procedure for the clipboard manager.
- * windows到OHoS的事件回调注册。
+ * Window procedure of the per-process "__wineohos_clipboard_manager"
+ * message-only window created by the PE stub's clipboard thread.  The
+ * thread pumps messages, so this runs as a proper wine thread: NtUser
+ * calls are safe here, binder calls are not (use the shared buffers).
  */
 LRESULT OHOS_ClipboardWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
     {
-        case WM_NCCREATE:
-            return init_clipboard(hwnd);
-        case WM_CLIPBOARDUPDATE:
-        {
-            /* Don't push our own changes back to OHOS (avoid echo loop). */
-            if (is_clipboard_owner) break;
-            /* Push Win32 clipboard data to OHOS pasteboard. */
-            {
-                UINT i;
-                for (i = 0; i < ARRAY_SIZE(builtin_format_ids); i++)
-                    query_pasteboard_data(hwnd, builtin_format_ids[i].type);
-            }
-            break;
-        }
-        case WM_RENDERFORMAT:
-            render_format(wp);
-            break;
-        case WM_OHOSDRV_PASTEBOARD_UPDATE:
-            /* OHOS pasteboard changed - pull data into Win32 clipboard */
-            advertise_pasteboard_to_win32();
-            break;
-        case WM_DESTROYCLIPBOARD:
-            is_clipboard_owner = FALSE;
-            break;
-        case WM_DESTROY:
-            cleanup_pasteboard();
-            break;
-        case WM_USER:
-            update_clipboard();
-            break;
+    case WM_NCCREATE:
+        /* capture the current sequence number so we don't export whatever
+         * happens to be in the win32 clipboard before the window existed */
+        last_win32_seq = NtUserGetClipboardSequenceNumber();
+        NtUserAddClipboardFormatListener(hwnd);
+        WARN("DIAGCLIP clipboard listener registered hwnd=%p seq=%lu\n",
+             hwnd, (unsigned long)last_win32_seq);
+        /* initial sync round: materialize any startup pasteboard content */
+        clipboard_sync();
+        return TRUE;
+    case WM_CLIPBOARDUPDATE:
+        /* a win32 app published new clipboard data -- push it to OHOS.
+         * (This is the only reliable export trigger: the desktop-window
+         * hook never receives WM_CLIPBOARDUPDATE because win32u only
+         * forwards msg >= WM_USER to pDesktopWindowProc.) */
+        clipboard_sync();
+        break;
     }
-    return NtUserMessageCall(hwnd, msg, wp, lp, NULL, NtUserDefWindowProc, FALSE);
+    return 0;
 }
-
-
-
-
- /**************************************************************************
- *              OHOS User Driver Clipboard Exports
- **************************************************************************/
 
 
 /**************************************************************************
  *              OHOS_UpdateClipboard
  *
- * Called periodically from the Wine main thread to check for clipboard
- * updates. Now uses OH_PasteboardObserver callback for change notifications,
- * but this function remains as a fallback/periodic sync trigger.
+ * Called from the Win32 side whenever apps query the clipboard
+ * (OpenClipboard / IsClipboardFormatAvailable / ...).  Throttled, then
+ * one sync round -- this is what materializes OHOS data right before
+ * notepad reads it.
  */
 void OHOS_UpdateClipboard(void)
 {
-    static ULONG last_update;
-    static HWND clipboard_manager;
+    static ULONG last_sync_tick;
     ULONG now;
-    DWORD_PTR ret;
-
-    if (GetCurrentThreadId() == clipboard_thread_id) return;
-
-    TRACE("\n");
 
     now = NtGetTickCount();
-    if (last_update && (int)(now - last_update) <= 2000) return;
+    if (last_sync_tick && (int)(now - last_sync_tick) < CLIPBOARD_SYNC_MIN_INTERVAL_MS) return;
+    last_sync_tick = now;
 
-    if (!NtUserIsWindow(clipboard_manager))
-    {
-        UNICODE_STRING str = RTL_CONSTANT_STRING(clipboard_classname);
-        clipboard_manager = NtUserFindWindowEx(NULL, NULL, &str, NULL, 0);
-        if (!clipboard_manager)
-        {
-            ERR("clipboard manager not found\n");
-            return;
-        }
-    }
-
-    /* Send custom message to trigger clipboard sync from OHOS pasteboard */
-    send_message_timeout(clipboard_manager, WM_OHOSDRV_PASTEBOARD_UPDATE, 0, 0,
-                         SMTO_ABORTIFHUNG, 5000, &ret);
-    last_update = now;
-}
-
-
-  /**************************************************************************
- *              OHOSDRV Private Clipboard Exports
- **************************************************************************/
-
-
- /**************************************************************************
- *              query_pasteboard_data
- *
- * Read Win32 clipboard for a given OHOS paste type and push it to the
- * OHOS pasteboard.  Used by WM_CLIPBOARDUPDATE handler.
- */
-BOOL query_pasteboard_data(HWND hwnd, OHOS_PasteType type)
-{
-    struct get_clipboard_params params = { .data_only = TRUE, .size = 1024 };
-    WINE_CLIPFORMAT *format;
-    BOOL ret = FALSE;
-
-    format = format_for_type(type);
-    if (!format) return FALSE;
-
-    if (!NtUserOpenClipboard(clipboard_hwnd, 0))
-    {
-        ERR("failed to open clipboard for %s\n", type);
-        return FALSE;
-    }
-
-    for (;;)
-    {
-        if (!(params.data = malloc(params.size))) break;
-        if (NtUserGetClipboardData(format->format_id, &params))
-        {
-            OH_UdmfData* data;
-
-            TRACE("exporting %s\n", debugstr_format(format->format_id));
-
-            if ((data = format->export_func(params.data, params.size)))
-            {
-                int ErrCode;
-
-                /* Set guard before calling OH_Pasteboard_SetData so the
-                 * observer callback knows to skip this change (we caused it). */
-                InterlockedExchange(&exporting_to_ohos, 1);
-
-                ErrCode = OH_Pasteboard_SetData(OHOS_pasteboard, data);
-
-                /* Clear guard and any flag the observer may have set */
-                InterlockedExchange(&exporting_to_ohos, 0);
-                InterlockedExchange(&pasteboard_notify_flag, 0);
-
-                if (ErrCode == 0)
-                    ret = TRUE;
-                else
-                    WARN("OH_Pasteboard_SetData error %d\n", ErrCode);
-
-                OH_UdmfData_Destroy(data);
-            }
-            free(params.data);
-            break;
-        }
-        free(params.data);
-        if (!params.data_size) break;
-        params.size = params.data_size;
-        params.data_size = 0;
-    }
-
-    NtUserCloseClipboard();
-
-    return ret;
+    clipboard_sync();
 }
