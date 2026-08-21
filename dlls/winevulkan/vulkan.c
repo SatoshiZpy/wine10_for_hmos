@@ -555,6 +555,156 @@ static VkResult wine_vk_device_convert_create_info(VkPhysicalDevice client_physi
     dst->ppEnabledLayerNames = NULL;
 
     TRACE("Enabled %u extensions.\n", extensions_count);
+#ifdef __OHOS__
+    /* OHOS: Check if relaxed mode is enabled */
+    const char *ohos_dxvk_features = getenv("OHOS_DXVK_FEATURES");
+    const int ohos_relaxed = ohos_dxvk_features && ohos_dxvk_features[0] == '1' && ohos_dxvk_features[1] == '\0';
+    WARN("OHOS_DXVK: ohos_relaxed=%d, env=%s\n", ohos_relaxed, ohos_dxvk_features ? ohos_dxvk_features : "(null)");
+
+    /* Filter out unsupported extensions in relaxed mode */
+    const char **filtered_extensions = conversion_context_alloc(ctx, extensions_count * sizeof(*filtered_extensions));
+    unsigned int filtered_count = 0;
+    BOOL wine_supports, device_supports;
+
+    for (i = 0; i < extensions_count; i++)
+    {
+        const char *extension_name = extensions[i];
+        TRACE("Extension %u: %s.\n", i, debugstr_a(extension_name));
+
+        /* Check if extension is supported by both Wine and the device */
+        wine_supports = wine_vk_device_extension_supported(extension_name);
+        device_supports = FALSE;
+        {
+            uint32_t j;
+            for (j = 0; j < phys_dev->extension_count; j++)
+            {
+                if (!strcmp(phys_dev->extensions[j].extensionName, extension_name))
+                {
+                    device_supports = TRUE;
+                    break;
+                }
+            }
+        }
+
+        if (!wine_supports || !device_supports)
+        {
+            if (ohos_relaxed)
+            {
+                if (!wine_supports)
+                    WARN("OHOS_DXVK: Extension %s not supported by Wine, skipping.\n", debugstr_a(extension_name));
+                else
+                    WARN("OHOS_DXVK: Extension %s not supported by device, skipping.\n", debugstr_a(extension_name));
+                continue;  /* Skip unsupported extension */
+            }
+            else
+            {
+                if (!wine_supports)
+                    WARN("Extension %s not supported by Wine.\n", debugstr_a(extension_name));
+                else
+                    WARN("Extension %s not supported by device.\n", debugstr_a(extension_name));
+                return VK_ERROR_EXTENSION_NOT_PRESENT;
+            }
+        }
+
+        /* OHOS: In relaxed mode, skip extensions known to cause issues on certain drivers */
+        if (ohos_relaxed)
+        {
+            if (!strcmp(extension_name, "VK_KHR_timeline_semaphore"))
+            {
+                WARN("OHOS_DXVK: Skipping VK_KHR_timeline_semaphore.\n");
+                continue;
+            }
+            /* VK_EXT_transform_feedback is a desktop GPU feature, Maleoon 916 mobile GPU
+             * reports it as supported but fails during device creation */
+            if (!strcmp(extension_name, "VK_EXT_transform_feedback"))
+            {
+                WARN("OHOS_DXVK: Skipping VK_EXT_transform_feedback (unsupported on mobile GPU).\n");
+                continue;
+            }
+            /* VK_EXT_host_query_reset causes VK_ERROR_INITIALIZATION_FAILED on Maleoon 916 */
+            if (!strcmp(extension_name, "VK_EXT_host_query_reset"))
+            {
+                WARN("OHOS_DXVK: Skipping VK_EXT_host_query_reset.\n");
+                continue;
+            }
+            /* VK_EXT_depth_clip_enable causes issues on some mobile drivers */
+            if (!strcmp(extension_name, "VK_EXT_depth_clip_enable"))
+            {
+                WARN("OHOS_DXVK: Skipping VK_EXT_depth_clip_enable.\n");
+                continue;
+            }
+        }
+
+        filtered_extensions[filtered_count++] = extension_name;
+    }
+
+    /* Update the extension list with filtered extensions */
+    dst->enabledExtensionCount = filtered_count;
+    dst->ppEnabledExtensionNames = filtered_extensions;
+
+    /* OHOS: In relaxed mode, strip feature structs from pNext chain and
+     * clear pEnabledFeatures. Mobile GPUs like Maleoon 916 reject device
+     * creation when feature structs (e.g. VkPhysicalDeviceTransformFeedbackFeaturesEXT)
+     * are present in the pNext chain, even if the features are set to VK_FALSE. */
+    if (ohos_relaxed)
+    {
+        VkBaseInStructure *pNext = (VkBaseInStructure *)dst->pNext;
+        VkBaseInStructure *cleanpNext = NULL;
+        VkBaseInStructure *cleanpNextTail = NULL;
+
+        while (pNext)
+        {
+            const VkBaseInStructure *next = pNext->pNext;
+            /* Keep non-feature structs, strip feature structs.
+             * Feature structs have sType values containing "FEATURES" in their
+             * Vulkan type name, e.g. VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_*_FEATURES_* */
+            BOOL is_feature_struct = FALSE;
+            switch (pNext->sType)
+            {
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETER_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT:
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES:
+                    is_feature_struct = TRUE;
+                    WARN("OHOS_DXVK: Stripping pNext feature struct sType=%d from device create info.\n", pNext->sType);
+                    break;
+                default:
+                    break;
+            }
+
+            if (!is_feature_struct)
+            {
+                pNext->pNext = NULL;
+                if (!cleanpNext)
+                {
+                    cleanpNext = pNext;
+                    cleanpNextTail = pNext;
+                }
+                else
+                {
+                    cleanpNextTail->pNext = pNext;
+                    cleanpNextTail = pNext;
+                }
+            }
+            pNext = next;
+        }
+        dst->pNext = cleanpNext;
+        dst->pEnabledFeatures = NULL;
+        WARN("OHOS_DXVK: Stripped pNext chain and cleared pEnabledFeatures for relaxed device creation.\n");
+    }
+#else
     for (i = 0; i < extensions_count; i++)
     {
         const char *extension_name = extensions[i];
@@ -565,6 +715,7 @@ static VkResult wine_vk_device_convert_create_info(VkPhysicalDevice client_physi
             return VK_ERROR_EXTENSION_NOT_PRESENT;
         }
     }
+#endif
 
     if (phys_dev->map_placed_align)
     {
