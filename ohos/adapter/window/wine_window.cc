@@ -274,22 +274,23 @@ OHNativeWindow* WineWindow::GetNativeWindow()
     return window_;
   }
 
-  if (!IsVisible()) {
-    LOGW("the window status is invisible, widgetId: %{public}d", GetWidget());
-    return nullptr;
-  }
-
-  // Waiting for surface initialization
+  // Waiting for surface initialization - check before visibility to allow
+  // XComponent async callback time to register native window in WindowAdapter
   if (!HasSurface()) {
-    LOGW("surface not ready, waiting...");
+    LOGW("surface not ready, waiting... (widgetId: %{public}d)", GetWidget());
     if (!WaitSurface()) {
       LOGE("wait surface timeout");
     }
   }
 
+  // After waiting for surface, try to initialize regardless of visibility
+  // This handles the case where XComponent callback completes before Show() is called
   if (!InitSurface()) {
-      LOGE("init surface failed");
-      return nullptr;
+    if (!IsVisible()) {
+      LOGW("the window status is invisible, widgetId: %{public}d", GetWidget());
+    }
+    LOGE("init surface failed");
+    return nullptr;
   }
   return window_;
 }
