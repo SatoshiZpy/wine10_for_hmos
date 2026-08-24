@@ -10,6 +10,12 @@
 #include <unistd.h>
 #include <napi/native_api.h>
 
+#include <chrono>
+#include <functional>
+#include <future>
+#include <memory>
+
+#include "ohos/adapter/aki_hook/aki_hook.h"
 #include "ohos/adapter/common/constants.h"
 #include "ohos/adapter/common/logging.h"
 #include "ohos/adapter/common/mutex.h"
@@ -372,11 +378,79 @@ struct window_bounds GetInitialBounds()
 ohos_native_window GetNativeWindow(int widget_id)
 {
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
-    if (!window) {
-        LOGE("GetNativeWindow: window not exists, widgetId %{public}d", widget_id);
-        return nullptr;
+    if (window) {
+        return window->GetNativeWindow();
     }
-    return window->GetNativeWindow();
+    /* client surface XComponents register their OHNativeWindow directly in
+     * WindowAdapter, they have no WineWindow */
+    return WindowAdapter::GetInstance().GetWindow(widget_id);
+}
+
+int CreateClientSurface(struct client_surface_param* param)
+{
+    if (!param || param->parent_widget_id <= 0) {
+        LOGE("CreateClientSurface: invalid param");
+        return -1;
+    }
+
+    param->client_widget_id = WindowAdapter::GetInstance().NextWindowWidgetId();
+
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+    std::function<void(bool)> callback = [promise](bool success) {
+        promise->set_value(success);
+    };
+
+    auto jsFunc = GetJSFunction("ClientSurface.Create");
+    if (!jsFunc) {
+        LOGE("CreateClientSurface: ClientSurface.Create not found");
+        return -1;
+    }
+    jsFunc->Invoke<void>(param->parent_widget_id, param->client_widget_id,
+                         param->off_x, param->off_y,
+                         param->width, param->height, callback);
+
+    auto status = future.wait_for(std::chrono::seconds(3));
+    if (status != std::future_status::ready || !future.get()) {
+        LOGE("CreateClientSurface: parent %{public}d has no page renderer",
+             param->parent_widget_id);
+        return -1;
+    }
+
+    /* the XComponent surface is created asynchronously, wait until it is
+     * registered in WindowAdapter */
+    for (int i = 0; i < 100; i++) {
+        if (WindowAdapter::GetInstance().GetWindow(param->client_widget_id)) {
+            LOGI("CreateClientSurface success, parent %{public}d, client %{public}d",
+                 param->parent_widget_id, param->client_widget_id);
+            return param->client_widget_id;
+        }
+        usleep(50 * 1000);
+    }
+    LOGE("CreateClientSurface timeout, parent %{public}d, client %{public}d",
+         param->parent_widget_id, param->client_widget_id);
+    return -1;
+}
+
+void SetClientSurfaceBounds(int client_widget_id, int off_x, int off_y,
+                            int width, int height)
+{
+    auto jsFunc = GetJSFunction("ClientSurface.SetBounds");
+    if (!jsFunc) {
+        LOGE("SetClientSurfaceBounds: ClientSurface.SetBounds not found");
+        return;
+    }
+    jsFunc->Invoke<void>(client_widget_id, off_x, off_y, width, height);
+}
+
+void DestroyClientSurface(int client_widget_id)
+{
+    auto jsFunc = GetJSFunction("ClientSurface.Destroy");
+    if (!jsFunc) {
+        LOGE("DestroyClientSurface: ClientSurface.Destroy not found");
+        return;
+    }
+    jsFunc->Invoke<void>(client_widget_id);
 }
 
 int GetFocusWindow()

@@ -65,6 +65,8 @@ XComponentType XComponentUtils::ConvertXComponentType(const std::string& type) {
     return XComponentType::kWindow;
   } else if (type == "subXcomponent") {
     return XComponentType::kSubWindow;
+  } else if (type == "clientXcomponent") {
+    return XComponentType::kClientSurface;
   } else {
     return XComponentType::kUnknown;
   }

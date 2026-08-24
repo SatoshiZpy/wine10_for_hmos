@@ -5,6 +5,7 @@
 import { ContainerModule } from 'inversify';
 
 
+import lazy { ClientSurfaceManager } from '../adapter/ClientSurfaceManager';
 import lazy { ContextAdapter } from '../adapter/ContextAdapter';
 import lazy { ContextPathAdapter } from '../adapter/ContextPathAdapter';
 import lazy { DisplayAdapter } from '../adapter/DisplayAdapter';
@@ -19,6 +20,7 @@ import lazy { AppLifecycleAdapter } from '../adapter/AppLifecycleAdapter';
 
 // Only the adapters which used in WineAbility or WineWindow should be added here.
 export const adapterModule = new ContainerModule((bind) => {
+  bind(ClientSurfaceManager).toSelf();
   bind(ContextAdapter).toSelf();
   bind(DisplayAdapter).toSelf();
   bind(DragDropAdapter).toSelf();

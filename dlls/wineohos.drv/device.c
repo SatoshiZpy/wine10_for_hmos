@@ -875,40 +875,6 @@ failed:
     return -1;
 }
 
-int create_client_window( HWND hwnd )
-{
-    struct ohos_win_data *data = get_win_data( hwnd );
-    int x, y, cx, cy;
-    RECT client_rect;
-
-    if (!data)
-    {
-        /* explicitly create data for HWND_MESSAGE windows since they can be used for OpenGL */
-        HWND parent = NtUserGetAncestor( hwnd, GA_PARENT );
-        if (parent == NtUserGetDesktopWindow() || NtUserGetAncestor( parent, GA_PARENT )) return 0;
-        if (!(data = alloc_win_data( hwnd ))) return 0;
-        NtUserGetClientRect( hwnd, &data->rects.client, NtUserGetWinMonitorDpi( hwnd, MDT_RAW_DPI ) );
-        data->rects.window = data->rects.visible = data->rects.client;
-    }
-
-    x = data->rects.client.left - data->rects.visible.left;
-    y = data->rects.client.top - data->rects.visible.top;
-
-    NtUserGetClientRect( hwnd, &client_rect, NtUserGetDpiForWindow( hwnd ) );
-    cx = min( max( 1, client_rect.right - client_rect.left ), 65535 );
-    cy = min( max( 1, client_rect.bottom - client_rect.top ), 65535 );
-
-    struct window_bounds bounds = { 0 };
-    bounds.left = x;
-    bounds.top = y;
-    bounds.width = cx;
-    bounds.height = cy;
-    data->widget_id = create_window(hwnd, MAIN_WINDOW, &bounds);
-
-    release_win_data( data );
-    return data->widget_id;
-}
-
 void create_native_window( struct ohos_win_data *data )
 {
     DWORD style, ex_style;

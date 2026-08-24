@@ -4,6 +4,7 @@
 
 import { NativeContext, WindowBound } from '../interface/CommonInterface';
 import lazy { DragDropAdapter } from '../adapter/DragDropAdapter';
+import lazy { ClientSurfaceManager, ClientSurfaceConfig } from '../adapter/ClientSurfaceManager';
 import LogUtil from '../utils/LogUtil';
 import { ConfigData, ContextType, PanAction } from '../common/Constants';
 import Inject from '../common/InjectModule';
@@ -29,21 +30,31 @@ export struct WineWindow {
   private nativeContext: NativeContext = JsBindingUtils.getNativeContext(ContextType.kMainProcess);
   private multiInputAdapter: MultiInputAdapter = Inject.get(MultiInputAdapter);
   private dragParamManager = Inject.get(DragParamManager);
+  private clientSurfaceManager: ClientSurfaceManager = Inject.get(ClientSurfaceManager);
   @State private bgColor: Color | string =
     this.useDarkMode ? NativeThemeAdapter.DARK_BACKGROUND_COLOR : NativeThemeAdapter.LIGHT_BACKGROUND_COLOR;
+  // vulkan client surface XComponent stacked over the GDI one, geometry in
+  // pixels of this window; created on demand by the native side.
+  @State private clientSurface: ClientSurfaceConfig | undefined = undefined;
 
   aboutToAppear(): void {
     this.dragParamManager.addDragContextData({
       id: this.widgetId,
       uiContext: this.getUIContext(),
     });
+    this.clientSurfaceManager.register(this.widgetId,
+      (config: ClientSurfaceConfig | undefined) => {
+        this.clientSurface = config;
+      });
   }
 
   aboutToDisappear(): void {
+    this.clientSurfaceManager.unregister(this.widgetId);
     this.dragParamManager.removeDragContextData(this.widgetId);
   }
 
   build() {
+    Stack() {
     XComponent({
       id: this.MODULE_NAME,
       type: XComponentType.SURFACE,
@@ -129,6 +140,23 @@ export struct WineWindow {
       })
       .id(this.XCOMPONENT_NAME)
       .renderFit(RenderFit.TOP_LEFT)
+      .width('100%')
+      .height('100%')
+
+    if (this.clientSurface) {
+      XComponent({
+        id: this.clientSurface.clientWidgetId + ':clientXcomponent:' + this.ownerPid,
+        type: XComponentType.SURFACE,
+        libraryname: this.LIBRARY_NAME
+      })
+        .position({ x: px2vp(this.clientSurface.offX), y: px2vp(this.clientSurface.offY) })
+        .size({ width: px2vp(this.clientSurface.width), height: px2vp(this.clientSurface.height) })
+        .renderFit(RenderFit.RESIZE_COVER)
+        .hitTestBehavior(HitTestMode.None)
+        .backgroundColor(Color.Transparent)
+    }
+    }
+    .clip(true)
   }
 
   private setDefaultBounds() {

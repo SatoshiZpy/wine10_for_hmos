@@ -664,6 +664,32 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
     struct native_buffer buffer;
     RECT rc;
 
+    /* When Vulkan (DXVK) is active, only flush the non-client area (title bar).
+     * The client area is rendered by Vulkan via its own swap chain, so flushing
+     * GDI content there would overwrite the Vulkan-rendered 3D content. */
+    RECT vk_clip_rect = {0, 0, 0, 0};
+    BOOL vulkan_clipping = FALSE;
+    {
+        struct ohos_win_data *data = get_win_data( window_surface->hwnd );
+        if (data && data->vulkan_active)
+        {
+            /* The bitmap rect covers the full window. The client area within
+             * the bitmap starts at (client.left - window.left, client.top - window.top).
+             * We want to flush everything EXCEPT the client area. */
+            RECT client = data->rects.client;
+            RECT window = data->rects.window;
+            /* Convert client rect to bitmap coordinates */
+            vk_clip_rect.left   = client.left   - window.left;
+            vk_clip_rect.top    = client.top    - window.top;
+            vk_clip_rect.right  = client.right  - window.left;
+            vk_clip_rect.bottom = client.bottom - window.top;
+            vulkan_clipping = TRUE;
+            TRACE("hwnd %p: vulkan_active, client area %s (bitmap coords), skipping client flush\n",
+                  window_surface->hwnd, wine_dbgstr_rect(&vk_clip_rect));
+        }
+        if (data) release_win_data( data );
+    }
+
     if (!perform(window_surface->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc))
     {
         const RECT *rgn_rect = surface->clip_rects, *end = surface->clip_rects + surface->clip_count;
@@ -679,6 +705,36 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         locked.right = rc.right;
         locked.bottom = rc.bottom;
         intersect_rect(&locked, &locked, rect);
+
+        /* When Vulkan is active, clip the locked rect to exclude the client area.
+         * The client area is rendered by Vulkan via its own swap chain. */
+        if (vulkan_clipping)
+        {
+            RECT client_clip;
+            client_clip.left   = vk_clip_rect.left;
+            client_clip.top    = vk_clip_rect.top;
+            client_clip.right  = vk_clip_rect.right;
+            client_clip.bottom = vk_clip_rect.bottom;
+            intersect_rect(&client_clip, &client_clip, &locked);
+
+            /* If locked rect is entirely within client area, nothing to flush */
+            if (EqualRect(&locked, &client_clip))
+            {
+                TRACE("hwnd %p: locked rect %s is entirely in Vulkan client area, skip flush\n",
+                      window_surface->hwnd, wine_dbgstr_rect(&locked));
+                perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, NULL);
+                return TRUE;
+            }
+
+            /* Clip locked rect to exclude client area.
+             * The non-client area is typically the title bar above the client area.
+             * Clip to the region above the client area. */
+            if (client_clip.top > locked.top)
+                locked.bottom = client_clip.top;
+            /* If there's still area below the client, clip that too */
+            if (client_clip.bottom < locked.bottom)
+                locked.top = client_clip.bottom;
+        }
 
         TRACE("hwnd %p, surface_rect %s, dirty %s, locked %s, surface %p\n", window_surface->hwnd,
               wine_dbgstr_rect(&rc), wine_dbgstr_rect(dirty), wine_dbgstr_rect(&locked), surface);
@@ -1365,8 +1421,16 @@ static void ohos_client_surface_destroy( struct client_surface *client )
 
     TRACE( "%s\n", debugstr_client_surface( client ) );
 
-    if (surface->widget_id > 0) 
-        destroy_native_window( surface->hwnd );
+    if (surface->widget_id > 0)
+    {
+        struct ohos_win_data *data = get_win_data( surface->hwnd );
+        if (data)
+        {
+            if (data->client_widget_id == surface->widget_id) data->client_widget_id = 0;
+            release_win_data( data );
+        }
+        DestroyClientSurface( surface->widget_id );
+    }
 }
 
 static void ohos_client_surface_detach( struct client_surface *client )
@@ -1401,13 +1465,42 @@ struct ohos_client_surface *ohos_client_surface_create( HWND hwnd, BOOL force )
     NtUserGetClientRect( hwnd, &surface->rect, NtUserGetDpiForWindow( hwnd ) );
     if (!force) return surface;
 
-    // TODO: Implement the nesting of window surface into client surface.
-    surface->widget_id = create_client_window( hwnd );
+    /* Nest the client surface into the parent window page: an XComponent is
+     * stacked over the GDI one. The GDI buffer maps window pixels 1:1 onto
+     * the page (top-left anchored), so position and size are given in window
+     * pixels to stay aligned with the GDI content; whatever extends beyond
+     * the page is clipped, just like the GDI content. */
+    {
+        struct ohos_win_data *data = get_win_data( hwnd );
+        struct client_surface_param param = { 0 };
+
+        if (data)
+        {
+            param.parent_widget_id = data->widget_id;
+            param.off_x = data->rects.client.left - data->rects.visible.left;
+            param.off_y = data->rects.client.top - data->rects.visible.top;
+            param.width = data->rects.client.right - data->rects.client.left;
+            param.height = data->rects.client.bottom - data->rects.client.top;
+            release_win_data( data );
+        }
+
+        if (param.parent_widget_id > 0)
+            surface->widget_id = CreateClientSurface( &param );
+    }
     if (surface->widget_id <= 0)
     {
         ERR("Failed to create client surface\n");
         client_surface_release(&surface->client);
         return NULL;
+    }
+
+    {
+        struct ohos_win_data *data = get_win_data( hwnd );
+        if (data)
+        {
+            data->client_widget_id = surface->widget_id;
+            release_win_data( data );
+        }
     }
 
     return surface;
@@ -1527,6 +1620,17 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             data->pending_rect = new_rects->window;
         }
         window_pos_changed( hwnd, new_rects, &old_rects, new_style, swp_flags );
+    }
+
+    /* keep the nested client surface aligned with the client area; this must
+     * run for both Wine-initiated and OS-initiated changes */
+    if (data->client_widget_id > 0 && !EqualRect( &old_rects.client, &new_rects->client ))
+    {
+        SetClientSurfaceBounds( data->client_widget_id,
+                                new_rects->client.left - new_rects->visible.left,
+                                new_rects->client.top - new_rects->visible.top,
+                                new_rects->client.right - new_rects->client.left,
+                                new_rects->client.bottom - new_rects->client.top );
     }
 
     if (new_style & WS_VISIBLE)

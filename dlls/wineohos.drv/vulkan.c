@@ -118,6 +118,19 @@ static VkResult ohos_vulkan_surface_create(HWND hwnd, const struct vulkan_instan
 
     *client = &surface->client;
 
+    /* Mark the window as Vulkan-active so GDI surface flush is skipped.
+     * When DXVK renders via Vulkan, the GDI path would overwrite
+     * the Vulkan content with the window background color. */
+    {
+        struct ohos_win_data *data = get_win_data( hwnd );
+        if (data)
+        {
+            data->vulkan_active = TRUE;
+            TRACE("hwnd %p marked as vulkan_active\n", hwnd);
+            release_win_data( data );
+        }
+    }
+
     TRACE("Created surface=0x%s, client=%p\n", wine_dbgstr_longlong(*handle), *client);
     return VK_SUCCESS;
 }

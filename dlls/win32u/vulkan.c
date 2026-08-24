@@ -133,6 +133,20 @@ static void win32u_vkDestroySurfaceKHR( VkInstance client_instance, VkSurfaceKHR
     free( surface );
 }
 
+#ifdef __OHOS__
+/* The OHOS client surface covers the client area in physical pixels, so the
+ * extents must be computed from the physical client rect: ask for the client
+ * rect in the monitor DPI space instead of the window DPI space, which is
+ * virtualized for DPI-unaware windows. */
+static BOOL get_surface_client_rect( struct surface *surface, RECT *client_rect )
+{
+    UINT raw_dpi;
+    UINT dpi = get_win_monitor_dpi( surface->hwnd, &raw_dpi );
+
+    if (!dpi) dpi = NtUserGetDpiForWindow( surface->hwnd );
+    return NtUserGetClientRect( surface->hwnd, client_rect, dpi );
+}
+#endif
 static void adjust_surface_capabilities( struct vulkan_instance *instance, struct surface *surface,
                                          VkSurfaceCapabilitiesKHR *capabilities )
 {
@@ -148,8 +162,12 @@ static void adjust_surface_capabilities( struct vulkan_instance *instance, struc
     if (!capabilities->maxImageCount) capabilities->maxImageCount = max( capabilities->minImageCount, 16 );
 
     /* Update the image extents to match what the Win32 WSI would provide. */
+#ifdef __OHOS__
+    get_surface_client_rect( surface, &client_rect );
+#else
     /* FIXME: handle DPI scaling, somehow */
     NtUserGetClientRect( surface->hwnd, &client_rect, NtUserGetDpiForWindow( surface->hwnd ) );
+#endif
     capabilities->minImageExtent.width = client_rect.right - client_rect.left;
     capabilities->minImageExtent.height = client_rect.bottom - client_rect.top;
     capabilities->maxImageExtent.width = client_rect.right - client_rect.left;
@@ -350,7 +368,11 @@ static VkResult win32u_vkAcquireNextImage2KHR( VkDevice client_device, const VkA
 
     res = device->p_vkAcquireNextImage2KHR( device->host.device, &acquire_info_host, image_index );
 
+#ifdef __OHOS__
+    if (!res && get_surface_client_rect( surface, &client_rect ) &&
+#else
     if (!res && NtUserGetClientRect( surface->hwnd, &client_rect, NtUserGetDpiForWindow( surface->hwnd ) ) &&
+#endif
         !extents_equals( &swapchain->extents, &client_rect ))
     {
         WARN( "Swapchain size %dx%d does not match client rect %s, returning VK_SUBOPTIMAL_KHR\n",
@@ -373,7 +395,11 @@ static VkResult win32u_vkAcquireNextImageKHR( VkDevice client_device, VkSwapchai
     res = device->p_vkAcquireNextImageKHR( device->host.device, swapchain->obj.host.swapchain, timeout,
                                               semaphore, fence, image_index );
 
+#ifdef __OHOS__
+    if (!res && get_surface_client_rect( surface, &client_rect ) &&
+#else
     if (!res && NtUserGetClientRect( surface->hwnd, &client_rect, NtUserGetDpiForWindow( surface->hwnd ) ) &&
+#endif
         !extents_equals( &swapchain->extents, &client_rect ))
     {
         WARN( "Swapchain size %dx%d does not match client rect %s, returning VK_SUBOPTIMAL_KHR\n",
@@ -419,7 +445,11 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
         client_surface_present( surface->client, NULL );
 
         if (swapchain_res < VK_SUCCESS) continue;
+#ifdef __OHOS__
+        if (!get_surface_client_rect( surface, &client_rect ))
+#else
         if (!NtUserGetClientRect( surface->hwnd, &client_rect, NtUserGetDpiForWindow( surface->hwnd ) ))
+#endif
         {
             WARN( "Swapchain window %p is invalid, returning VK_ERROR_OUT_OF_DATE_KHR\n", surface->hwnd );
             if (present_info->pResults) present_info->pResults[i] = VK_ERROR_OUT_OF_DATE_KHR;
