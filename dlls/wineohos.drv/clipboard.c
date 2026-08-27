@@ -44,6 +44,11 @@ WINE_DEFAULT_DEBUG_CHANNEL(ohos);
 #define PASTEBOARD_MIMETYPE_PIXELMAP "pixelMap"
 #endif
 
+/* runtime permission request into the ohos adapter (libadapter);
+ * implemented in ohos/adapter/permission_manager/permission_manager_adapter.cc */
+extern int OhosAdapterRequestPermission(int permission_type);
+enum { OHOS_PERMISSION_PASTEBOARD = 6 };  /* OHOSPermissionType::PASTEBOARD */
+
 /**************************************************************************
  *              Constants
  **************************************************************************/
@@ -84,6 +89,12 @@ static pthread_t pbs_thread;
 static volatile LONG pbs_thread_started;
 
 static DWORD last_win32_seq; /* win32 clipboard sequence number (wine side) */
+
+/* READ_PASTEBOARD runtime permission state (accessed with Interlocked* only) */
+static volatile LONG import_denied;        /* pasteboard read was rejected by PBS */
+static volatile LONG perm_request_pending; /* wine side asks the worker to request */
+static volatile LONG perm_inflight;        /* worker is inside the request (dialog up) */
+static volatile LONG perm_denied_by_user;  /* user explicitly refused: stop asking */
 
 
 /**************************************************************************
@@ -183,8 +194,12 @@ static BOOL worker_extract_import( OH_Pasteboard *pbs, struct pending_clip *out 
     if (!(ud = OH_Pasteboard_GetData(pbs, &ret)))
     {
         WARN("DIAGCLIP import: GetData failed ret=%d\n", ret);
+        /* most likely READ_PASTEBOARD is not granted: remember it; the
+         * runtime request is deferred until a win32 app reads the clipboard */
+        InterlockedExchange(&import_denied, 1);
         return FALSE;
     }
+    InterlockedExchange(&import_denied, 0);
 
     /* plain text */
     if (OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_PLAIN))
@@ -525,6 +540,34 @@ static void *pbs_worker(void *arg)
                 else
                     WARN("DIAGCLIP import: no supported type, skip change=%u\n", cc);
             }
+        }
+
+        /* 3. runtime READ_PASTEBOARD request, deferred from the wine side:
+         * runs here on the worker so no wine thread blocks on the dialog */
+        if (InterlockedCompareExchange(&perm_request_pending, 0, 0))
+        {
+            struct pending_clip imp;
+            int ret;
+
+            InterlockedExchange(&perm_request_pending, 0);
+            InterlockedExchange(&perm_inflight, 1);
+
+            ret = OhosAdapterRequestPermission(OHOS_PERMISSION_PASTEBOARD);
+            WARN("DIAGCLIP permission: request READ_PASTEBOARD ret=%d\n", ret);
+
+            if (ret == 0)
+            {
+                /* granted: refetch the current pasteboard content now, so the
+                 * next clipboard query by a win32 app sees the data */
+                if (worker_extract_import(pbs, &imp))
+                    put_import_pending(&imp);
+                else
+                    WARN("DIAGCLIP permission: nothing to import after grant\n");
+            }
+            else if (ret == -1)
+                InterlockedExchange(&perm_denied_by_user, 1);
+
+            InterlockedExchange(&perm_inflight, 0);
         }
 
         usleep(PBS_POLL_INTERVAL_MS * 1000);
@@ -1179,6 +1222,19 @@ static void clipboard_sync(void)
     if (in_sync) return;
 
     in_sync = 1;
+
+    /* A win32 app is reading the clipboard while the last OHOS import was
+     * rejected (READ_PASTEBOARD not granted): have the pbs worker run the
+     * runtime permission request, so the dialog pops at paste time with the
+     * wine app in the foreground.  Skip when a win32 app owns the clipboard
+     * (the user just copied inside the win32 app, no import needed). */
+    if (InterlockedCompareExchange(&import_denied, 0, 0) &&
+        !InterlockedCompareExchange(&perm_denied_by_user, 0, 0) &&
+        !InterlockedCompareExchange(&perm_inflight, 0, 0) &&
+        !NtUserGetClipboardOwner())
+    {
+        InterlockedExchange(&perm_request_pending, 1);
+    }
 
     imp = take_import_pending();
     if (imp.text || imp.html || imp.urilist || imp.image)

@@ -53,11 +53,6 @@ export class WineAbility extends WineBaseAbility {
       this.nativeContext.SetDefaultDisplay(display);
     });
     Inject.get(PermissionManagerAdapter).initPermissions();
-    // READ_PASTEBOARD 是 user_grant 权限，必须运行时请求；
-    // 未授权时 wineohos.drv 的 OH_Pasteboard_GetData 会被 PBS 拒绝，外部复制内容无法粘贴进来
-    Inject.get(PermissionManagerAdapter).requestPermissions('pasteboard', (granted: number) => {
-      LogUtil.info(TAG, 'request pasteboard permission granted: ' + granted);
-    });
     this.deviceInfoAdapter = Inject.get(DeviceInfoAdapter);
     Inject.get(TrayManager).addToStatusBar(this.context, this.callback);
     this.wineLoader = Inject.get(WineLoaderAdapter);

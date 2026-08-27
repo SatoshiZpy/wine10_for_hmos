@@ -59,7 +59,7 @@ export class PermissionManagerAdapter extends BaseAdapter {
     ]]
   ]);
   private atManager: abilityAccessCtrl.AtManager;
-  private bundleName: string = 'com.huawei.ohos_wine';
+  private bundleName: string = 'com.huawei.ohos_wine_360';
   private bundleFlags = bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION;
   private tokenId: number = 0;
   private ctxAdapter: ContextAdapter;
@@ -97,9 +97,21 @@ export class PermissionManagerAdapter extends BaseAdapter {
       callback(REQUEST_PERMISSION_FAIL);
       return;
     }
+    const context: Context = activeContext;
 
+    this.checkPermissions(permissionType, (isGranted: boolean) => {
+      if (isGranted) {
+        callback(REQUEST_PERMISSION_SUCCESS);
+        return;
+      }
+      this.requestFromUser(context, permissions || [], permissionType, callback);
+    });
+  }
+
+  private requestFromUser(activeContext: Context, permissions: Array<Permissions>,
+    permissionType: string, callback: (granted: number) => void): void {
     try {
-      this.atManager.requestPermissionsFromUser(activeContext, permissions || [])
+      this.atManager.requestPermissionsFromUser(activeContext, permissions)
         .then((data) => {
           let grantStatus: Array<number> = data.authResults;
           for (let i = 0; i < grantStatus.length; i++) {
