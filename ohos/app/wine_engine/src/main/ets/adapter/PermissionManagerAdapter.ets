@@ -59,7 +59,7 @@ export class PermissionManagerAdapter extends BaseAdapter {
     ]]
   ]);
   private atManager: abilityAccessCtrl.AtManager;
-  private bundleName: string = 'com.huawei.ohos_wine_360';
+  private bundleName: string = 'com.huawei.ohos_wine';
   private bundleFlags = bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION;
   private tokenId: number = 0;
   private ctxAdapter: ContextAdapter;
