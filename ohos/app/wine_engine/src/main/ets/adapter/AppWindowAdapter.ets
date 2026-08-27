@@ -117,7 +117,8 @@ export class AppWindowAdapter extends BaseAdapter {
     };
     LogUtil.info(TAG, 'createWindow want:' + JSON.stringify(want) + 'options:' + JSON.stringify(options));
     let subStorage: LocalStorage = new LocalStorage(want);
-    LaunchHelper.LaunchWithOptions(activeCtx, want, options)
+    const specifiedFlag = `${param.process_key}:${param.widget_id}`;
+    LaunchHelper.LaunchInProcess(activeCtx, want, specifiedFlag, options)
       .then((result) => {
         if (result) {
           this.windowList.push({
