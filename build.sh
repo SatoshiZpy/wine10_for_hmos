@@ -275,6 +275,7 @@ cp ${FREETYPE_DIR}/build/lib/libfreetype.so.6.20.6 ${APP_DIR}/wine_engine/libs/a
 
 cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
+cp -r ${INSTALL_DIR}/lib/wine/i386-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp -r ${ROOT_DIR}/third_party/gecko ${APP_DIR}/wine_engine/src/main/resources/resfile/share/wine/
