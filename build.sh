@@ -78,7 +78,7 @@ done
 
 clean_all_cache() {
     echo "清理项目缓存..."
-    git clean -xfd --exclude='ohos_sdk/command-line-tools/'
+    git clean -xfd --exclude='ohos_sdk/command-line-tools/' --exclude='third_party/llvm/' --exclude='build-tools/'
     git submodule foreach --recursive 'git reset --hard HEAD' && git submodule foreach --recursive 'git clean -fdx'
     echo "所有缓存清理完成!"
 }
