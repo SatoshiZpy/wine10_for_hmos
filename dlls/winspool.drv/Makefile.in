@@ -4,10 +4,12 @@ IMPORTLIB = winspool
 IMPORTS   = user32 gdi32 advapi32 compstui
 UNIX_CFLAGS  = $(CUPS_CFLAGS)
 UNIX_LIBS    = $(APPLICATIONSERVICES_LIBS) $(ADAPTER_LIBS)
+EXTRAINCL = -I$(top_srcdir)/ohos/adapter/include
 
 SOURCES = \
 	cups.c \
 	info.c \
+	ohosprint.c \
 	winspool.drv.spec \
 	winspool.rc \
 	wspool.c

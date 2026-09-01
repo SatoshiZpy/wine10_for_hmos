@@ -115,22 +115,22 @@ typedef struct _doc_t
 } doc_t;
 
 #ifdef __OHOS__
-static BOOL ohos_doc_write(doc_t *doc, const BYTE *buf, unsigned int size)
+static BOOL ohos_write_doc(doc_t *doc, const BYTE *buf, unsigned int size)
 {
-    return ohos_print_write_doc(doc->ohos, buf, size);
+    return print_write_doc(doc->ohos, buf, size);
 }
 
-static BOOL ohos_doc_end(doc_t *doc)
+static BOOL ohos_end_doc(doc_t *doc)
 {
-    return ohos_print_end_doc(doc->ohos);
+    return print_end_doc(doc->ohos);
 }
 
-static BOOL ohos_doc_start(doc_t *doc, const WCHAR *printer_id,
+static BOOL ohos_start_doc(doc_t *doc, const WCHAR *printer_id,
         const WCHAR *document_title)
 {
-    if (!(doc->ohos = ohos_print_start_doc(printer_id, document_title))) return FALSE;
-    doc->write_doc = ohos_doc_write;
-    doc->end_doc = ohos_doc_end;
+    if (!(doc->ohos = print_start_doc(printer_id, document_title))) return FALSE;
+    doc->write_doc = ohos_write_doc;
+    doc->end_doc = ohos_end_doc;
     return TRUE;
 }
 #endif
@@ -508,7 +508,7 @@ static NTSTATUS start_doc(void *args)
                 params->document_title);
 #ifdef __OHOS__
     else if (params->type == PORT_IS_OHOS)
-        ret = ohos_doc_start(doc, params->port + 5 /* strlen("OHOS:") */,
+        ret = ohos_start_doc(doc, params->port + 5 /* strlen("OHOS:") */,
                 params->document_title);
 #endif
 

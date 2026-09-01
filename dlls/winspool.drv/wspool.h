@@ -72,6 +72,10 @@ struct enum_printers_params
     unsigned int *num;
 };
 
+#ifdef __OHOS__
+    extern NTSTATUS ohos_enum_printers( const struct enum_printers_params *params );
+#endif
+
 struct get_default_page_size_params
 {
     WCHAR *name;

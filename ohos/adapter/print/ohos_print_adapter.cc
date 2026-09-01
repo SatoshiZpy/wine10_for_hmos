@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ohos_print_adapter.h"
-#include "ohos/adapter/aki_hook/aki_hook.h"
 #include <cstring>
 #include <new>
 #include <cstdio>
@@ -12,7 +10,10 @@
 #include <functional>
 #include <condition_variable>
 #include <mutex>
+#include "ohos_print_adapter.h"
+#include "ohos/adapter/aki_hook/aki_hook.h"
 #include "ohos/adapter/common/logging.h"
+#include "ohos/adapter/include/ohos_adapter.h"
 
 namespace {
 
@@ -58,9 +59,23 @@ std::string GetPageSizes(aki::Value sizes) {
 }
 
 struct PrinterQuery {
+  struct HostPrinterInfo {
+    std::string id;
+    std::string name;
+    std::string description;
+    std::string make;
+    std::string uri;
+    std::string page_sizes;
+    std::string options;
+    uint32_t status;
+    uint32_t color_modes;
+    uint32_t duplex_modes;
+    bool is_default;
+  };
+
   std::mutex mutex;
   std::condition_variable condition;
-  std::vector<ohos_printer_info> printers;
+  std::vector<HostPrinterInfo> printers;
   bool complete = false;
 };
 
@@ -107,18 +122,6 @@ void PrintAdapter::SetPdfBuff(std::shared_ptr<char[]> pdf_data,
   pdf_length = length;
 }
 
-bool PrintAdapter::PrintPostScript(const std::string& printer_id,
-                                   const std::string& job_name,
-                                   std::shared_ptr<char[]> data, uint32_t length) {
-  if (auto func = ohos::adapter::GetJSFunction("PrintAdapter.PrintPostScript")) {
-    aki::ArrayBuffer array_buffer(reinterpret_cast<uint8_t *>(data.get()), length);
-    func->Invoke<void>(printer_id, job_name, std::move(array_buffer));
-  } else {
-    return false;
-  }
-  return true;
-}
-
 int PrintAdapter::GetPrinters(struct ohos_printer_info* printers, uint32_t capacity) {
   auto func = ohos::adapter::GetJSFunction("PrintAdapter.GetPrinters");
   if (!func) {
@@ -135,15 +138,15 @@ int PrintAdapter::GetPrinters(struct ohos_printer_info* printers, uint32_t capac
           for (int32_t i = 0; i < count; ++i) {
             aki::Value value = values[i];
             aki::Value capability = value["capability"];
-            ohos_printer_info info{};
-            CopyString(info.id, ReadValue<std::string>(value["printerId"], ""));
-            CopyString(info.name, ReadValue<std::string>(value["printerName"], std::string(info.id)));
-            CopyString(info.description,
-                       ReadValue<std::string>(value["description"], ""));
-            CopyString(info.make, ReadValue<std::string>(value["printerMake"], ""));
-            CopyString(info.uri, ReadValue<std::string>(value["uri"], ""));
-            CopyString(info.options, ReadValue<std::string>(value["options"], ""));
-            CopyString(info.page_sizes, GetPageSizes(capability["supportedPageSizes"]));
+            PrinterQuery::HostPrinterInfo info;
+
+            info.id = ReadValue<std::string>(value["printerId"], "");
+            info.name = ReadValue<std::string>(value["printerName"], info.id);
+            info.description = ReadValue<std::string>(value["description"], "");
+            info.make = ReadValue<std::string>(value["printerMake"], "");
+            info.uri = ReadValue<std::string>(value["uri"], "");
+            info.page_sizes = GetPageSizes(capability["supportedPageSizes"]);
+            info.options = ReadValue<std::string>(value["options"], "");
             info.status = ReadValue<uint32_t>(value["printerStatus"], 2);
             info.color_modes = GetModeMask(capability["supportedColorModes"]);
             info.duplex_modes = GetModeMask(capability["supportedDuplexModes"]);
@@ -166,9 +169,37 @@ int PrintAdapter::GetPrinters(struct ohos_printer_info* printers, uint32_t capac
   int count = static_cast<int>(query->printers.size());
   if (printers) {
     uint32_t copy_count = std::min<uint32_t>(capacity, query->printers.size());
-    std::copy_n(query->printers.begin(), copy_count, printers);
+    for (uint32_t i = 0; i < copy_count; ++i) {
+      const auto& source = query->printers[i];
+      auto& target = printers[i];
+
+      CopyString(target.id, source.id);
+      CopyString(target.name, source.name);
+      CopyString(target.description, source.description);
+      CopyString(target.make, source.make);
+      CopyString(target.uri, source.uri);
+      CopyString(target.options, source.options);
+      CopyString(target.page_sizes, source.page_sizes);
+
+      target.status = source.status;
+      target.color_modes = source.color_modes;
+      target.duplex_modes = source.duplex_modes;
+      target.is_default = source.is_default;
+    }
   }
   return count;
+}
+
+bool PrintAdapter::PrintPostScript(const std::string& printer_id,
+                                   const std::string& job_name,
+                                   std::shared_ptr<char[]> data, uint32_t length) {
+  if (auto func = ohos::adapter::GetJSFunction("PrintAdapter.PrintPostScript")) {
+    aki::ArrayBuffer array_buffer(reinterpret_cast<uint8_t *>(data.get()), length);
+    func->Invoke<void>(printer_id, job_name, std::move(array_buffer));
+  } else {
+    return false;
+  }
+  return true;
 }
 
 void PrintAdapter::ShowPrintTipsDialog() {
@@ -181,19 +212,3 @@ void PrintAdapter::ShowPrintTipsDialog() {
 void PrintAdapter::AddPrinters(PrinterInfo& printInfo,
                                std::shared_ptr<PrintCallback> printCallback) {}
 }  // namespace ohos::adapter::print
-
-extern "C" int OhosPrintPostScript(const char *printer_id, const char *job_name,
-                                    const void *data, uint32_t length) {
-  if (!data || !length) return -1;
-  std::shared_ptr<char[]> buffer(new (std::nothrow) char[length]);
-  if (!buffer) return -1;
-  std::memcpy(buffer.get(), data, length);
-  return ohos::adapter::print::PrintAdapter::GetInstance().PrintPostScript(
-      printer_id ? printer_id : "", job_name ? job_name : "", buffer, length)
-      ? 0 : -1;
-}
-
-extern "C" int OhosGetPrinters(struct ohos_printer_info *printers,
-                                uint32_t capacity) {
-  return ohos::adapter::print::PrintAdapter::GetInstance().GetPrinters(printers, capacity);
-}

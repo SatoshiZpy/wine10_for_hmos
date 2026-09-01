@@ -54,9 +54,6 @@
 #undef LoadResource
 #undef Polygon
 #endif
-#ifdef __OHOS__
-#include "../../ohos/adapter/include/ohos_print.h"
-#endif
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -75,19 +72,6 @@
 #include "wspool.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(winspool);
-
-#ifdef __OHOS__
-static WCHAR *copy_utf8_string( WCHAR **buffer, const char *source )
-{
-    WCHAR *ret = *buffer;
-    DWORD size = 0;
-
-    RtlUTF8ToUnicodeN( ret, (strlen( source ) + 1) * sizeof(WCHAR), &size,
-                       source, strlen( source ) + 1 );
-    *buffer += size / sizeof(WCHAR);
-    return ret;
-}
-#endif
 
 #ifdef SONAME_LIBCUPS
 
@@ -253,64 +237,7 @@ static NTSTATUS enum_printers( void *args )
 {
     const struct enum_printers_params *params = args;
 #ifdef __OHOS__
-    struct ohos_printer_info *host_printers;
-    unsigned int i, num, needed;
-    WCHAR *ptr;
-    int count;
-
-    *params->num = 0;
-    count = OhosGetPrinters( NULL, 0 );
-    if (count < 0) return STATUS_NOT_SUPPORTED;
-    if (!count) return STATUS_SUCCESS;
-    if (!(host_printers = calloc( count, sizeof(*host_printers) )))
-        return STATUS_NO_MEMORY;
-    count = OhosGetPrinters( host_printers, count );
-    if (count < 0)
-    {
-        free( host_printers );
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    num = count;
-    needed = sizeof(struct printer_info) * num + sizeof(struct ohos_printer_details) * num;
-    for (i = 0; i < num; ++i)
-    {
-        needed += (strlen(host_printers[i].name) + strlen(host_printers[i].description) +
-                   strlen(host_printers[i].uri) + strlen(host_printers[i].id) +
-                   strlen(host_printers[i].make) + strlen(host_printers[i].page_sizes) +
-                   strlen(host_printers[i].options) + 7) * sizeof(WCHAR);
-    }
-    *params->num = num;
-    if (needed > *params->size)
-    {
-        *params->size = needed;
-        free( host_printers );
-        return STATUS_BUFFER_OVERFLOW;
-    }
-
-    ptr = (WCHAR *)((struct ohos_printer_details *)(params->printers + num) + num);
-    for (i = 0; i < num; ++i)
-    {
-        struct printer_info *info = params->printers + i;
-        info->ohos_info = (struct ohos_printer_details *)(params->printers + num) + i;
-#define COPY_HOST_STRING(member, source) \
-        info->member = copy_utf8_string( &ptr, source )
-        COPY_HOST_STRING(name, host_printers[i].name);
-        COPY_HOST_STRING(comment, host_printers[i].description);
-        COPY_HOST_STRING(location, host_printers[i].uri);
-        COPY_HOST_STRING(ohos_info->id, host_printers[i].id);
-        COPY_HOST_STRING(ohos_info->make, host_printers[i].make);
-        COPY_HOST_STRING(ohos_info->uri, host_printers[i].uri);
-        COPY_HOST_STRING(ohos_info->page_sizes, host_printers[i].page_sizes);
-        COPY_HOST_STRING(ohos_info->options, host_printers[i].options);
-#undef COPY_HOST_STRING
-        info->ohos_info->status = host_printers[i].status;
-        info->ohos_info->color_modes = host_printers[i].color_modes;
-        info->ohos_info->duplex_modes = host_printers[i].duplex_modes;
-        info->is_default = host_printers[i].is_default;
-    }
-    free( host_printers );
-    return STATUS_SUCCESS;
+    return ohos_enum_printers( params );
 #elif defined(SONAME_LIBCUPS)
     unsigned int num, i, name_len, comment_len, location_len, needed;
     WCHAR *comment, *location, *ptr;

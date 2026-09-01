@@ -1,3 +1,5 @@
+#ifdef __OHOS__ // __OHOS__
+
 #if 0
 #pragma makedep unix
 #endif
@@ -11,9 +13,7 @@
 
 #include "localspl_private.h"
 
-#ifdef __OHOS__
-#include "../../ohos/adapter/include/ohos_print.h"
-#endif
+#include "ohos_adapter.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(localspl);
 
@@ -41,7 +41,7 @@ static char *strdup_utf8(const WCHAR *str)
     return ret;
 }
 
-struct ohos_print_doc *ohos_print_start_doc(const WCHAR *printer_id,
+struct ohos_print_doc *print_start_doc(const WCHAR *printer_id,
         const WCHAR *document_title)
 {
     struct ohos_print_doc *doc;
@@ -59,7 +59,7 @@ failed:
     return NULL;
 }
 
-BOOL ohos_print_write_doc(struct ohos_print_doc *doc, const BYTE *buf, unsigned int size)
+BOOL print_write_doc(struct ohos_print_doc *doc, const BYTE *buf, unsigned int size)
 {
     size_t needed = doc->size + size;
     BYTE *data;
@@ -83,7 +83,7 @@ BOOL ohos_print_write_doc(struct ohos_print_doc *doc, const BYTE *buf, unsigned 
     return TRUE;
 }
 
-BOOL ohos_print_end_doc(struct ohos_print_doc *doc)
+BOOL print_end_doc(struct ohos_print_doc *doc)
 {
     BOOL ret = FALSE;
     size_t offset, scan_size = min(doc->size, (size_t)OHOS_PRINT_HEADER_SCAN_SIZE);
@@ -94,19 +94,18 @@ BOOL ohos_print_end_doc(struct ohos_print_doc *doc)
 
     if (offset + 4 > scan_size)
         TRACE("refusing data without a PostScript header\n");
-#ifdef __OHOS__
     else
     {
         TRACE("PostScript header offset=%zu, payload size=%zu\n", offset, doc->size - offset);
-        ret = !OhosPrintPostScript(doc->printer_id, doc->document_title,
+        ret = !PrintPostScript(doc->printer_id, doc->document_title,
                 doc->data + offset, doc->size - offset);
     }
-#else
-    ERR("OHOS PostScript printing is unavailable on this platform\n");
-#endif
+
     free(doc->data);
     free(doc->printer_id);
     free(doc->document_title);
     free(doc);
     return ret;
 }
+
+#endif // __OHOS__

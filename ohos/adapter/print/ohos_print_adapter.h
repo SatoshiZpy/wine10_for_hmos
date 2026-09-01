@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 #include "ohos/adapter/export.h"
-#include "ohos/adapter/include/ohos_print.h"
+struct ohos_printer_info;
 
 namespace ohos::adapter::print {
 struct PrinterRange {
@@ -63,9 +63,9 @@ class ADAPTER_EXPORT_API PrintAdapter {
   void SetPdfBuff(std::shared_ptr<char[]> pdf_data, uint32_t length);
   void PrintPdfFile();
   void PrintPdfFile(std::shared_ptr<char[]> pdf_data, uint32_t length);
+  int GetPrinters(struct ohos_printer_info* printers, uint32_t capacity);
   bool PrintPostScript(const std::string& printer_id, const std::string& job_name,
                        std::shared_ptr<char[]> data, uint32_t length);
-  int GetPrinters(struct ohos_printer_info* printers, uint32_t capacity);
   void ShowPrintTipsDialog();
   void AddPrinters(PrinterInfo& printInfo,
                    std::shared_ptr<PrintCallback> printCallback);

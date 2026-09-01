@@ -6,6 +6,7 @@
 #define OHOS_ADAPTER_API_H_
 
 #include <stdarg.h>
+#include <stdint.h>
 
 #include <native_window/external_window.h>
 #include <native_window/graphic_error_code.h>
@@ -112,6 +113,31 @@ ADAPTER_API int OpenNativeUrl(const char *url);
 /* file */
 ADAPTER_API int OpenNativeFileWithChooser(const char *path);
 
+/* print */
+#define OHOS_PRINTER_ID_MAX 256
+#define OHOS_PRINTER_NAME_MAX 256
+#define OHOS_PRINTER_TEXT_MAX 512
+#define OHOS_PRINTER_CAPABILITY_MAX 2048
+
+struct ohos_printer_info {
+    char id[OHOS_PRINTER_ID_MAX];
+    char name[OHOS_PRINTER_NAME_MAX];
+    char description[OHOS_PRINTER_TEXT_MAX];
+    char make[OHOS_PRINTER_NAME_MAX];
+    char uri[OHOS_PRINTER_TEXT_MAX];
+    char page_sizes[OHOS_PRINTER_CAPABILITY_MAX];
+    char options[OHOS_PRINTER_CAPABILITY_MAX];
+    uint32_t status;
+    uint32_t color_modes;
+    uint32_t duplex_modes;
+    uint32_t is_default;
+};
+
+ADAPTER_API int GetPrinters(struct ohos_printer_info *printers, uint32_t capacity);
+ADAPTER_API int PrintPostScript(const char *printer_id,
+                                const char *job_name,
+                                const void *data,
+                                uint32_t length);
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

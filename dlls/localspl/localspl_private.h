@@ -29,10 +29,10 @@ extern HINSTANCE localspl_instance;
 #ifdef __OHOS__
 struct ohos_print_doc;
 
-extern struct ohos_print_doc *ohos_print_start_doc(const WCHAR *printer_id,
+extern struct ohos_print_doc *print_start_doc(const WCHAR *printer_id,
         const WCHAR *document_title);
-extern BOOL ohos_print_write_doc(struct ohos_print_doc *doc, const BYTE *buf, unsigned int size);
-extern BOOL ohos_print_end_doc(struct ohos_print_doc *doc);
+extern BOOL print_write_doc(struct ohos_print_doc *doc, const BYTE *buf, unsigned int size);
+extern BOOL print_end_doc(struct ohos_print_doc *doc);
 #endif
 
 /* ## Resource-ID ## */
