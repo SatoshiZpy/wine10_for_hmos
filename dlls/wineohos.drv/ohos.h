@@ -15,12 +15,6 @@
 #include "unixlib.h"
 #include "wine/debug.h"
 
-/* Define to the soname of the libGLESv3 library. */
-#define SONAME_LIBGLESV3 "libGLESv3.so"
-
-/* Define to the soname of the libvulkan library. */
-#define SONAME_LIBVULKAN "libvulkan.so"
-
 /* ohos private window data */
 struct ohos_win_data
 {

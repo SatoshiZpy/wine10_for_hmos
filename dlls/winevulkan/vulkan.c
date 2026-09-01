@@ -559,7 +559,7 @@ static VkResult wine_vk_device_convert_create_info(VkPhysicalDevice client_physi
     /* OHOS: Check if relaxed mode is enabled */
     const char *ohos_dxvk_features = getenv("OHOS_DXVK_FEATURES");
     const int ohos_relaxed = ohos_dxvk_features && ohos_dxvk_features[0] == '1' && ohos_dxvk_features[1] == '\0';
-    WARN("OHOS_DXVK: ohos_relaxed=%d, env=%s\n", ohos_relaxed, ohos_dxvk_features ? ohos_dxvk_features : "(null)");
+    TRACE("OHOS_DXVK: ohos_relaxed=%d, env=%s\n", ohos_relaxed, ohos_dxvk_features ? ohos_dxvk_features : "(null)");
 
     /* Filter out unsupported extensions in relaxed mode */
     const char **filtered_extensions = conversion_context_alloc(ctx, extensions_count * sizeof(*filtered_extensions));
