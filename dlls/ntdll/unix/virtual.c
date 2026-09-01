@@ -2243,7 +2243,24 @@ failed:
         ERR( "out of memory for %p-%p\n", base, (char *)base + size );
         status = STATUS_NO_MEMORY;
     }
-    else if (errno == EEXIST) status = STATUS_CONFLICTING_ADDRESSES;
+    else if (errno == EEXIST)
+    {
+        /* Fixed-base (non-relocatable) images must be mapped at their ImageBase.
+         * If the requested base is currently covered by a reserved area that
+         * carries some real mapping (e.g. leftover from the parent address space
+         * after fork), try to release that reserved area and retry once.
+         * This lets non-ASLR executables load at their preferred base instead of
+         * failing with STATUS_CONFLICTING_ADDRESSES.  Normal (dynamic-base)
+         * images are unaffected because they never end up here. */
+        remove_reserved_area( base, end - (char *)base );
+        if (!find_view_range( base, size ) &&
+            !mmap_is_in_reserved_area( base, end - (char *)base ))
+        {
+            if (anon_mmap_tryfixed( base, end - (char *)base, unix_prot, 0 ) != MAP_FAILED)
+                return STATUS_SUCCESS;
+        }
+        status = STATUS_CONFLICTING_ADDRESSES;
+    }
     else
     {
         ERR( "mmap error %s for %p-%p, unix_prot %#x\n",
