@@ -4065,7 +4065,22 @@ NTSTATUS get_full_path( char *name, const WCHAR *curdir, UNICODE_STRING *nt_name
     ULONG prefix_len, len = max( ARRAY_SIZE(unix_prefixW), wcslen(curdir) ) + strlen(name) + 1;
 
     /* special case for Unix file name */
+#ifdef __OHOS__
+    if (name[0] == '/' && !find_drive_nt_root( name, strlen(name), &ret, FILE_OPEN ))
+    {
+        if (!ret)
+        {
+            ULONG ulen = strlen(name) + 1;
+            if (!(ret = malloc( sizeof(unix_prefixW) + ulen * sizeof(WCHAR) ))) return STATUS_NO_MEMORY;
+            memcpy( ret, unix_prefixW, sizeof(unix_prefixW) );
+            ntdll_umbstowcs( name, ulen, ret + ARRAY_SIZE(unix_prefixW), ulen );
+            collapse_path( ret );
+        }
+        goto done;
+    }
+#else
     if (name[0] == '/' && !find_drive_nt_root( name, strlen(name), &ret, FILE_OPEN )) goto done;
+#endif
 
     if (!(ret = malloc( len * sizeof(WCHAR) ))) return STATUS_NO_MEMORY;
 

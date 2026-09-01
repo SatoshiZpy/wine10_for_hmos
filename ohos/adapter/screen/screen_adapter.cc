@@ -10,12 +10,9 @@
 namespace ohos {
 namespace adapter {
 
-ScreenAdapter::ScreenAdapter() {
-  initFontSizeScale();
-}
+ScreenAdapter::ScreenAdapter() {}
 
-void ScreenAdapter::ConvertDisplay(aki::Value complete_display,
-                                   Display& display) {
+static void ConvertDisplay(aki::Value complete_display, Display& display) {
   aki::Value base_display = complete_display["baseDisplay"];
   aki::Value avail_area = complete_display["availArea"];
 
@@ -28,11 +25,9 @@ void ScreenAdapter::ConvertDisplay(aki::Value complete_display,
   display.width = base_display["width"].As<int32_t>();
   display.height = base_display["height"].As<int32_t>();
   display.density_dpi = base_display["densityDPI"].As<float>();
-  display.orientation =
-      base_display["orientation"].As<DisplayOrientation>();
+  display.orientation = base_display["orientation"].As<DisplayOrientation>();
   display.density_pixels = base_display["densityPixels"].As<float>();
-  display.scaled_density =
-      base_display["scaledDensity"].As<float>() * font_size_zoom_;
+  display.scaled_density = base_display["scaledDensity"].As<float>();
   display.x_dpi = base_display["xDPI"].As<float>();
   display.y_dpi = base_display["yDPI"].As<float>();
 
@@ -42,7 +37,18 @@ void ScreenAdapter::ConvertDisplay(aki::Value complete_display,
   display.avail_area.height = avail_area["height"].As<int32_t>();
 }
 
-void ScreenAdapter::GetDefaultDisplay(Display& display) {
+bool ScreenAdapter::GetDefaultDisplay(Display& display) {
+  if (default_display_.id > 0) {
+    display = default_display_;
+    return true;
+  }
+
+  auto func = ohos::adapter::GetJSFunction("OhosDisplayAdapter.GetDefaultDisplay");
+  if (!func) {
+    LOGE("GetDefaultDisplay: JSFunction not available");
+    return false;
+  }
+
   std::promise<bool> promise;
   std::function<void(aki::Value)> callback =
     [&](aki::Value complete_display) {
@@ -54,16 +60,26 @@ void ScreenAdapter::GetDefaultDisplay(Display& display) {
     promise.set_value(true);
   };
 
-  if (auto func =
-          ohos::adapter::GetJSFunction("OhosDisplayAdapter.GetDefaultDisplay")) {
-    func->Invoke<void>(callback);
-    promise.get_future().get();
-  }
-
-  return;
+  func->Invoke<void>(callback);
+  return promise.get_future().get();
 }
 
-void ScreenAdapter::GetAllDisplays(std::vector<Display>& ohos_displays) {
+void ScreenAdapter::SetDefaultDisplay(const Display& display) {
+  LOGI("SetDefaultDisplay id: %{public}d, name: %{public}s, size: %{public}d, %{public}d"
+       "avail_area: %{public}d, %{public}d, %{public}d, %{public}d",
+    display.id, display.name.c_str(), display.width, display.height,
+    display.avail_area.left, display.avail_area.top,
+    display.avail_area.width, display.avail_area.height);
+  default_display_ = display;
+}
+
+bool ScreenAdapter::GetAllDisplays(std::vector<Display>& ohos_displays) {
+  auto func = ohos::adapter::GetJSFunction("OhosDisplayAdapter.GetAllDisplays");
+  if (!func) {
+    LOGE("GetAllDisplays: JSFunction not available");
+    return false;
+  }
+
   std::promise<bool> promise;
   std::function<void(aki::Value, int32_t)> callback =
     [&](aki::Value complete_displays, int32_t len) {
@@ -82,11 +98,8 @@ void ScreenAdapter::GetAllDisplays(std::vector<Display>& ohos_displays) {
     promise.set_value(true);
   };
 
-  if (auto func =
-          ohos::adapter::GetJSFunction("OhosDisplayAdapter.GetALLDisplays")) {
-    func->Invoke<void>(callback);
-    promise.get_future().get();
-  }
+  func->Invoke<void>(callback);
+  return promise.get_future().get();
 }
 
 ScreenAdapter& ScreenAdapter::GetInstance() {
@@ -98,13 +111,6 @@ void ScreenAdapter::RegisterDisplayMonitor() {
   if (auto func =
         ohos::adapter::GetJSFunction("OhosDisplayAdapter.registerDisplayMonitor")) {
     func->Invoke<void>();
-  }
-}
-
-void ScreenAdapter::initFontSizeScale() {
-  if (auto func =
-        ohos::adapter::GetJSFunction("OhosDisplayAdapter.getFontSizeScale")) {
-    font_size_zoom_ = func->Invoke<float>();
   }
 }
 
@@ -124,19 +130,24 @@ void OnDisplayChangeCallback(const std::string& event, int32_t id) {
 }
 
 void OnFontSizeChangeCallback(float zoom) {
-  ScreenAdapter::GetInstance().SetFontSizeZoom(zoom);
   if (ScreenAdapter::GetInstance().GetCallback() != nullptr) {
     ScreenAdapter::GetInstance().GetCallback()("change", 0);
   }
 }
 
-void ScreenAdapter::SetFontSizeZoom(float zoom) {
-  font_size_zoom_ = zoom;
+void SetDefaultDisplay(aki::Value complete_display) {
+  if (complete_display["id"].As<int32_t>() == -1) {
+    return;
+  }
+  Display display;
+  ConvertDisplay(complete_display, display);
+  ScreenAdapter::GetInstance().SetDefaultDisplay(display);
 }
 
 JSBIND_GLOBAL() {
   JSBIND_FUNCTION(OnDisplayChangeCallback);
   JSBIND_FUNCTION(OnFontSizeChangeCallback);
+  JSBIND_FUNCTION(SetDefaultDisplay);
 }
 
 }  // namespace adapter

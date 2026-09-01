@@ -23,21 +23,19 @@ class ADAPTER_EXPORT_API ScreenAdapter {
   using DisplayChangeCallback =
       std::function<void(const std::string&, int32_t)>;
 
-  void GetDefaultDisplay(Display& display);
-  void GetAllDisplays(std::vector<Display>& displays);
+  void SetDefaultDisplay(const Display& display);
+  bool GetDefaultDisplay(Display& display);
+  bool GetAllDisplays(std::vector<Display>& displays);
   void RegisterDisplayMonitor();
-  void initFontSizeScale();
   void RegisterCallback(DisplayChangeCallback callback);
-  void SetFontSizeZoom(float zoom);
   DisplayChangeCallback GetCallback();
   static ScreenAdapter& GetInstance();
 
  private:
   ScreenAdapter();
-  void ConvertDisplay(aki::Value complete_display, Display& display);
 
   DisplayChangeCallback callback_;
-  float font_size_zoom_ = 1.0f;
+  Display default_display_;
 };
 
 }  // namespace adapter

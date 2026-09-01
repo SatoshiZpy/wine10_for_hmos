@@ -168,13 +168,14 @@ static NewWindowParam Builder(const struct window_param* param)
 static Display GetDisplay()
 {
     Display display;
-    ScreenAdapter::GetInstance().GetDefaultDisplay(display);
+    if (!ScreenAdapter::GetInstance().GetDefaultDisplay(display)) {
+      LOGE("get default display failed");
+    }
     return display;
 }
 
 static void UpdateWindow(int widget_id, const NewWindowParam& param)
 {
-    MutexLock lock_protect(mutex);
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
         LOGE("UpdateWindow: window not exists, widgetId %{public}d", widget_id);
@@ -183,29 +184,27 @@ static void UpdateWindow(int widget_id, const NewWindowParam& param)
     LOGI("UpdateWindow widgetId %{public}d", widget_id);
 }
 
-ohos_window CreateNativeWindow(const struct window_param* param, int* widget_id)
+int CreateNativeWindow(const struct window_param* param)
 {
     MutexLock lock_protect(mutex);
     if (!param) {
         LOGE("invalid param");
-        return nullptr;
+        return -1;
     }
 
     NewWindowParam win_param = Builder(param);
-    int create_id = -1;
-    auto window = WineWindow::Create(win_param, &create_id);
+    int widget_id = -1;
+    auto window = WineWindow::Create(win_param, &widget_id);
     if (!window) {
         LOGE("CreateWindow error");
-        return nullptr;
+        return -1;
     }
-    *widget_id = create_id;
-    LOGI("CreateNativeWindow widgetId %{public}d", create_id);
-    return (ohos_window)window.get();
+    LOGI("CreateNativeWindow widgetId %{public}d", widget_id);
+    return widget_id;
 }
 
 void CloseNativeWindow(int widget_id)
 {
-    MutexLock lock_protect(mutex);
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
         LOGE("CloseNativeWindow: window not exists, widgetId %{public}d", widget_id);
@@ -271,7 +270,6 @@ void SetCursorStyle(int widget_id, int cursor_type)
 
 void SetWindowBounds(int widget_id, const struct window_bounds* bounds)
 {
-    MutexLock lock_protect(mutex);
     if (!bounds) {
         LOGE("invalid bounds");
         return;
@@ -282,9 +280,43 @@ void SetWindowBounds(int widget_id, const struct window_bounds* bounds)
         LOGE("SetWindowBounds: window not exists, widgetId %{public}d", widget_id);
         return;
     }
-    LOGI("SetWindowBounds widgetId %{public}d", widget_id);
+    LOGI("SetWindowBounds widgetId %{public}d, rect: %{public}d, %{public}d, %{public}d, %{public}d",
+        widget_id, bounds->left, bounds->top, bounds->width, bounds->height);
     ::WindowRect rect = {bounds->left, bounds->top, bounds->width, bounds->height};
     window->SetBounds(rect);
+}
+
+void MaximizeWindow(int widget_id)
+{
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
+    if (!window) {
+        LOGE("MaximizeWindow: window not exists, widgetId %{public}d", widget_id);
+        return;
+    }
+    LOGI("MaximizeWindow widgetId %{public}d", widget_id);
+    window->Maximize();
+}
+
+void MinimizeWindow(int widget_id)
+{
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
+    if (!window) {
+        LOGE("MinimizeWindow: window not exists, widgetId %{public}d", widget_id);
+        return;
+    }
+    LOGI("MinimizeWindow widgetId %{public}d", widget_id);
+    window->Minimize();
+}
+
+void RestoreWindow(int widget_id)
+{
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
+    if (!window) {
+        LOGE("RestoreWindow: window not exists, widgetId %{public}d", widget_id);
+        return;
+    }
+    LOGI("RestoreWindow widgetId %{public}d", widget_id);
+    window->Restore();
 }
 
 void SetParentWindow(int widget_id, int parent_id)
@@ -345,11 +377,11 @@ struct window_bounds GetInitialBounds()
     return bounds;
 }
 
-ohos_native_window GetNativeWindow(ohos_window w)
+ohos_native_window GetNativeWindow(int widget_id)
 {
-    WineWindow* window = (WineWindow*)w;
+    auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (!window) {
-        LOGE("invalid wine window");
+        LOGE("GetNativeWindow: window not exists, widgetId %{public}d", widget_id);
         return nullptr;
     }
     return window->GetNativeWindow();
@@ -543,7 +575,7 @@ int OpenNativeFileWithChooser(const char *path)
         LOGE("OpenNativeFileWithChooser: path is nullptr");
         return -1;
     }
-    ohos::adapter::FileManagerAdapter::GetInstance().OpenVerifiedItemWithChooser(std::string(path));
+    FileManagerAdapter::GetInstance().OpenVerifiedItemWithChooser(std::string(path));
     return 0;
 }
 

@@ -30,8 +30,12 @@ export class WineAbility extends WineBaseAbility {
   private deviceInfoAdapter: DeviceInfoAdapter | undefined = undefined;
   private wineLoader: WineLoaderAdapter | undefined = undefined;
   private callback: StatusBarCallback = {
-    iconClick: (data: emitter.EventData) => {},
-    rightMenuClick: (data: emitter.EventData) => {},
+    iconClick: (data: emitter.EventData) => {
+      LogUtil.info(TAG, 'iconClick data: ' + JSON.stringify(data));
+    },
+    rightMenuClick: (data: emitter.EventData) => {
+      LogUtil.info(TAG, 'rightMenuClick data: ' + JSON.stringify(data));
+    },
   }
 
   onConfigurationUpdate(config: Configuration) {
@@ -45,6 +49,9 @@ export class WineAbility extends WineBaseAbility {
     this.abilityManager = Inject.get(AbilityManager);
     this.nativeThemeAdapter = Inject.get(NativeThemeAdapter);
     this.displayAdapter = Inject.get(DisplayAdapter);
+    this.displayAdapter.getDefaultDisplay((display) => {
+      this.nativeContext.SetDefaultDisplay(display);
+    });
     Inject.get(PermissionManagerAdapter).initPermissions();
     this.deviceInfoAdapter = Inject.get(DeviceInfoAdapter);
     Inject.get(TrayManager).addToStatusBar(this.context, this.callback);

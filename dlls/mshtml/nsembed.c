@@ -812,7 +812,7 @@ static LRESULT WINAPI gecko_proxy_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LP
             if (FAILED(hres)) {
                 ERR("CoMarshalInterThreadInterfaceInStream failed on Gecko thread: %08lx\n", hres);
             }
-            /* Release the raw pointer — the calling thread will use the proxy */
+            /* Release the raw pointer the calling thread will use the proxy */
             IUnknown_Release(obj);
         }
 

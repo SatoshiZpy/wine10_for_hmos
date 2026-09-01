@@ -10,5 +10,5 @@ component("screen") {
       "screen_adapter.h",
   ]
 
-  deps = [ "//third_party/aki:aki_jsbind" ]
+  libs = [ "native_display_manager" ]
 }

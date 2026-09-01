@@ -4,7 +4,8 @@
 
 import JsBindingUtils from '../utils/JsBindingUtils';
 import Inject from '../common/InjectModule';
-import lazy { DisplayAdapter, CompleteDisplay } from '../adapter/DisplayAdapter';
+import lazy { DisplayAdapter } from '../adapter/DisplayAdapter';
+import { CompleteDisplay } from '../interface/CommonInterface';
 
 function implDisplayAdapter(): DisplayAdapter {
   return Inject.getOrCreate(DisplayAdapter);
@@ -14,9 +15,9 @@ function getDefaultDisplay(callback: (completeDisplay: CompleteDisplay) => void)
   implDisplayAdapter().getDefaultDisplay(callback);
 }
 
-function getALLDisplays(callback: (completeDisplays: Array<CompleteDisplay>,
+function getAllDisplays(callback: (completeDisplays: Array<CompleteDisplay>,
                                    length: number) => void) {
-  implDisplayAdapter().getALLDisplays(callback);
+  implDisplayAdapter().getAllDisplays(callback);
 }
 
 function registerDisplayMonitor() {
@@ -30,7 +31,7 @@ function getFontSizeScale(): number {
 export class DisplayAdapterBind {
   static bind() {
     JsBindingUtils.bindFunction('OhosDisplayAdapter.GetDefaultDisplay', getDefaultDisplay);
-    JsBindingUtils.bindFunction('OhosDisplayAdapter.GetALLDisplays', getALLDisplays);
+    JsBindingUtils.bindFunction('OhosDisplayAdapter.GetAllDisplays', getAllDisplays);
     JsBindingUtils.bindFunction('OhosDisplayAdapter.registerDisplayMonitor', registerDisplayMonitor);
     JsBindingUtils.bindFunction('OhosDisplayAdapter.getFontSizeScale', getFontSizeScale);
   }

@@ -1103,6 +1103,35 @@ static void contexts_from_server( CONTEXT *context, struct context_data server_c
     else context_from_server( wow_context, &server_contexts[0], main_image_info.Machine );
 }
 
+#ifdef __OHOS__
+/* OHOS musl reserves a 36KB per-thread signal stack at thread entry
+ * (__pthread_reserve_signal_stack): mmap(0x9000); the first __default_guardsize
+ * bytes are PROT_NONE, the rest is installed as the thread's sigaltstack, and
+ * the mmap base is kept in the TCB at TPIDR-200 (musl commit f13409b1, libc
+ * build-id 0b3062194513a0486111e9fc20a2a3ab). Wine's SA_ONSTACK handlers run on
+ * it during the thread's life; at exit we free it for real, then make musl's
+ * __pthread_release_signal_stack() a clean no-op: that helper reads
+ * uninitialized old_stack from sigaltstack(SS_DISABLE,&old) (the kernel
+ * short-circuits SS_DISABLE without writing *old) and its second munmap gets
+ * old.ss_sp=0 / old.ss_size=TPIDR+0xeac0, unmapping the running thread's own
+ * stack -> deterministic SIGSEGV. Nulling the stored base makes it hit the
+ * `if (self->signal_stack == NULL) return;` early-exit, so the rest of
+ * pthread_exit (TSD dtors, cleanup handlers, robust list, stack unmap,
+ * joiner wake) all runs normally. */
+static void ohos_release_signal_stack( void )
+{
+    uintptr_t *signal_stack_p = (uintptr_t *)((char *)__builtin_thread_pointer() - 200);
+    uintptr_t base = *signal_stack_p;
+    stack_t disable = { .ss_flags = SS_DISABLE };
+
+    /* Detach the kernel's alt-stack reference first. old=NULL on purpose:
+     * the SS_DISABLE path may not write *old, and we never read it. */
+    sigaltstack( &disable, NULL );
+
+    if (base) munmap( (void *)base, 0x9000 /* musl RESERVE_SIGNAL_STACK_SIZE */ );
+    *signal_stack_p = 0;
+}
+#endif
 
 /***********************************************************************
  *           pthread_exit_wrapper
@@ -1113,6 +1142,9 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
     close( ntdll_get_thread_data()->wait_fd[1] );
     close( ntdll_get_thread_data()->reply_fd );
     close( ntdll_get_thread_data()->request_fd );
+#ifdef __OHOS__
+    ohos_release_signal_stack();
+#endif
     pthread_exit( UIntToPtr(status) );
 }
 

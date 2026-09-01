@@ -35,6 +35,30 @@ function setBounds(id: number, bounds: WindowBound) {
   implSubWindowAdapter().setBounds(id, bounds);
 }
 
+function setFullscreen(id: number) {
+  implSubWindowAdapter().setFullscreen(id);
+}
+
+function maximize(id: number) {
+  implSubWindowAdapter().maximize(id);
+}
+
+function unMaximize(id: number) {
+  implSubWindowAdapter().unMaximize(id);
+}
+
+function minimize(id: number) {
+  implSubWindowAdapter().minimize(id);
+}
+
+function restore(id: number) {
+  implSubWindowAdapter().restore(id);
+}
+
+function activateWindow(id: number) {
+  implSubWindowAdapter().activateWindow(id);
+}
+
 export class SubWindowAdapterBind {
   static bind() {
     JsBindingUtils.bindFunction("SubWindow.CreateWindow", createWindow);
@@ -43,5 +67,11 @@ export class SubWindowAdapterBind {
     JsBindingUtils.bindFunction("SubWindow.CloseWindow", closeWindow);
     JsBindingUtils.bindFunction("SubWindow.DestroyWindow", destroyWindow);
     JsBindingUtils.bindFunction("SubWindow.SetBounds", setBounds);
+    JsBindingUtils.bindFunction("SubWindow.SetFullscreen", setFullscreen);
+    JsBindingUtils.bindFunction("SubWindow.Maximize", maximize);
+    JsBindingUtils.bindFunction("SubWindow.UnMaximize", unMaximize);
+    JsBindingUtils.bindFunction("SubWindow.Minimize", minimize);
+    JsBindingUtils.bindFunction("SubWindow.Restore", restore);
+    JsBindingUtils.bindFunction("SubWindow.ActivateWindow", activateWindow);
   }
 }

@@ -20,12 +20,14 @@ class WinePopupWindow : public WineWindow {
     ~WinePopupWindow() override;
 
     WinePopupWindow* AsPopupWindow() override;
-
     int32_t OnCreateWindow() override;
+    void TriggerStateChanges() override;
+    void UpdateStateChanges() override;
 
     void Show() override;
     void Hide() override;
     void Close() override;
+    bool IsVisible() const override;
     void SetBounds(const WindowRect& rect) override;
 };
 

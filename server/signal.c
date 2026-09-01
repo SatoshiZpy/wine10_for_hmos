@@ -34,6 +34,11 @@
 #include "process.h"
 #include "thread.h"
 #include "request.h"
+#include "logging.h"
+
+#ifdef __OHOS__
+# include "ohos_adapter.h"
+#endif
 
 #if defined(linux) && defined(__SIGRTMIN)
 /* the signal used by linuxthreads as exit signal for clone() threads */
@@ -183,7 +188,11 @@ static void sighup_callback(void)
 static void sigterm_callback(void)
 {
     flush_registry();
+#ifdef __OHOS__
+    KillNativeProcess(1);
+#else
     exit(1);
+#endif
 }
 
 /* SIGINT callback */
@@ -225,7 +234,11 @@ static void do_sigchld( int signum )
 /* SIGSEGV handler */
 static void do_sigsegv( int signum )
 {
+#ifdef __OHOS__
+    ERR("wineserver crashed, please enable coredumps (ulimit -c unlimited) and restart.\n");
+#else
     fprintf( stderr, "wineserver crashed, please enable coredumps (ulimit -c unlimited) and restart.\n");
+#endif
     abort();
 }
 
@@ -320,6 +333,11 @@ void init_signals(void)
     return;
 
 error:
+#ifdef __OHOS__
+    ERR("failed to initialize signal handlers\n");
+    KillNativeProcess(1);
+#else
     fprintf( stderr, "failed to initialize signal handlers\n" );
     exit(1);
+#endif
 }

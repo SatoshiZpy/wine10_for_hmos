@@ -512,7 +512,6 @@ static void init_paths(void)
 #ifdef __OHOS__
     TRACE("loaded bin_dir: %s\n", bin_dir);
     TRACE("loaded dll_dir: %s\n", dll_dir);
-    TRACE("loaded system_dll_paths: %s\n", (system_dll_paths));
     TRACE("loaded ntdll_dir: %s\n", ntdll_dir);
     TRACE("loaded alt_build_dir: %s\n", (alt_build_dir));
     TRACE("loaded home_dir: %s\n", (home_dir));
@@ -2433,10 +2432,12 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
     int socketfd = GetGlobalDescriptor(SERVER_IPC_CHANNEL);
     if (socketfd > 0) {
         char socket_env[64];
-        snprintf( socket_env, sizeof(socket_env), "WINESERVERSOCKET=%u", socketfd );
+        snprintf( socket_env, sizeof(socket_env), "%u", socketfd );
 
         TRACE("socket_env = %s\n", socket_env);
-        putenv( socket_env );
+        /* setenv copies the value; block-local buffer must not be passed to
+         * putenv (environ would point at dead stack after the block exits) */
+        setenv( "WINESERVERSOCKET", socket_env, 1 );
     }
 #endif
 

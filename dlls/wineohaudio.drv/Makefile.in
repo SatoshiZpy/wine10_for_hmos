@@ -1,0 +1,8 @@
+MODULE = wineohaudio.drv
+UNIXLIB = wineohaudio.so
+IMPORTS = uuid ole32 advapi32
+DELAYIMPORTS = winmm
+UNIX_LIBS = $(PTHREAD_LIBS) $(OHOS_LIBS)
+
+SOURCES = \
+    ohos_audio.c

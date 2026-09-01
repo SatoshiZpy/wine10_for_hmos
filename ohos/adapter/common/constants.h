@@ -36,6 +36,14 @@ enum WindowInitType {
   kBubble,
 };
 
+enum PlatformWindowState {
+  kUnknown,
+  kMaximized,
+  kMinimized,
+  kNormal,
+  kFullScreen,
+};
+
 struct WindowRect {
  public:
   int32_t left = 0;

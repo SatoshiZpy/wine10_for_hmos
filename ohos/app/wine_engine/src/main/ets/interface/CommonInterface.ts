@@ -7,6 +7,7 @@ import type inputMethod from '@ohos.inputMethod';
 import type GestureEvent from '@ohos.multimodalInput.gestureEvent';
 import type ConfigurationConstant from '@ohos.app.ability.ConfigurationConstant';
 import type window from '@ohos.window';
+import type display from '@ohos.display';
 
 export class PowerMonitor {
   OnSuspend: () => void;
@@ -50,6 +51,12 @@ export interface WindowLimits {
   maxWidth: number;
   minHeight: number;
   minWidth: number;
+}
+
+export interface CompleteDisplay {
+  id: number;
+  baseDisplay: display.Display | undefined;
+  availArea: display.Rect | undefined;
 }
 
 export interface NativeContext {
@@ -106,6 +113,7 @@ export interface NativeContext {
   ClearWindowEventFilter: (origin_window_id: number) => void;
 
   UpdateWindowDeviceModeSwitchCB: (mode: DeviceMode) => void;
+  SetDefaultDisplay: (display: CompleteDisplay) => void;
 }
 
 export interface IParams {

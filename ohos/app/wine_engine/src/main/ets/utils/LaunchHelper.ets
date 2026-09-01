@@ -15,14 +15,18 @@ export default class LaunchHelper {
                            options: StartOptions): Promise<boolean> {
     return new Promise<boolean>((resolve, reject) => {
       try {
-        let context = uiContext as common.UIAbilityContext ||
-          uiContext as common.UIExtensionContext;
-        if (!context) {
+        if (!uiContext) {
           LogUtil.error(TAG, `excute failed, want: ${JSON.stringify(want)}, options: ${JSON.stringify(options)}`);
           resolve(false);
           return;
         }
-        context.startAbility(want, options)
+        const activeCtx = uiContext as common.UIAbilityContext;
+        if (!activeCtx) {
+          LogUtil.error(TAG, `excute failed. Cause: startAbility with StartOptions requires UIAbilityContext`);
+          resolve(false);
+          return;
+        }
+        activeCtx.startAbility(want, options)
           .then(() => {
             resolve(true);
           })

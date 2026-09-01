@@ -44,7 +44,6 @@
 #include "handle.h"
 #include "request.h"
 
-
 struct namespace
 {
     unsigned int        hash_size;       /* size of hash table */

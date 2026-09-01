@@ -1625,10 +1625,6 @@ static void update_user_profile(void)
 #ifdef __OHOS__
 static const char exagear_config_conf[] =
 "EXAGEAR_DISABLE_LDST_ADDR_OPT=\"y\"\n"
-"EXAGEAR_SMO_MODE=\"all\"\n"
-"EXAGEAR_SMO_SEVERITY=\"full\"\n"
-"EXAGEAR_DISABLE_SMO_IN_JIT=\"n\"\n"
-"EXAGEAR_FAST_MATH=\"n\"\n"
 "EXAGEAR_SAFE_MODE=\"y\"\n";
 
 static const struct { const WCHAR *name; const char *data; SIZE_T size; } exagear_files[] =
@@ -1658,10 +1654,12 @@ static void create_exagearconf(void)
     for (i = 0; i < ARRAY_SIZE(exagear_files); i++)
     {
         swprintf( dst_file, MAX_PATH, L"%s\\%s", dst_dir, exagear_files[i].name );
-        hfile = CreateFileW( dst_file, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL );
+        /* 只在文件不存在时新建, 避免每次 prefix 更新都覆盖用户配置 */
+        hfile = CreateFileW( dst_file, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL );
         if (hfile == INVALID_HANDLE_VALUE)
         {
-            WARN( "Failed to create %s: error %lu\n", debugstr_w(exagear_files[i].name), GetLastError() );
+            if (GetLastError() != ERROR_FILE_EXISTS)
+                WARN( "Failed to create %s: error %lu\n", debugstr_w(exagear_files[i].name), GetLastError() );
             continue;
         }
         WriteFile( hfile, exagear_files[i].data, exagear_files[i].size, &written, NULL );

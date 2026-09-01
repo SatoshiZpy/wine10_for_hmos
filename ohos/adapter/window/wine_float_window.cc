@@ -31,6 +31,9 @@ void WineFloatWindow::Close()
 
 void WineFloatWindow::SetBounds(const WindowRect& rect)
 {
+  previous_bounds_ = bounds_;
+  bounds_ = rect;
+
   SystemFloatingWindowAdapter::GetInstance().SetBounds(GetWidget(), rect);
 }
 

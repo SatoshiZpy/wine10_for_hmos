@@ -818,6 +818,14 @@ HWND get_desktop_window(void)
             ' ','/','d','e','s','k','t','o','p',0};
         static const WCHAR system_dir[] = {'C',':','\\','w','i','n','d','o','w','s','\\',
             's','y','s','t','e','m','3','2','\\',0};
+#ifdef __OHOS__
+        static const WCHAR eventW[] = {'\\','K','e','r','n','e','l','O','b','j','e','c','t','s',
+            '\\','_','_','e','x','p','l','o','r','e','r','_','e','v','e','n','t',0};
+        UNICODE_STRING nameW;
+        OBJECT_ATTRIBUTES attr;
+        LARGE_INTEGER timeout;
+        HANDLE event;
+#endif
         RTL_USER_PROCESS_PARAMETERS params = { sizeof(params), sizeof(params) };
         PS_ATTRIBUTE_LIST ps_attr;
         PS_CREATE_INFO create_info;
@@ -825,6 +833,18 @@ HWND get_desktop_window(void)
         PEB *peb = NtCurrentTeb()->Peb;
         HANDLE process, thread;
         unsigned int status;
+
+#ifdef __OHOS__
+        RtlInitUnicodeString( &nameW, eventW );
+        InitializeObjectAttributes( &attr, &nameW, OBJ_OPENIF, 0, NULL );
+        status = NtCreateEvent( &event, EVENT_ALL_ACCESS, &attr, NotificationEvent, 0 );
+        if (status == STATUS_OBJECT_NAME_EXISTS) goto wait;
+        if (status)
+        {
+            ERR( "failed to create explorer event, expect trouble\n" );
+            return 0;
+        }
+#endif
 
         SERVER_START_REQ( set_user_object_info )
         {
@@ -870,6 +890,25 @@ HWND get_desktop_window(void)
             status = NtCreateUserProcess( &process, &thread, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS,
                                           NULL, NULL, 0, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, &params,
                                           &create_info, &ps_attr );
+#ifdef __OHOS__
+        if (status)
+        {
+            ERR_(win)( "failed to start explorer %x\n", status );
+            NtClose( event );
+            return 0;
+        }
+        TRACE_(win)( "started explorer\n" );
+        NtResumeThread( thread, NULL );
+        NtClose( thread );
+        NtClose( process );
+wait:
+        // Use NtWaitForSingleObject instead of NtUserWaitForInputIdle to prevent abnormal deadlock.
+        timeout.QuadPart = -((ULONGLONG)10 * 1000 * 10000);
+        if (NtWaitForSingleObject( event, FALSE, &timeout ) == WAIT_TIMEOUT)
+            ERR_(win)( "explorer event wait timed out\n" );
+        else TRACE_(win)( "explorer event wait finished\n" );
+        NtClose( event );
+#else
         if (!status)
         {
             NtResumeThread( thread, NULL );
@@ -879,7 +918,7 @@ HWND get_desktop_window(void)
             NtClose( process );
         }
         else ERR_(win)( "failed to start explorer %x\n", status );
-
+#endif
         SERVER_START_REQ( get_desktop_window )
         {
             req->force = 1;
@@ -895,7 +934,16 @@ HWND get_desktop_window(void)
     if (!thread_info->top_window) ERR_(win)( "failed to create desktop window\n" );
     else user_driver->pSetDesktopWindow( UlongToHandle( thread_info->top_window ));
 
+#ifdef __OHOS__
+    // If desktop window creation fails and classes are not registered,
+    // it will cause an infinite loop.
+    if (thread_info->top_window)
+    {
+        register_builtin_classes();
+    }
+#else
     register_builtin_classes();
+#endif
     return UlongToHandle( thread_info->top_window );
 }
 

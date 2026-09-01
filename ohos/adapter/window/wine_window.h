@@ -7,6 +7,7 @@
 
 #include "ohos/adapter/window/window_common.h"
 
+#include <native_buffer/native_buffer.h>
 #include <native_window/external_window.h>
 
 #include <atomic>
@@ -14,9 +15,14 @@
 #include <string>
 #include <unordered_map>
 
+#include "ohos/adapter/event/event_manager.h"
 #include "ohos/adapter/window/window_state_monitor.h"
+#include "ohos/adapter/xcomponent/event/window_event_common.h"
 
 namespace ohos::adapter::window {
+
+using namespace ohos::adapter::event;
+using namespace ohos::adapter::xcomponent;
 
 class WineFakeWindow;
 class WineFloatWindow;
@@ -72,13 +78,20 @@ class WineWindow {
     void OnSurfaceCreated();
     void OnSurfaceDestoryed();
 
+    void Applied(const WindowRect& origin_bounds,
+                 const WindowRect& bounds,
+                 bool force = false);
+    void SetWindowState(PlatformWindowState new_state, bool isTrigger = true);
+
+    void UpdateBoundsChanges(int top, int left, int width, int height);
+
     virtual void Show();
     virtual void Hide();
     virtual void Close();
     virtual bool IsVisible() const;
     virtual void SetTitle(const std::string& title);
     virtual void SetBounds(const WindowRect& rect);
-    virtual void SetFullscreen(bool fullscreen, int64_t target_display_id);
+    virtual void SetFullscreen(bool fullscreen);
     virtual void Maximize();
     virtual void Minimize();
     virtual void Restore();
@@ -86,17 +99,61 @@ class WineWindow {
     virtual void Deactivate();
     virtual std::string GetWindowUniqueId() const;
 
+    void SetFocus(bool focus) { has_focus_ = focus; }
+    bool HasFocus() const { return has_focus_; }
+
+    void SetCurrentDisplayId(int32_t display_id) {
+      current_display_id_ = display_id;
+    }
+    int32_t GetCurrentDisplayId() {
+      return current_display_id_;
+    }
+
+    WindowStyle GetWindowStyle() { return window_style_; }
+
   protected:
     bool InitSurface();
 
+    // The bounds of our window before the window was maximized.
+    WindowRect restored_bounds_;
+
+    // The bounds of window
+    WindowRect bounds_;
+
+    // keep the previous set of bounds
+    WindowRect previous_bounds_;
+
+    // Contains the current state of the window.
+    PlatformWindowState state_ = PlatformWindowState::kUnknown;
+
+    // Contains the previous state of the window.
+    PlatformWindowState previous_state_ = PlatformWindowState::kUnknown;
+
+    // Contains the previous state of the window before enter fullscreen.
+    PlatformWindowState previous_enter_fullscreen_state_ = PlatformWindowState::kUnknown;
+
+    // Contains the previous state of the window before enter minimize.
+    PlatformWindowState previous_enter_minimize_state_ = PlatformWindowState::kUnknown;
+
   private:
-    virtual void OnInitialize(const NewWindowParam& param) {}
+    void HandleEvent(std::shared_ptr<Event> event);
+    void OnFocusEvent();
+    void OnBlurEvent();
+    void OnWindowEvent(std::shared_ptr<Event> event);
+    void OnWindowStatusChangeEvent(std::shared_ptr<Event> event);
+    void OnWindowRectChangeEvent(std::shared_ptr<Event> event);
+    void OnWindowCaptionButtonRectChangeEvent(std::shared_ptr<Event> event);
+    void OnWindowDisplayIdChangeEvent(std::shared_ptr<Event> event);
+
+    virtual void OnInitialize() {}
     virtual int32_t OnCreateWindow() { return -1; }
+    virtual void TriggerStateChanges() {}
+    virtual void UpdateStateChanges() {}
 
     WindowStyle BuilderStyle(const NewWindowParam& param);
 
-    void RegistWindowEvent() {}
-    void UnRegistWindowEvent() {}
+    void RegistWindowEvent();
+    void UnRegistWindowEvent();
 
     bool HasSurface()
     {
@@ -110,6 +167,18 @@ class WineWindow {
     
     void UpdateSurface(WindowStateMonitor::State newState) { monitor_.SetState(newState); } 
 
+    bool IsMaximized() {
+      return PlatformWindowState::kMaximized == state_;
+    }
+    bool IsMinimized() {
+      return PlatformWindowState::kMinimized == state_;
+    }
+    bool IsFullscreen() {
+      return PlatformWindowState::kFullScreen == state_;
+    }
+    bool IsNormal() {
+      return !IsMaximized() && !IsMinimized() && !IsFullscreen();
+    }
 
     NewWindowParam newParam_;
     OHNativeWindow* window_ = nullptr;
@@ -122,9 +191,8 @@ class WineWindow {
     int32_t owner_pid_;
     
     uint64_t surface_id_;
-    WindowRect restored_bounds_;
-    WindowRect bounds_;
-    WindowRect previous_bounds_;
+
+    WindowStyle window_style_;
 
     std::shared_ptr<WineWindow> parent_window_;
     std::shared_ptr<WineWindow> child_window_;
@@ -132,6 +200,16 @@ class WineWindow {
     int32_t buffer_format = -1;
     int32_t swap_interval = -1;
     WindowStateMonitor monitor_;
+
+    bool has_focus_ = false;
+    bool activatable_ = true;
+    bool is_split_screen_ = false;
+    int32_t current_display_id_ = -1;
+    WindowRect caption_button_bounds_;
+
+    // RectChangeReason, passed to Applied
+    int32_t pending_reason_ = 0;
+    bool is_visible_ = false;
 };
 
 }  // namespace ohos::adapter::window

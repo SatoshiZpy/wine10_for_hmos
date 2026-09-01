@@ -11,6 +11,7 @@ import LogUtil from '../utils/LogUtil';
 import LogMethod from '../common/LogDecorator';
 import lazy { ContextAdapter } from './ContextAdapter';
 import { bundleManager, contextConstant, StartOptions, Want } from '@kit.AbilityKit';
+import common from '@ohos.app.ability.common';
 import LaunchHelper from '../utils/LaunchHelper';
 import CheckEmptyUtils from '../utils/CheckEmptyUtils';
 import lazy { AppLifecycleAdapter } from './AppLifecycleAdapter';
@@ -65,7 +66,7 @@ export class ProcessAdapter extends BaseAdapter {
   }
 
   @LogMethod
-  createProcess(processKey: string, sockPath: string, callback: (ret: boolean) => void): void {
+  createProcess(processKey: string, sockPath: string): void {
     if (CheckEmptyUtils.checkStrIsEmpty(processKey)) {
       LogUtil.error(TAG, 'createProcess failed. Cause: invalid process key');
     }
@@ -80,18 +81,25 @@ export class ProcessAdapter extends BaseAdapter {
       },
     };
 
-    let options: StartOptions = {
+    const activeCtx = this.ctxAdapter.getActiveContext() as common.UIAbilityContext;
+    if (!activeCtx) {
+      LogUtil.error(TAG, 'createProcess failed. Cause: UIAbilityContext required');
+      return;
+    }
+    const options: StartOptions = {
       processMode: contextConstant.ProcessMode.ATTACH_TO_STATUS_BAR_ITEM,
       startupVisibility: contextConstant.StartupVisibility.STARTUP_HIDE,
-    }
+    };
+    this.runTask(activeCtx, want, options);
+  }
+
+  private runTask(context: common.UIAbilityContext, want: Want, options: StartOptions) {
     LogUtil.info(TAG, 'createProcess want:' + JSON.stringify(want) + 'options:' + JSON.stringify(options));
-    LaunchHelper.LaunchWithOptions(this.ctxAdapter.getActiveContext(), want, options)
+    LaunchHelper.LaunchWithOptions(context, want, options)
       .then((result) => {
         LogUtil.info(TAG, 'createProcess result:' + result);
-        callback(result);
       }).catch((err: BusinessError) => {
       LogUtil.error(TAG, 'Failed to create process. Cause:' + JSON.stringify(err));
-      callback(false);
     });
   }
 

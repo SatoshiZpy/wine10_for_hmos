@@ -5,8 +5,7 @@
 import bundleManager from '@ohos.bundle.bundleManager';
 import { inject, injectable } from 'inversify';
 import { BusinessError } from '@ohos.base';
-import { display, window } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { window } from '@kit.ArkUI';
 import Want from '@ohos.app.ability.Want';
 import { BaseAdapter } from '../common/BaseAdapter';
 import LogUtil from '../utils/LogUtil';
@@ -100,7 +99,13 @@ export class AppWindowAdapter extends BaseAdapter {
     let xComTop: number = windowProp?.drawableRect.top || 0;
     let visibility = this.windowStyle.hasValue(WindowState.WINDOW_VISIBLE, param.window_state_mask);
     let useDarkMode = this.windowStyle.hasValue(WindowFeatures.USE_DARK_MODE, param.window_state_mask);
-    let options: StartOptions = {
+    const activeCtx = this.ctxAdapter.getActiveContext() as common.UIAbilityContext;
+    if (!activeCtx) {
+      LogUtil.error(TAG, 'createWindow failed. Cause: UIAbilityContext required');
+      callback(-1);
+      return;
+    }
+    const options: StartOptions = {
       processMode: contextConstant.ProcessMode.ATTACH_TO_STATUS_BAR_ITEM,
       startupVisibility: visibility ? contextConstant.StartupVisibility.STARTUP_SHOW :
         contextConstant.StartupVisibility.STARTUP_HIDE,
@@ -109,21 +114,28 @@ export class AppWindowAdapter extends BaseAdapter {
       windowWidth: param.bounds.width + xComBorder + xComBorder,
       windowHeight: param.bounds.height + xComBorder + xComTop,
       startWindowBackgroundColor: this.backgroundColor(useDarkMode),
-    }
+    };
     LogUtil.info(TAG, 'createWindow want:' + JSON.stringify(want) + 'options:' + JSON.stringify(options));
     let subStorage: LocalStorage = new LocalStorage(want);
-    LaunchHelper.LaunchWithOptions(this.ctxAdapter.getActiveContext(), want, options)
+    const specifiedFlag = `${param.process_key}:${param.widget_id}`;
+    LaunchHelper.LaunchInProcess(activeCtx, want, specifiedFlag, options)
       .then((result) => {
-        result && this.windowList.push({
-          id: param.widget_id,
-          localStorage: subStorage
-        });
-        LogUtil.info(TAG, 'createWindow id:' + param.widget_id +
-          ',result:' + result + ',length:' + this.windowList.length);
-        result && callback(param.widget_id);
+        if (result) {
+          this.windowList.push({
+            id: param.widget_id,
+            localStorage: subStorage
+          });
+          LogUtil.info(TAG, 'createWindow id:' + param.widget_id +
+            ',result:' + result + ',length:' + this.windowList.length);
+          callback(param.widget_id);
+        } else {
+          LogUtil.error(TAG, 'createWindow failed. Cause: LaunchWithOptions returned false');
+          callback(-1);
+        }
       }).catch((err: BusinessError) => {
-      LogUtil.error(TAG, 'Failed to create window. Cause:' + JSON.stringify(err));
-    });
+        LogUtil.error(TAG, 'Failed to create window. Cause:' + JSON.stringify(err));
+        callback(-1);
+      });
   }
 
   @LogMethod
@@ -161,8 +173,12 @@ export class AppWindowAdapter extends BaseAdapter {
 
   @LogMethod
   setBackgroundColor(id: number, argbColor: number) {
-    let windowClass = this.getWindow(id);
-    windowClass?.setWindowBackgroundColor(`#${this.windowStyle.decimalColorToHex(argbColor)}`);
+    try {
+      let windowClass = this.getWindow(id);
+      windowClass?.setWindowBackgroundColor(`#${this.windowStyle.decimalColorToHex(argbColor)}`);
+    } catch (exception) {
+      LogUtil.error(TAG, 'Failed to setBackgroundColor. Cause:' + JSON.stringify(exception));
+    }
   }
 
   @LogMethod
@@ -218,17 +234,10 @@ export class AppWindowAdapter extends BaseAdapter {
       this.abilityManager.getProxy(id)?.updateAvoidAreaStatus(true);
     }
 
-    if (deviceInfo.sdkApiVersion >= 14) {
-      windowClass.maximize(window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER)
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to maximize the window. Cause:' + JSON.stringify(err));
-        });
-    } else {
-      windowClass.maximize(window.MaximizePresentation.ENTER_IMMERSIVE)
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to maximize the window. Cause:' + JSON.stringify(err));
-        });
-    }
+    windowClass.maximize(window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER)
+      .catch((err: BusinessError) => {
+        LogUtil.error(TAG, 'Failed to maximize the window. Cause:' + JSON.stringify(err));
+      });
   }
 
   @LogMethod
@@ -241,15 +250,15 @@ export class AppWindowAdapter extends BaseAdapter {
       return;
     }
 
-    const windowProp = windowClass.getWindowProperties();
-    let xComBorder: number = windowProp?.drawableRect.left || 0;
-    let xComTop: number = windowProp?.drawableRect.top || 0;
-    bounds.left -= xComBorder;
-    bounds.top -= xComTop;
-    bounds.width = bounds.width + xComBorder + xComBorder;
-    bounds.height = bounds.height + xComBorder + xComTop;
-
     try {
+      const windowProp = windowClass.getWindowProperties();
+      let xComBorder: number = windowProp?.drawableRect.left || 0;
+      let xComTop: number = windowProp?.drawableRect.top || 0;
+      bounds.left -= xComBorder;
+      bounds.top -= xComTop;
+      bounds.width = bounds.width + xComBorder + xComBorder;
+      bounds.height = bounds.height + xComBorder + xComTop;
+
       windowClass.moveWindowToAsync(bounds.left, bounds.top)
         .then(() => {
           windowClass?.resizeAsync(bounds.width, bounds.height)
@@ -290,11 +299,10 @@ export class AppWindowAdapter extends BaseAdapter {
       return;
     }
 
-    const windowProp = windowClass.getWindowProperties();
-    let xComBorder: number = windowProp?.drawableRect.left || 0;
-    let xComTop: number = windowProp?.drawableRect.top || 0;
-
     try {
+      const windowProp = windowClass.getWindowProperties();
+      let xComBorder: number = windowProp?.drawableRect.left || 0;
+      let xComTop: number = windowProp?.drawableRect.top || 0;
       let windowLimits: window.WindowLimits = {
         minWidth: minWidth === 0 ? minWidth : minWidth + xComBorder + xComBorder,
         minHeight: minHeight === 0 ? minHeight : minHeight + xComTop + xComBorder,
@@ -315,10 +323,6 @@ export class AppWindowAdapter extends BaseAdapter {
     let windowClass = this.getWindow(id);
     if (!windowClass) {
       LogUtil.error(TAG, 'Failed to obtain the main window.');
-      return;
-    }
-
-    if (windowClass.getWindowStatus() === window.WindowStatusType.MAXIMIZE) {
       return;
     }
 
@@ -417,77 +421,59 @@ export class AppWindowAdapter extends BaseAdapter {
   @LogMethod
   startWindowMoving(id: number) {
     let window = this.getWindow(id);
-    if (deviceInfo.sdkApiVersion >= 14) {
-      window?.startMoving()
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, `startWindowMoving fail, error info: ${JSON.stringify(err)}`);
-        });
-    } else {
-      LogUtil.error(TAG, 'startWindowMoving fail, sdkApiVersion is less than 14');
-    }
+    window?.startMoving()
+      .catch((err: BusinessError) => {
+        LogUtil.error(TAG, `startWindowMoving fail, error info: ${JSON.stringify(err)}`);
+      });
   }
 
   @LogMethod
   startWindowMovingWithOffset(id: number, offsetX: number, offsetY: number) {
     let window = this.getWindow(id);
-    if (deviceInfo.sdkApiVersion >= 15) {
-      window?.startMoving(offsetX, offsetY)
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, `startWindowMovingWithOffset fail, error info: ${JSON.stringify(err)}`);
-        });
-    } else {
-      LogUtil.error(TAG, 'startWindowMovingWithOffset fail, sdkApiVersion is less than 15');
-    }
+    window?.startMoving(offsetX, offsetY)
+      .catch((err: BusinessError) => {
+        LogUtil.error(TAG, `startWindowMovingWithOffset fail, error info: ${JSON.stringify(err)}`);
+      });
   }
 
   @LogMethod
   getWindowsByCoordinate(coordinate: PointCoordinate,
     callback: (windowIds: Array<number>) => void) {
     let windowIds = new Array<number>();
-    if (deviceInfo.sdkApiVersion >= 14) {
-      try {
-        window.getWindowsByCoordinate(coordinate.displayId, this.queryWindowNum,
-          coordinate.x, coordinate.y).then((windows) => {
-          for (let win of windows) {
-            let originWindowId: number = win.getWindowProperties().id
-            let windowId = this.abilityManager.getWindowIdByOriginWindow(originWindowId);
-            if (windowId) {
-              windowIds.push(windowId);
-            }
+    try {
+      window.getWindowsByCoordinate(coordinate.displayId, this.queryWindowNum,
+        coordinate.x, coordinate.y).then((windows) => {
+        for (let win of windows) {
+          let originWindowId: number = win.getWindowProperties().id
+          let windowId = this.abilityManager.getWindowIdByOriginWindow(originWindowId);
+          if (windowId) {
+            windowIds.push(windowId);
           }
-          callback(windowIds);
-        }).catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'window.getWindowsByCoordinate fail, code:' + JSON.stringify(err.code) +
-            ',message:' + JSON.stringify(err.message));
-          callback(windowIds);
-        });
-      } catch (err) {
-        LogUtil.error(TAG, 'getWindowsByCoordinate fail, error:' + JSON.stringify(err));
+        }
         callback(windowIds);
-      }
-    } else {
-      LogUtil.error(TAG, 'getWindowsByCoordinate fail, sdkApiVersion is less than 14');
+      }).catch((err: BusinessError) => {
+        LogUtil.error(TAG, 'window.getWindowsByCoordinate fail, code:' + JSON.stringify(err.code) +
+          ',message:' + JSON.stringify(err.message));
+        callback(windowIds);
+      });
+    } catch (err) {
+      LogUtil.error(TAG, 'getWindowsByCoordinate fail, error:' + JSON.stringify(err));
       callback(windowIds);
     }
   }
 
   @LogMethod
   restore(id: number) {
-    if (deviceInfo.sdkApiVersion >= 14) {
-      let windowClass = this.getWindow(id);
-      if (!windowClass) {
-        LogUtil.error(TAG, 'Failed to obtain the main window.');
-        return;
-      }
-      windowClass.restore().then(() => {
-        LogUtil.info(TAG, 'Succeeded in restoring the window.');
-      }).catch((err: BusinessError) => {
-        LogUtil.error(TAG, 'Failed to restore the window. Cause: ' + JSON.stringify(err));
-      });
-    } else {
-      LogUtil.error(TAG, 'restore window fail, sdkApiVersion is less than 14');
+    let windowClass = this.getWindow(id);
+    if (!windowClass) {
+      LogUtil.error(TAG, 'Failed to obtain the main window.');
       return;
     }
+    windowClass.restore().then(() => {
+      LogUtil.info(TAG, 'Succeeded in restoring the window.');
+    }).catch((err: BusinessError) => {
+      LogUtil.error(TAG, 'Failed to restore the window. Cause: ' + JSON.stringify(err));
+    });
   }
 
   @LogMethod
@@ -508,24 +494,19 @@ export class AppWindowAdapter extends BaseAdapter {
   @LogMethod
   shiftWindowEvent(sourceId: number, targetId: number,
     callback: (result: boolean) => void): void {
-    if (deviceInfo.sdkApiVersion >= 15) {
-      try {
-        let sourceOriginWindowId = this.abilityManager.getProxy(sourceId)?.getOriginWindowId();
-        let targetOriginWindowId = this.abilityManager.getProxy(targetId)?.getOriginWindowId();
-        window.shiftAppWindowPointerEvent(sourceOriginWindowId, targetOriginWindowId).then(() => {
-          LogUtil.info(TAG, 'shiftWindowEvent success.');
-          callback(true);
-        }).catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to shiftWindowEvent. Cause: ' + JSON.stringify(err));
-          callback(false);
-        })
-      } catch (err) {
-        let message = (err as BusinessError).message;
-        LogUtil.error(TAG, `shiftWindowEvent failed.: ${message}`);
+    try {
+      let sourceOriginWindowId = this.abilityManager.getProxy(sourceId)?.getOriginWindowId();
+      let targetOriginWindowId = this.abilityManager.getProxy(targetId)?.getOriginWindowId();
+      window.shiftAppWindowPointerEvent(sourceOriginWindowId, targetOriginWindowId).then(() => {
+        LogUtil.info(TAG, 'shiftWindowEvent success.');
+        callback(true);
+      }).catch((err: BusinessError) => {
+        LogUtil.error(TAG, 'Failed to shiftWindowEvent. Cause: ' + JSON.stringify(err));
         callback(false);
-      }
-    } else {
-      LogUtil.error(TAG, 'shiftWindowEvent fail, sdkApiVersion is less than 15');
+      })
+    } catch (err) {
+      let message = (err as BusinessError).message;
+      LogUtil.error(TAG, `shiftWindowEvent failed.: ${message}`);
       callback(false);
     }
   }

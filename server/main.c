@@ -79,14 +79,22 @@ static void option_callback( int optc, char *optarg )
         break;
     case 'h':
         usage(stdout);
+#ifdef __OHOS__
+        KillNativeProcess(0);
+#else
         exit(0);
+#endif
         break;
     case 'k':
         if (optarg && isdigit(*optarg))
             ret = kill_lock_owner( atoi( optarg ) );
         else
             ret = kill_lock_owner(-1);
+#ifdef __OHOS__
+        KillNativeProcess(!ret);
+#else
         exit( !ret );
+#endif
     case 'p':
         if (optarg && isdigit(*optarg))
             master_socket_timeout = (timeout_t)atoi( optarg ) * -TICKS_PER_SEC;
@@ -94,11 +102,20 @@ static void option_callback( int optc, char *optarg )
             master_socket_timeout = TIMEOUT_INFINITE;
         break;
     case 'v':
+#ifdef __OHOS__
+        TRACE("%{public}s\n", PACKAGE_STRING);
+        KillNativeProcess(0);
+#else
         fprintf( stderr, "%s\n", PACKAGE_STRING );
         exit(0);
+#endif
     case 'w':
         wait_for_lock();
+#ifdef __OHOS__
+        KillNativeProcess(0);
+#else
         exit(0);
+#endif
     }
 }
 
@@ -208,14 +225,23 @@ static void parse_options( int argc, char **argv, const char *short_opts,
     return;
 
 error:
+#ifdef __OHOS__
+    ERR("wineserver: parse_options failed\n");
+    KillNativeProcess(1);
+#else
     usage( stderr );
     exit(1);
+#endif
 }
 
 static void sigterm_handler( int signum )
 {
-    LOGE("wineserver: sigterm_handler signum=%{public}d", signum);
+#ifdef __OHOS__
+    ERR("wineserver: sigterm_handler signum=%{public}d", signum);
+    KillNativeProcess(1);
+#else
     exit(1);  /* make sure atexit functions get called */
+#endif
 }
 
 int main( int argc, char *argv[] )
@@ -249,18 +275,18 @@ int main( int argc, char *argv[] )
 __attribute((visibility("default"))) int wine_main(int argc, char *argv[])
 {
 #ifdef __OHOS__
-    LOGD("argc: %{public}d\n", argc);
-    for (int i = 0; i < argc; i++) {
-       LOGD("args: %{public}s\n", argv[i]); 
-    }
-
+    /* Note: use setenv() rather than putenv() -- putenv stores a pointer to the
+     * caller's buffer without copying, and these buffers are block-local, so the
+     * env would point to dead stack memory by the time open_master_socket() reads
+     * it (stack-use-after-scope, caught by ASan). setenv copies into persistent
+     * env storage, which the later unsetenv() in open_master_socket() frees. */
+    char fd_env[64];
     int fd = GetGlobalDescriptor(FILE_DIR_DESCRIPTOR);
     if (fd > 0) {
-        char fd_env[64];
-        snprintf( fd_env, sizeof(fd_env), "WINESYNCPIPE=%u", fd );
+        snprintf( fd_env, sizeof(fd_env), "%u", fd );
 
-        LOGD("get fd_env = %{public}s\n", fd_env);
-        putenv( fd_env );
+        TRACE("set fd_env: %{public}s\n", fd_env);
+        setenv( "WINESYNCPIPE", fd_env, 1 );
     }
 #endif
     return main(argc, argv);

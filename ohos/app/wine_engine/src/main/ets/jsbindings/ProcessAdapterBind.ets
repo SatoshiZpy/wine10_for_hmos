@@ -14,8 +14,8 @@ function startChildProcess(callback: Function): void {
   implProcessAdapter().startChildProcess(callback);
 }
 
-function createProcess(processKey: string, sockPath: string, callback: (ret: boolean) => void): void {
-  implProcessAdapter().createProcess(processKey, sockPath, callback);
+function createProcess(processKey: string, sockPath: string): void {
+  implProcessAdapter().createProcess(processKey, sockPath);
 }
 
 function killProcess(): void {

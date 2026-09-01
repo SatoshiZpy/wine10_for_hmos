@@ -1718,7 +1718,7 @@ void set_statustext(HTMLDocumentObj*,INT,LPCWSTR);
 IInternetSecurityManager *get_security_manager(void);
 
 #ifdef __OHOS__
-/* Gecko thread proxy — defined in nsembed.c */
+/* Gecko thread proxy defined in nsembed.c */
 #define WM_GECKO_CREATE_DOC    (WM_USER + 100)
 #define WM_GECKO_NAVIGATE      (WM_USER + 102)
 
