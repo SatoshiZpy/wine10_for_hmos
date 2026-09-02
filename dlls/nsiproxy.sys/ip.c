@@ -133,6 +133,12 @@ struct ip6stat {
 #include <net/if_dl.h>
 #endif
 
+#ifdef HAVE_LINUX_RTNETLINK_H
+#include <errno.h>
+#include <unistd.h>
+#include <linux/rtnetlink.h>
+#endif
+
 #ifdef HAVE_IFADDRS_H
 #include <ifaddrs.h>
 #endif
@@ -1247,6 +1253,218 @@ static NTSTATUS ipv6_neighbour_enumerate_all( void *key_data, UINT key_size, voi
     return STATUS_NOT_IMPLEMENTED;
 }
 
+#ifdef HAVE_LINUX_RTNETLINK_H
+
+/* Generic route entry shared by the netlink and /proc parsers, so that both
+ * ipv4 and ipv6 forward tables can be filled from either source. */
+struct unix_route
+{
+    NET_LUID luid;
+    UINT if_index;
+    struct in_addr prefix4;
+    struct in6_addr prefix6;
+    struct in_addr gateway4;
+    struct in6_addr gateway6;
+    UINT prefix_len;
+    BOOL has_gateway;
+    UINT metric;
+};
+
+struct unix_route_list
+{
+    struct unix_route *routes;
+    unsigned int count;
+    unsigned int capacity;
+};
+
+static BOOL unix_route_list_add( struct unix_route_list *list, const struct unix_route *route )
+{
+    if (list->count == list->capacity)
+    {
+        unsigned int capacity = list->capacity ? list->capacity * 2 : 16;
+        struct unix_route *routes = malloc( capacity * sizeof(*routes) );
+        if (!routes) return FALSE;
+        if (list->count) memcpy( routes, list->routes, list->count * sizeof(*routes) );
+        free( list->routes );
+        list->routes = routes;
+        list->capacity = capacity;
+    }
+    list->routes[list->count++] = *route;
+    return TRUE;
+}
+
+static void unix_route_list_free( struct unix_route_list *list )
+{
+    free( list->routes );
+    list->routes = NULL;
+    list->count = list->capacity = 0;
+}
+
+/* Parse a RTM_NEWROUTE message into a unix_route. Returns FALSE for entries
+ * that should be skipped (not main-table, not unicast, or unknown iface). */
+static BOOL netlink_parse_route( struct nlmsghdr *nlh, struct unix_route *route )
+{
+    struct rtmsg *rtm = NLMSG_DATA( nlh );
+    struct rtattr *rta[__RTA_MAX];
+    struct rtattr *attr;
+    unsigned int table;
+    int len = RTM_PAYLOAD( nlh );
+    int addr_len;
+
+    memset( rta, 0, sizeof(rta) );
+    for (attr = RTM_RTA( rtm ); RTA_OK( attr, len ); attr = RTA_NEXT( attr, len ))
+        if (attr->rta_type < __RTA_MAX) rta[attr->rta_type] = attr;
+
+    table = rtm->rtm_table;
+    if (table == RT_TABLE_COMPAT && rta[RTA_TABLE])
+        table = *(unsigned int *)RTA_DATA( rta[RTA_TABLE] );
+    /* /proc/net/route only exposes the main table; match that */
+    if (table != RT_TABLE_MAIN) return FALSE;
+    if (rtm->rtm_type != RTN_UNICAST) return FALSE;
+    if (rtm->rtm_flags & RTM_F_CLONED) return FALSE;
+    if (!rta[RTA_OIF]) return FALSE;
+    if (rtm->rtm_family != AF_INET && rtm->rtm_family != AF_INET6) return FALSE;
+
+    addr_len = (rtm->rtm_family == AF_INET) ? sizeof(struct in_addr) : sizeof(struct in6_addr);
+
+    memset( route, 0, sizeof(*route) );
+    route->prefix_len = rtm->rtm_dst_len;
+    if (rta[RTA_PRIORITY]) route->metric = *(int *)RTA_DATA( rta[RTA_PRIORITY] );
+    if (rta[RTA_DST])
+        memcpy( rtm->rtm_family == AF_INET ? &route->prefix4 : &route->prefix6,
+                RTA_DATA( rta[RTA_DST] ), addr_len );
+    if (rta[RTA_GATEWAY])
+    {
+        route->has_gateway = TRUE;
+        memcpy( rtm->rtm_family == AF_INET ? &route->gateway4 : &route->gateway6,
+                RTA_DATA( rta[RTA_GATEWAY] ), addr_len );
+    }
+
+    {
+        int if_index = *(int *)RTA_DATA( rta[RTA_OIF] );
+        if (!convert_index_to_luid( if_index, &route->luid )) return FALSE;
+        if (!convert_luid_to_index( &route->luid, &route->if_index )) return FALSE;
+    }
+    return TRUE;
+}
+
+/* Dump the kernel routing table for the given family via netlink.  This works
+ * in environments where /proc/net is not available (e.g. the OHOS app
+ * sandbox). */
+static NTSTATUS netlink_dump_routes( int family, struct unix_route_list *list )
+{
+    struct
+    {
+        struct nlmsghdr nlh;
+        struct rtmsg rtm;
+    } req;
+    struct sockaddr_nl addr;
+    NTSTATUS status = STATUS_SUCCESS;
+    char *buf = NULL;
+    unsigned int buf_size = 0;
+    int fd, ret;
+
+    if ((fd = socket( PF_NETLINK, SOCK_RAW, NETLINK_ROUTE )) == -1)
+    {
+        WARN( "netlink socket creation failed, errno %d.\n", errno );
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Don't bind(): the OHOS app sandbox denies bind() on netlink sockets
+     * (EACCES) while unbound sockets work fine - the kernel assigns the
+     * local port on the first send.  This matches what musl's getifaddrs
+     * does. */
+
+    memset( &req, 0, sizeof(req) );
+    req.nlh.nlmsg_len = sizeof(req);
+    req.nlh.nlmsg_type = RTM_GETROUTE;
+    req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    req.rtm.rtm_family = family;
+
+    memset( &addr, 0, sizeof(addr) );
+    addr.nl_family = AF_NETLINK;
+    if (sendto( fd, &req, sizeof(req), 0, (struct sockaddr *)&addr, sizeof(addr) ) == -1)
+    {
+        WARN( "netlink route dump request failed, errno %d.\n", errno );
+        close( fd );
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    for (;;)
+    {
+        struct nlmsghdr *nlh;
+        BOOL done = FALSE;
+
+        ret = recv( fd, NULL, 0, MSG_PEEK | MSG_TRUNC );
+        if (ret < 0)
+        {
+            if (errno == EINTR) continue;
+            WARN( "netlink recv failed, errno %d.\n", errno );
+            status = STATUS_UNSUCCESSFUL;
+            break;
+        }
+        if ((unsigned int)ret > buf_size)
+        {
+            char *tmp = malloc( ret );
+            if (!tmp)
+            {
+                status = STATUS_NO_MEMORY;
+                break;
+            }
+            free( buf );
+            buf = tmp;
+            buf_size = ret;
+        }
+        ret = recv( fd, buf, buf_size, 0 );
+        if (ret < 0)
+        {
+            if (errno == EINTR) continue;
+            WARN( "netlink recv failed, errno %d.\n", errno );
+            status = STATUS_UNSUCCESSFUL;
+            break;
+        }
+        if (!ret) break;
+
+        for (nlh = (struct nlmsghdr *)buf; NLMSG_OK( nlh, ret ); nlh = NLMSG_NEXT( nlh, ret ))
+        {
+            if (nlh->nlmsg_type == NLMSG_DONE)
+            {
+                done = TRUE;
+                break;
+            }
+            if (nlh->nlmsg_type == NLMSG_ERROR)
+            {
+                struct nlmsgerr *err = NLMSG_DATA( nlh );
+                if (err->error)
+                {
+                    WARN( "netlink dump error %d.\n", err->error );
+                    status = STATUS_UNSUCCESSFUL;
+                }
+                done = TRUE;
+                break;
+            }
+            if (nlh->nlmsg_type == RTM_NEWROUTE)
+            {
+                struct unix_route route;
+                if (!netlink_parse_route( nlh, &route )) continue;
+                if (!unix_route_list_add( list, &route ))
+                {
+                    status = STATUS_NO_MEMORY;
+                    done = TRUE;
+                    break;
+                }
+            }
+        }
+        if (done) break;
+    }
+
+    free( buf );
+    close( fd );
+    return status;
+}
+
+#endif /* HAVE_LINUX_RTNETLINK_H */
+
 struct ipv4_route_data
 {
     NET_LUID luid;
@@ -1303,6 +1521,57 @@ static void ipv4_forward_fill_entry( struct ipv4_route_data *entry, struct nsi_i
     }
 }
 
+#ifdef __OHOS__
+static NTSTATUS ipv4_routes_from_proc( struct unix_route_list *list )OHOS
+{
+    char buf[512], *ptr;
+    struct in_addr mask;
+    UINT rtf_flags;
+    struct unix_route route;
+    FILE *fp;
+
+    if (!(fp = fopen( "/proc/net/route", "r" ))) return STATUS_NOT_SUPPORTED;
+
+    /* skip header line */
+    fgets( buf, sizeof(buf), fp );
+    while ((ptr = fgets( buf, sizeof(buf), fp )))
+    {
+        while (!isspace( *ptr )) ptr++;
+        *ptr++ = '\0';
+
+        memset( &route, 0, sizeof(route) );
+        route.prefix4.s_addr = strtoul( ptr, &ptr, 16 );
+        route.gateway4.s_addr = strtoul( ptr + 1, &ptr, 16 );
+        rtf_flags = strtoul( ptr + 1, &ptr, 16 );
+        strtoul( ptr + 1, &ptr, 16 ); /* refcount, skip */
+        strtoul( ptr + 1, &ptr, 16 ); /* use, skip */
+        route.metric = strtoul( ptr + 1, &ptr, 16 );
+        mask.s_addr = strtoul( ptr + 1, &ptr, 16 );
+        route.prefix_len = mask_v4_to_prefix( &mask );
+        route.has_gateway = (rtf_flags & RTF_GATEWAY) != 0;
+
+        if (!convert_unix_name_to_luid( buf, &route.luid )) continue;
+        if (!convert_luid_to_index( &route.luid, &route.if_index )) continue;
+        if (!unix_route_list_add( list, &route ))
+        {
+            fclose( fp );
+            return STATUS_NO_MEMORY;
+        }
+    }
+    fclose( fp );
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS ipv4_routes_get( struct unix_route_list *list )
+{
+#ifdef HAVE_LINUX_RTNETLINK_H
+    NTSTATUS status = netlink_dump_routes( AF_INET, list );OHOS
+    if (status != STATUS_NOT_SUPPORTED) return status;
+#endif
+    return ipv4_routes_from_proc( list );
+}
+#endif /* __OHOS__ */
+
 static NTSTATUS ipv4_forward_enumerate_all( void *key_data, UINT key_size, void *rw_data, UINT rw_size,
                                             void *dynamic_data, UINT dynamic_size,
                                             void *static_data, UINT static_size, UINT_PTR *count )
@@ -1317,6 +1586,36 @@ static NTSTATUS ipv4_forward_enumerate_all( void *key_data, UINT key_size, void 
 
 #ifdef __linux__
     {
+#ifdef __OHOS__
+        struct unix_route_list list = { NULL, 0, 0 };
+        unsigned int i;
+
+        if ((status = ipv4_routes_get( &list ))) return status;
+        for (i = 0; i < list.count; i++)
+        {
+            const struct unix_route *route = &list.routes[i];
+
+            entry.luid = route->luid;
+            entry.if_index = route->if_index;
+            entry.prefix = route->prefix4;
+            entry.prefix_len = route->prefix_len;
+            entry.next_hop = route->gateway4;
+            entry.metric = route->metric;
+            entry.protocol = route->has_gateway ? MIB_IPPROTO_NETMGMT : MIB_IPPROTO_LOCAL;
+            entry.loopback = entry.protocol == MIB_IPPROTO_LOCAL && entry.prefix_len == 32;
+
+            if (num < *count)
+            {
+                ipv4_forward_fill_entry( &entry, key_data, rw_data, dynamic_data, static_data );
+                key_data = (BYTE *)key_data + key_size;
+                rw_data = (BYTE *)rw_data + rw_size;
+                dynamic_data = (BYTE *)dynamic_data + dynamic_size;
+                static_data = (BYTE *)static_data + static_size;
+            }
+            num++;
+        }
+        unix_route_list_free( &list );
+#else
         char buf[512], *ptr;
         struct in_addr mask;
         UINT rtf_flags;
@@ -1356,6 +1655,7 @@ static NTSTATUS ipv4_forward_enumerate_all( void *key_data, UINT key_size, void 
             num++;
         }
         fclose( fp );
+#endif
     }
 #elif defined(HAVE_SYS_SYSCTL_H) && defined(NET_RT_DUMP)
     {
@@ -1562,6 +1862,56 @@ struct in6_addr str_to_in6_addr(char *nptr, char **endptr)
     return ret;
 }
 
+#ifdef __OHOS__
+static NTSTATUS ipv6_routes_from_proc( struct unix_route_list *list )
+{
+    char buf[512], *ptr, *end;
+    UINT rtf_flags;
+    struct unix_route route;
+    FILE *fp;
+
+    if (!(fp = fopen( "/proc/net/ipv6_route", "r" ))) return STATUS_SUCCESS;
+
+    while ((ptr = fgets( buf, sizeof(buf), fp )))
+    {
+        memset( &route, 0, sizeof(route) );
+        route.prefix6 = str_to_in6_addr( ptr, &ptr );
+        route.prefix_len = strtoul( ptr + 1, &ptr, 16 );
+        str_to_in6_addr( ptr + 1, &ptr ); /* source network, skip */
+        strtoul( ptr + 1, &ptr, 16 ); /* source prefix length, skip */
+        route.gateway6 = str_to_in6_addr( ptr + 1, &ptr );
+        route.metric = strtoul( ptr + 1, &ptr, 16 );
+        strtoul( ptr + 1, &ptr, 16 ); /* refcount, skip */
+        strtoul( ptr + 1, &ptr, 16 ); /* use, skip */
+        rtf_flags = strtoul( ptr + 1, &ptr, 16);
+        route.has_gateway = (rtf_flags & RTF_GATEWAY) != 0;
+
+        while (isspace( *ptr )) ptr++;
+        end = ptr;
+        while (*end && !isspace(*end)) ++end;
+        *end = 0;
+        if (!convert_unix_name_to_luid( ptr, &route.luid )) continue;
+        if (!convert_luid_to_index( &route.luid, &route.if_index )) continue;
+        if (!unix_route_list_add( list, &route ))
+        {
+            fclose( fp );
+            return STATUS_NO_MEMORY;
+        }
+    }
+    fclose( fp );
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS ipv6_routes_get( struct unix_route_list *list )
+{
+#ifdef HAVE_LINUX_RTNETLINK_H
+    NTSTATUS status = netlink_dump_routes( AF_INET6, list );
+    if (status != STATUS_NOT_SUPPORTED) return status;
+#endif
+    return ipv6_routes_from_proc( list );
+}
+#endif /* __OHOS__ */
+
 static NTSTATUS ipv6_forward_enumerate_all( void *key_data, UINT key_size, void *rw_data, UINT rw_size,
                                             void *dynamic_data, UINT dynamic_size,
                                             void *static_data, UINT static_size, UINT_PTR *count )
@@ -1575,7 +1925,39 @@ static NTSTATUS ipv6_forward_enumerate_all( void *key_data, UINT key_size, void 
 
 #ifdef __linux__
     {
+#ifdef __OHOS__
+        struct unix_route_list list = { NULL, 0, 0 };
         struct ipv6_route_data entry;
+        unsigned int i;
+
+        if ((status = ipv6_routes_get( &list ))) return status;
+        for (i = 0; i < list.count; i++)
+        {
+            const struct unix_route *route = &list.routes[i];
+
+            entry.luid = route->luid;
+            entry.if_index = route->if_index;
+            entry.prefix = route->prefix6;
+            entry.prefix_len = route->prefix_len;
+            entry.next_hop = route->gateway6;
+            entry.metric = route->metric;
+            entry.protocol = route->has_gateway ? MIB_IPPROTO_NETMGMT : MIB_IPPROTO_LOCAL;
+            entry.loopback = entry.protocol == MIB_IPPROTO_LOCAL && entry.prefix_len == 32;
+
+            if (num < *count)
+            {
+                ipv6_forward_fill_entry( &entry, key_data, rw_data, dynamic_data, static_data );
+                key_data = (BYTE *)key_data + key_size;
+                rw_data = (BYTE *)rw_data + rw_size;
+                dynamic_data = (BYTE *)dynamic_data + dynamic_size;
+                static_data = (BYTE *)static_data + static_size;
+            }
+            num++;
+        }
+        unix_route_list_free( &list );
+#else
+
+struct ipv6_route_data entry;
         char buf[512], *ptr, *end;
         UINT rtf_flags;
         FILE *fp;
@@ -1618,6 +2000,7 @@ static NTSTATUS ipv6_forward_enumerate_all( void *key_data, UINT key_size, void 
             num++;
         }
         fclose(fp);
+#endif
     }
 #else
     FIXME( "not implemented\n" );
