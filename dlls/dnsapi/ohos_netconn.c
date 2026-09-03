@@ -58,6 +58,16 @@ struct query_type
     WORD len;
 };
 
+/* NetConn_NetAddr.family uses the OHOS family type enumeration
+ * (FAMILY_TYPE_ALL 0, FAMILY_TYPE_IPV4 1, FAMILY_TYPE_IPV6 2),
+ * not the C AF_* constants. */
+enum
+{
+    NETCONN_FAMILY_ALL  = 0,
+    NETCONN_FAMILY_IPV4 = 1,
+    NETCONN_FAMILY_IPV6 = 2,
+};
+
 static const struct query_type query_types[] =
 {
     { DNS_TYPE_A,    AF_INET,  sizeof(struct in_addr) },
@@ -139,11 +149,11 @@ static BOOL netaddr_to_sockaddr( const NetConn_NetAddr *netaddr, struct sockaddr
     memset( addr, 0, sizeof(*addr) );
     switch (netaddr->family)
     {
-    case AF_INET:
+    case NETCONN_FAMILY_IPV4:
         if (inet_pton( AF_INET, netaddr->address, &in->sin_addr ) != 1) break;
         in->sin_family = AF_INET;
         return TRUE;
-    case AF_INET6:
+    case NETCONN_FAMILY_IPV6:
         if (inet_pton( AF_INET6, netaddr->address, &in6->sin6_addr ) != 1) break;
         in6->sin6_family = AF_INET6;
         return TRUE;
