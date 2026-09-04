@@ -22,6 +22,7 @@ TOOLS_DIR=${ROOT_DIR}/build-tools
 # ============================================================
 NO_CACHE=0
 BUILD_ARM64EC=0
+COMPILE_DXVK=0
 COMPILE_HAP=0
 DEBUG_MODE=0
 while [[ $# -gt 0 ]]; do
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --build-arm64ec)
             BUILD_ARM64EC=1
+            shift
+            ;;
+        --with-dxvk)
+            COMPILE_DXVK=1
             shift
             ;;
         --compile-hap)
@@ -48,6 +53,7 @@ while [[ $# -gt 0 ]]; do
             echo "选项:"
             echo "  --no-cache        清理所有缓存后重新编译"
             echo "  --build-arm64ec   编译arm64ec/wow64 mode dll"
+            echo "  --with-dxvk       编译DXVK子模块 (64位 arm64ec 需配合 --build-arm64ec)"
             echo "  --compile-hap     编译HAP包"
             echo "  --debug           启用调试模式"
             echo "  -h, --help        显示此帮助信息"
@@ -63,7 +69,14 @@ done
 
 clean_all_cache() {
     echo "清理项目缓存..."
-    git clean -xfd --exclude='ohos_sdk/command-line-tools/' --exclude='third_party/llvm/'
+    # 注意: -x 会连 .gitignore 的文件一起删。工具链目录(从 tarball 解压
+    # 出来的几个 GB)不是构建缓存, 用 --exclude 保留, 避免每次 --no-cache
+    # 都重新解压; ohos_sdk/command-line-tools 同理。
+    # tarball 本身是 git 追踪的, clean 不会动它们。
+    git clean -xfd \
+        --exclude='ohos_sdk/command-line-tools/' \
+        --exclude='third_party/llvm/' \
+        --exclude='third_party/llvm-mingw/'
     git submodule foreach --recursive 'git reset --hard HEAD' && git submodule foreach --recursive 'git clean -fdx'
     echo "所有缓存清理完成!"
 }
@@ -96,6 +109,23 @@ cd ${ROOT_DIR}
 source ${ROOT_DIR}/ohos/script/env.sh
 # (legacy) 在 OHOS SDK llvm/bin 建 lld-link 软链（ld.lld 别名，兼容旧构建步骤）
 [ -e "${OHOS_TOOLCHAIN}/bin/lld-link" ] || ln -sf ld.lld "${OHOS_TOOLCHAIN}/bin/lld-link"
+
+# 防呆: arm64ec 模式下 llvm-dlltool 必须支持 arm64ec 目标。
+# winebuild 生成 ARM64X 导入库时会调 llvm-dlltool -m arm64ec, 系统
+# /usr/bin/llvm-dlltool (LLVM <= 20) 的 TARGETS 不含 arm64ec, 会报
+# unknown target; 提前拦截避免编译两小时后才在 kernel32 死掉。
+# 注意: 该检查也验证 PATH 顺序正确 (LLVM 21 在 /usr/bin 之前),
+# 防止交互 shell 续跑 make 时 PATH 丢失导致命中系统旧版工具。
+if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+    FOUND_DLLTOOL=$(command -v llvm-dlltool)
+    if ! ${FOUND_DLLTOOL} --help 2>&1 | grep -q arm64ec; then
+        echo "ERROR: llvm-dlltool (${FOUND_DLLTOOL}) 不支持 arm64ec 目标"
+        echo "  PATH 里的 llvm-dlltool 不是 ${LLVM_TOOLCHAIN} 的版本,"
+        echo "  检查 PATH 顺序 (LLVM 21 须在 /usr/bin 之前)"
+        exit 1
+    fi
+    echo "OK: ${FOUND_DLLTOOL} supports arm64ec"
+fi
 
 # Clear build and install dir
 rm -rf ${INSTALL_DIR}
@@ -134,6 +164,16 @@ source ${ROOT_DIR}/ohos/script/build_krb5.sh
 # Build third_party gnutls chain (gmp/nettle/libtasn1/libunistring/gnutls) for bcrypt/schannel
 source ${ROOT_DIR}/ohos/script/build_gnutls.sh
 GNUTLS_STAGING=${ROOT_DIR}/build/gnutls_staging
+
+# Build DXVK (D3D11/DXGI to Vulkan translation layer)
+# arm64ec sysroot (llvm-mingw) 必须在 build_dxvk.sh 之前 source:
+# 它导出的 EC_SYSROOT/EC_BUILTINS_LIB 是后者的输入
+if [ "${COMPILE_DXVK}" -eq 1 ]; then
+    if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+        source ${ROOT_DIR}/ohos/script/build_llvm_mingw_ec.sh
+    fi
+    source ${ROOT_DIR}/ohos/script/build_dxvk.sh
+fi
 
 # ============================================================
 # 7. 运行 configure
@@ -241,6 +281,25 @@ cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfil
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 cp -r ${INSTALL_DIR}/lib/wine/i386-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 
+# Copy DXVK DLLs to override Wine's built-in D3D11/DXGI
+if [ "${COMPILE_DXVK}" -eq 1 ]; then
+    DXVK_BUILD_DIR=${BUILD_DIR}/dxvk
+    # arm64ec DLLs (installec) 只在 --build-arm64ec 模式下生成, 拷贝到
+    # aarch64-windows (wow64 下 ARM64X/EC DLL 的落点)
+    # meson 版本不同 DLL 可能落在 bin/ 或 lib/, 两处都查
+    for ecdir in installec/bin installec/lib; do
+        if [ -d "${DXVK_BUILD_DIR}/${ecdir}" ]; then
+            echo "copying DXVK arm64ec DLLs (${ecdir})"
+            # Override Wine's built-in d3d11.dll and dxgi.dll with DXVK versions
+            cp ${DXVK_BUILD_DIR}/${ecdir}/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/aarch64-windows/ 2>/dev/null || true
+        fi
+    done
+    if [ -d "${DXVK_BUILD_DIR}/install32/bin" ]; then
+        echo "copying DXVK 32-bit DLLs"
+        # Override Wine's built-in d3d11.dll and dxgi.dll with DXVK versions
+        cp ${DXVK_BUILD_DIR}/install32/bin/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/i386-windows/ 2>/dev/null || true
+    fi
+fi
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp -r ${ROOT_DIR}/third_party/gecko ${APP_DIR}/wine_engine/src/main/resources/resfile/share/wine/
     cp -r ${ROOT_DIR}/third_party/mono ${APP_DIR}/wine_engine/src/main/resources/resfile/share/wine/
