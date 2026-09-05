@@ -110,20 +110,21 @@ class WindowNodeController extends NodeController {
   private setDefaultBounds() {
     let prop = this.config.window?.getWindowProperties();
     if (prop) {
-      let windowRect: WindowBound = {
+      let windowRect: window.Rect = {
         left: prop.windowRect.left,
         top: prop.windowRect.top,
         width: prop.windowRect.width,
         height: prop.windowRect.height
       }
 
-      let drawableRect: WindowBound = {
+      let drawableRect: window.Rect = {
         left: prop.drawableRect.left,
         top: prop.drawableRect.top,
         width: prop.drawableRect.width,
         height: prop.drawableRect.height
       }
-
+      LogUtil.info(TAG, 'windowRect:' + JSON.stringify(windowRect) +
+        ',drawableRect:' + JSON.stringify(drawableRect));
       this.config.nativeContext.OnWindowInitSize(windowRect, drawableRect);
     }
   }

@@ -74,39 +74,35 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
 
   protected computeWindowStyles(windowClass: window.Window, styles: WindowStyles) {
     try {
-      windowClass.setWindowDecorVisible(!styles.hide_title_bar);
-      if (deviceInfo.sdkApiVersion >= 14) {
-        windowClass.setWindowTitleButtonVisible(styles.maximizable, styles.minimizable, styles.closable);
-        if (styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
-          let buttonStyle: window.DecorButtonStyle = {
-            colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
-          };
-          windowClass.setDecorButtonStyle(buttonStyle);
-        }
-        windowClass.setWindowTitleMoveEnabled(!styles.hide_title_bar);
-        windowClass.setWindowTopmost(styles.always_on_top)
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to setTopmost. Cause:' + JSON.stringify(err));
-          });
-        windowClass.setResizeByDragEnabled(styles.resizable)
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
-          });
-        windowClass.setWindowFocusable(styles.focusable)
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to setFocusable. Cause:' + JSON.stringify(err));
-          });
-        windowClass.setWindowTouchable(styles.touchable)
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to setTouchable. Cause:' + JSON.stringify(err));
-          });
+      windowClass.setWindowDecorVisible(false);
+      windowClass.setWindowTitleButtonVisible(false, false, false);
+      if (styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
+        let buttonStyle: window.DecorButtonStyle = {
+          colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+        };
+        windowClass.setDecorButtonStyle(buttonStyle);
       }
-      if (deviceInfo.sdkApiVersion >= 20) {
-        windowClass.setWindowShadowEnabled(styles.has_shadow)
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to setShadowEnabled. Cause:' + JSON.stringify(err));
-          });
-      }
+      windowClass.setWindowTitleMoveEnabled(!styles.hide_title_bar);
+      windowClass.setWindowTopmost(styles.always_on_top)
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to setTopmost. Cause:' + JSON.stringify(err));
+        });
+      windowClass.setResizeByDragEnabled(styles.resizable)
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
+        });
+      windowClass.setWindowFocusable(styles.focusable)
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to setFocusable. Cause:' + JSON.stringify(err));
+        });
+      windowClass.setWindowTouchable(styles.touchable)
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to setTouchable. Cause:' + JSON.stringify(err));
+        });
+      windowClass.setWindowShadowEnabled(styles.has_shadow)
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to setShadowEnabled. Cause:' + JSON.stringify(err));
+        });
     } catch (err) {
       LogUtil.error(TAG, 'Failed to compute window styles. Cause:' + JSON.stringify(err));
     }
@@ -179,7 +175,7 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
       }
       const subWindowOpts: window.SubWindowOptions = {
         title: 'This is a subwindow',
-        decorEnabled: false,
+        decorEnabled: true,
         maximizeSupported: true,
         zLevelAboveParentLoosened: true
       };

@@ -9,6 +9,7 @@ import Inject from '../common/InjectModule';
 import LogUtil from '../utils/LogUtil';
 import { MultiInputAdapter } from '../adapter/MultiInputAdapter';
 import { DragParamManager } from '../common/DragParamManager';
+import { NativeThemeAdapter } from '../adapter/NativeThemeAdapter';
 
 @Component
 export struct WineSubWindow {
@@ -27,6 +28,7 @@ export struct WineSubWindow {
   private dragDropAdapter: DragDropAdapter = Inject.get(DragDropAdapter);
   private multiInputAdapter: MultiInputAdapter = Inject.get(MultiInputAdapter);
   private dragParamManager = Inject.get(DragParamManager);
+  @State private bgColor: Color | string = NativeThemeAdapter.LIGHT_BACKGROUND_COLOR;
 
   aboutToAppear(): void {
     this.dragParamManager.addDragContextData({
@@ -45,7 +47,7 @@ export struct WineSubWindow {
       type: XComponentType.SURFACE,
       libraryname: this.LIBRARY_NAME
     })
-      .backgroundColor(this.params.initColorRgb)
+      .backgroundColor(this.bgColor)
       .focusable(true)
       .defaultFocus(true)
       .gesture(

@@ -12,6 +12,7 @@ import { MultiInputAdapter } from '../adapter/MultiInputAdapter';
 import { DragParamManager } from '../common/DragParamManager';
 import { window } from '@kit.ArkUI';
 import { NativeThemeAdapter } from '../adapter/NativeThemeAdapter'
+import { JSON } from '@kit.ArkTS';
 
 @Component
 export struct WineWindow {
@@ -133,20 +134,21 @@ export struct WineWindow {
   private setDefaultBounds() {
     let prop = this.window?.getWindowProperties();
     if (prop) {
-      let windowRect: WindowBound = {
+      let windowRect: window.Rect = {
         left: prop.windowRect.left,
         top: prop.windowRect.top,
         width: prop.windowRect.width,
         height: prop.windowRect.height
       }
 
-      let drawableRect: WindowBound = {
+      let drawableRect: window.Rect = {
         left: prop.drawableRect.left,
         top: prop.drawableRect.top + this.statusBarHeight,
         width: prop.drawableRect.width,
         height: prop.drawableRect.height - this.statusBarHeight
       }
-
+      LogUtil.info(WineWindow.TAG, 'windowRect:' + JSON.stringify(windowRect) +
+        ',drawableRect:' + JSON.stringify(drawableRect));
       this.nativeContext.OnWindowInitSize(windowRect, drawableRect);
     }
 

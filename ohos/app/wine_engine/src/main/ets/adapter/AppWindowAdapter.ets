@@ -93,10 +93,6 @@ export class AppWindowAdapter extends BaseAdapter {
         'ownerPid': param.owner_pid,
       }
     };
-    let windowClass = this.ctxAdapter.getActiveProxy().getWindow();
-    const windowProp = windowClass?.getWindowProperties();
-    let xComBorder: number = windowProp?.drawableRect.left || 0;
-    let xComTop: number = windowProp?.drawableRect.top || 0;
     let visibility = this.windowStyle.hasValue(WindowState.WINDOW_VISIBLE, param.window_state_mask);
     let useDarkMode = this.windowStyle.hasValue(WindowFeatures.USE_DARK_MODE, param.window_state_mask);
     const activeCtx = this.ctxAdapter.getActiveContext() as common.UIAbilityContext;
@@ -109,15 +105,15 @@ export class AppWindowAdapter extends BaseAdapter {
       processMode: contextConstant.ProcessMode.ATTACH_TO_STATUS_BAR_ITEM,
       startupVisibility: visibility ? contextConstant.StartupVisibility.STARTUP_SHOW :
         contextConstant.StartupVisibility.STARTUP_HIDE,
-      windowLeft: param.bounds.left - xComBorder,
-      windowTop: param.bounds.top - xComTop,
-      windowWidth: param.bounds.width + xComBorder + xComBorder,
-      windowHeight: param.bounds.height + xComBorder + xComTop,
+      windowLeft: param.bounds.left,
+      windowTop: param.bounds.top,
+      windowWidth: param.bounds.width,
+      windowHeight: param.bounds.height,
       startWindowBackgroundColor: this.backgroundColor(useDarkMode),
     };
+    const specifiedFlag = `${param.process_key}:${param.widget_id}`;
     LogUtil.info(TAG, 'createWindow want:' + JSON.stringify(want) + 'options:' + JSON.stringify(options));
     let subStorage: LocalStorage = new LocalStorage(want);
-    const specifiedFlag = `${param.process_key}:${param.widget_id}`;
     LaunchHelper.LaunchInProcess(activeCtx, want, specifiedFlag, options)
       .then((result) => {
         if (result) {
@@ -251,14 +247,6 @@ export class AppWindowAdapter extends BaseAdapter {
     }
 
     try {
-      const windowProp = windowClass.getWindowProperties();
-      let xComBorder: number = windowProp?.drawableRect.left || 0;
-      let xComTop: number = windowProp?.drawableRect.top || 0;
-      bounds.left -= xComBorder;
-      bounds.top -= xComTop;
-      bounds.width = bounds.width + xComBorder + xComBorder;
-      bounds.height = bounds.height + xComBorder + xComTop;
-
       windowClass.moveWindowToAsync(bounds.left, bounds.top)
         .then(() => {
           windowClass?.resizeAsync(bounds.width, bounds.height)
@@ -300,14 +288,11 @@ export class AppWindowAdapter extends BaseAdapter {
     }
 
     try {
-      const windowProp = windowClass.getWindowProperties();
-      let xComBorder: number = windowProp?.drawableRect.left || 0;
-      let xComTop: number = windowProp?.drawableRect.top || 0;
       let windowLimits: window.WindowLimits = {
-        minWidth: minWidth === 0 ? minWidth : minWidth + xComBorder + xComBorder,
-        minHeight: minHeight === 0 ? minHeight : minHeight + xComTop + xComBorder,
-        maxWidth: maxWidth === 0 ? maxWidth : maxWidth + xComBorder + xComBorder,
-        maxHeight: maxHeight === 0 ? maxHeight : maxHeight + xComTop + xComBorder,
+        minWidth: minWidth,
+        minHeight: minHeight,
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
       };
       windowClass.setWindowLimits(windowLimits)
         .catch((err: BusinessError) => {

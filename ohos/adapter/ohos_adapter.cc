@@ -137,7 +137,8 @@ static NewWindowParam Builder(const struct window_param* param)
     NewWindowParam win_param;
     win_param.process_key = CommandLineHelper::GetProcessName();
     win_param.ability_type = (AbilityType)param->container;
-    win_param.bounds = {param->bounds.left, param->bounds.top, param->bounds.width, param->bounds.height};
+    win_param.bounds = {param->bounds.left, param->bounds.top,
+                        param->bounds.width, param->bounds.height};
     win_param.parent_id = param->parent_id;
     win_param.hwnd = param->hwnd;
     win_param.owner_pid = param->pid;
@@ -160,15 +161,6 @@ static NewWindowParam Builder(const struct window_param* param)
     }
 
     return win_param;
-}
-
-static Display GetDisplay()
-{
-    Display display;
-    if (!ScreenAdapter::GetInstance().GetDefaultDisplay(display)) {
-      LOGE("get default display failed");
-    }
-    return display;
 }
 
 static void UpdateWindow(int widget_id, const NewWindowParam& param)
@@ -391,65 +383,18 @@ int GetFocusWindow()
 
 struct window_bounds GetDisplayAvailArea()
 {
-    auto display = GetDisplay();
-    LOGI("GetDisplayAvailArea rect: %{public}d, %{public}d, %{public}d, %{public}d",
-         display.avail_area.left, display.avail_area.top,
-         display.avail_area.width, display.avail_area.height);
-    return window_bounds{.left = display.avail_area.left, .top = display.avail_area.top,
-                         .width = display.avail_area.width, .height = display.avail_area.height};
+    auto rect = ScreenAdapter::GetInstance().GetDisplayAvailArea();
+    return {rect.left, rect.top, rect.width, rect.height};
 }
 
 int GetSystemDpi()
 {
-    auto display = GetDisplay();
-    if (display.avail_area.width <= 0 || display.avail_area.height <= 0) {
-        LOGE("get display physical size error");
-        return 96;
-    }
+    return ScreenAdapter::GetInstance().GetSystemDpi();
+}
 
-    LOGI("get display info: x_dpi=%{public}f, y_dpi=%{public}f, (%{public}d,%{public}d)",
-        display.x_dpi, display.y_dpi, display.avail_area.width, display.avail_area.height);
-
-    // Calculate physical size (in inches)
-    double width_inch = display.avail_area.width / display.x_dpi;
-    double height_inch = display.avail_area.height / display.y_dpi;
-    double diag_inch = std::sqrt(width_inch * width_inch + height_inch * height_inch);
-    double diag_px = std::sqrt(display.avail_area.width * display.avail_area.width
-                               + display.avail_area.height * display.avail_area.height);
-
-    // Calculate physical PPI
-    double physical_ppi = diag_px / diag_inch;
-
-    // Determine usage scenario based on screen size and apply correction factor
-    double correction_factor = 1.0;
-    if (diag_inch <= 15.6) {
-        // Laptop screens (12-15.6 inches): scale at 60-70% of physical PPI
-        correction_factor = 0.65;
-    } else if (diag_inch <= 27) {
-        // Desktop monitors (21-27 inches): scale at 80-90% of physical PPI
-        correction_factor = 0.85;
-    } else {
-        // Large-screen TVs (32 inches+): scale at 100% of physical PPI
-        correction_factor = 1.0;
-    }
-
-    // Calculate effective target DPI (considering viewing distance)
-    double effective_target_dpi = physical_ppi * correction_factor;
-    int dpi = static_cast<int>(std::round(effective_target_dpi));
-    dpi = std::max(96, std::min(240, dpi));
-
-    LOGI("physical PPI: %{public}.2f, size: %{public}.1f inch, factor: %{public}.2f, effective DPI: %{public}d",
-        physical_ppi, diag_inch, correction_factor, dpi);
-
-    // Map to Windows standard DPI scaling levels
-    if (dpi > 96 && dpi <= 108) dpi = 96;           // 100%
-    else if (dpi > 108 && dpi <= 120) dpi = 120;    // 125%
-    else if (dpi > 120 && dpi <= 144) dpi = 144;    // 150%
-    else if (dpi > 144 && dpi <= 168) dpi = 168;    // 175%
-    else if (dpi > 168 && dpi <= 192) dpi = 192;    // 200%
-    LOGI("recommended DPI: %{public}d (scale: %{public}.0f%%)", dpi, (dpi * 100.0 / 96));
-
-    return dpi;
+float GetDensityPixels()
+{
+    return ScreenAdapter::GetInstance().GetDensityPixels();
 }
 
 int GetGlobalDescriptor(int key)

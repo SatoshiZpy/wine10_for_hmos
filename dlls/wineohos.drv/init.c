@@ -145,7 +145,7 @@ void set_screen_dpi( DWORD dpi )
 }
 
 /**********************************************************************
- *	     fetch_display_metrics
+ *           fetch_display_metrics
  */
 static void fetch_display_metrics(void)
 {
@@ -161,7 +161,7 @@ static void fetch_display_metrics(void)
     }
     SERVER_END_REQ;
 
-    if (!screen_width || !screen_width)  /* not initialized yet */
+    if (!screen_width || !screen_height)  /* not initialized yet */
     {
         RECT desktop_rect = get_desktop_rect();
         screen_width  = desktop_rect.right - desktop_rect.left;
@@ -220,9 +220,6 @@ static BOOL OHOS_CreateCompatibleDC( PHYSDEV orig, PHYSDEV *pdev )
 {
     OHOS_PDEVICE *physdev = create_ohos_physdev();
 
-    TRACE("orig %p orig->hdc %p pdev %p pdev->hdc %p\n", orig, (orig ? orig->hdc : NULL), pdev,
-          ((pdev && *pdev) ? (*pdev)->hdc : NULL));
-
     if (!physdev)
     {
         ERR("create compatible dc failed.\n");
@@ -239,8 +236,6 @@ static BOOL OHOS_CreateCompatibleDC( PHYSDEV orig, PHYSDEV *pdev )
 static BOOL OHOS_DeleteDC( PHYSDEV dev )
 {
     OHOS_PDEVICE *physDev = get_ohosdrv_dev(dev);
-
-    TRACE("hdc %p\n", dev->hdc);
 
     free( physDev );
     return TRUE;

@@ -83,42 +83,8 @@ export class WineAbility extends WineBaseAbility {
       }
 
       try {
-        data.on('windowSizeChange', (size) => {
-          const prop = data.getWindowProperties();
-          let windowBound: WindowBound = {
-            left: prop.windowRect.left + prop.drawableRect.left,
-            top: prop.windowRect.top + prop.drawableRect.top,
-            width: size.width - prop.drawableRect.left - prop.drawableRect.left,
-            height: size.height - prop.drawableRect.left - prop.drawableRect.top,
-          };
-          this.nativeContext.OnWindowSizeChange(this.widgetId, windowBound);
-        });
-      } catch (exception) {
-        LogUtil.error(TAG,'Failed to listener for window size changes: ' + JSON.stringify(exception));
-      }
-
-      try {
         data.on("windowRectChange", (option) => {
-          const prop = data.getWindowProperties();
-          const rect = option.rect;
-          let statusBarHeight = 0;
-          if (this.deviceInfoAdapter?.isNormalWindowMode()) {
-            statusBarHeight = data.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect.height;
-            //The current system has a timing issue where the drawableRect lags in updating during mode switching.
-            //Here, when switching to normal mode, the drawableRect is set to 0
-            //to temporarily maintain normal performance until the issue is resolved.
-            prop.drawableRect.height = prop.drawableRect.height + prop.drawableRect.top;
-            prop.drawableRect.top = 0;
-          }
-          let windowBound: window.Rect = {
-            left: rect.left + prop.drawableRect.left,
-            top: rect.top + prop.drawableRect.top + statusBarHeight,
-            width: rect.width - prop.drawableRect.left - prop.drawableRect.left,
-            height: rect.height - prop.drawableRect.left - prop.drawableRect.top - statusBarHeight,
-          };
-          this.nativeContext.OnWindowRectChange(this.widgetId,
-            windowBound,
-            option.reason.valueOf());
+          this.nativeContext.OnWindowRectChange(this.widgetId, option.rect, option.reason.valueOf());
         });
       } catch (exception) {
         LogUtil.error(TAG,'Failed to listener for window rect changes: ' + JSON.stringify(exception));
@@ -296,7 +262,7 @@ export class WineAbility extends WineBaseAbility {
 
       let statusBarHeight = data.area.topRect.height;
       storage.setOrCreate('statusBarHeight', statusBarHeight);
-      LogUtil.info(TAG, 'Avoidarea changes,statusBarHeight:' + statusBarHeight);
+      LogUtil.info(TAG, 'avoidArea changes,statusBarHeight:' + statusBarHeight);
 
       if(!this.deviceInfoAdapter?.isNormalWindowMode()) {
         return;

@@ -35,8 +35,8 @@ struct ohos_win_data
     unsigned int        pending_configure;  /* Wine-initiated size change, awaiting OS confirmation */
     DWORD               pending_configure_time; /* tick when pending_configure was set */
     RECT                pending_rect;       /* Wine-initiated target rect */
-    int                 buffer_width;       /* last SET_BUFFER_GEOMETRY width */
-    int                 buffer_height;      /* last SET_BUFFER_GEOMETRY height */
+    int                 buffer_width;       /* current buffer width */
+    int                 buffer_height;      /* current buffer height */
     RECT                os_pending_rect;    /* OS callback pending rect */
     int                 os_pending_reason;  /* OS callback RectChangeReason */
     BOOL                os_rect_pending;    /* whether OS rect change is pending */

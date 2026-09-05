@@ -21,7 +21,6 @@ import { ContextAdapter } from './ContextAdapter';
 import { WindowStyle } from '../common/WindowStyle';
 
 const TAG: string = 'SubWindow';
-const FEEDBACK_X: number = 2;
 const MAX_TOTAL_SUB_WINDOW_NUM: number = 20;
 
 @injectable()
@@ -51,7 +50,7 @@ export class SubWindowAdapter extends BaseAdapter {
   @LogMethod
   createWindow(param: NewWindowParam, callback: (id: number) => void) {
     let parentId = this.getParentWindowId(param.parent_id);
-    let bounds = this.adjustBounds(parentId, param.bounds);
+    let bounds = param.bounds;
     LogUtil.info(TAG, `createWindow widget_id: ${param.widget_id},
       parentId: ${param.parent_id} --> ${parentId},
       bounds: (${bounds.left}, ${bounds.top}, ${bounds.width}, ${bounds.height})`);
@@ -117,23 +116,6 @@ export class SubWindowAdapter extends BaseAdapter {
     return this.getParentProxy(parentId).getWindowId();
   }
 
-  private adjustBounds(parentId: number, bounds: WindowBound): WindowBound {
-    let out_bounds = bounds;
-    let mainWindow = this.getParentWindow(parentId);
-    if (!mainWindow) {
-      return out_bounds;
-    }
-    const windowProp = mainWindow.getWindowProperties();
-    if (windowProp && windowProp.drawableRect.left !== 0) {
-      out_bounds.top += windowProp.drawableRect.left;
-    } else {
-      // In full-screen mode, when a sub-window is created, the window is
-      // moved left by two pixels to adjust its position relative to the cursor point.
-      out_bounds.top += FEEDBACK_X;
-    }
-    return out_bounds;
-  }
-
   private findSubWindow(id: number): ISubWindowInfo | undefined {
     for (let i = 0; i < this.subWindowList.length; i++) {
       const item = this.subWindowList[i];
@@ -194,11 +176,13 @@ export class SubWindowAdapter extends BaseAdapter {
     };
     let instanceKey = `${param.process_key}:${param.widget_id}`;
     let subStorage: LocalStorage = new LocalStorage(para);
+    let styles = this.windowStyle.buildWindowStyles(param.feature_mask, param.window_state_mask);
     let proxy = this.getParentProxy(parentId);
-    LogUtil.info(TAG, 'createSubWindow instanceKey:' + instanceKey);
+    LogUtil.info(TAG, 'createSubWindow instanceKey:' + instanceKey + ',styles:' + JSON.stringify(styles) +
+      ',feature_mask:' + param.feature_mask + ',window_state_mask:' + param.window_state_mask);
     proxy?.createSubWindow(instanceKey)
       .then((data: window.Window) => {
-        this.initSubWindow(data, parentId, param, bounds, subStorage, callback);
+        this.initSubWindow(data, parentId, param.widget_id, bounds, subStorage, callback, styles);
       }).catch((error: BusinessError) => {
       LogUtil.error(TAG, 'Failed to create the subWindow. Cause: ' + JSON.stringify(error));
       callback(-1);
@@ -207,45 +191,33 @@ export class SubWindowAdapter extends BaseAdapter {
 
   private initSubWindow(data: window.Window,
     parentId: number,
-    param: NewWindowParam,
+    widget_id: number,
     bounds: WindowBound,
     subStorage: LocalStorage,
-    callback: (id: number) => void) {
+    callback: (id: number) => void,
+    styles: WindowStyles) {
     try {
       let windowClass = data;
-      windowClass.setWindowCornerRadius(0)
+      styles.hide_title_bar && windowClass.setWindowCornerRadius(0)
         .catch((err: BusinessError) => {
           LogUtil.error(TAG, 'Failed to set corner radius. Cause:' + JSON.stringify(err));
         });
       windowClass.keepKeyboardOnFocus(true);
-      this.subWindowList.push({
-        id: param.widget_id,
-        parentId: parentId,
-        subWindow: windowClass,
-        localStorage: subStorage
-      });
 
-      windowClass.on('windowSizeChange', (size) => {
-        const prop = data.getWindowProperties();
-        let change_bounds: WindowBound = {
-          left: prop.windowRect.left,
-          top: prop.windowRect.top,
-          width: size.width,
-          height: size.height
-        };
-        this.nativeContext.OnWindowSizeChange(param.widget_id, change_bounds);
+      windowClass.on('windowStatusChange', (status) => {
+        this.nativeContext.OnWindowStatusChange(widget_id, status);
       });
 
       windowClass.on("windowRectChange", (option) => {
-        this.nativeContext.OnWindowRectChange(param.widget_id, option.rect, option.reason.valueOf());
+        this.nativeContext.OnWindowRectChange(widget_id, option.rect, option.reason.valueOf());
       });
 
       windowClass.on('windowEvent', (type) => {
-        this.nativeContext.OnWindowEvent(param.widget_id, type.valueOf());
+        this.nativeContext.OnWindowEvent(widget_id, type.valueOf());
       });
 
       windowClass.on("windowVisibilityChange", (visible) => {
-        this.nativeContext.OnWindowVisibilityChange(param.widget_id, visible);
+        this.nativeContext.OnWindowVisibilityChange(widget_id, visible);
       });
 
       this.moveSubWindow(windowClass, bounds.left, bounds.top, parentId);
@@ -255,10 +227,6 @@ export class SubWindowAdapter extends BaseAdapter {
 
       windowClass.loadContent('pages/SubWindow', subStorage)
         .then(() =>{
-          let styles = this.windowStyle.buildWindowStyles(param.feature_mask, param.window_state_mask);
-          LogUtil.info(TAG, 'initSubWindow loadContent styles:' + JSON.stringify(styles) +
-            ',feature_mask:' + param.feature_mask + ',window_state_mask:' + param.window_state_mask);
-
           // compute Window Styles
           this.computeWindowStyles(windowClass, styles);
 
@@ -268,7 +236,14 @@ export class SubWindowAdapter extends BaseAdapter {
               callback(-1);
               return;
             });
-          callback(param.widget_id);
+
+          this.subWindowList.push({
+            id: widget_id,
+            parentId: parentId,
+            subWindow: data,
+            localStorage: subStorage
+          });
+          callback(widget_id);
         }).catch((err: BusinessError) => {
         LogUtil.error(TAG, 'Failed to load the content. Cause:' + JSON.stringify(err));
         callback(-1);
@@ -281,10 +256,8 @@ export class SubWindowAdapter extends BaseAdapter {
 
   private computeWindowStyles(windowClass: window.Window, styles: WindowStyles) {
     try {
-      windowClass.setWindowDecorVisible(!styles.hide_title_bar);
-      if (!styles.hide_title_bar) {
-        windowClass.setWindowTitleButtonVisible(styles.maximizable, styles.minimizable, styles.closable);
-      }
+      windowClass.setWindowDecorVisible(false);
+      windowClass.setWindowTitleButtonVisible(false, false, false);
       if (styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
         let buttonStyle: window.DecorButtonStyle = {
           colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
@@ -298,12 +271,10 @@ export class SubWindowAdapter extends BaseAdapter {
             LogUtil.error(TAG, 'Failed to setTopmost. Cause:' + JSON.stringify(err));
           });
       }
-      if (!styles.hide_title_bar) {
-        windowClass.setResizeByDragEnabled(styles.resizable)
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
-          });
-      }
+      windowClass.setResizeByDragEnabled(styles.resizable)
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
+        });
       windowClass.setWindowFocusable(styles.focusable)
         .catch((err: BusinessError) => {
           LogUtil.error(TAG, 'Failed to setFocusable. Cause:' + JSON.stringify(err));

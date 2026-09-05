@@ -91,6 +91,7 @@ ADAPTER_API int GetGlobalDescriptor(int key);
 /* display */
 ADAPTER_API struct window_bounds GetDisplayAvailArea(void);
 ADAPTER_API int GetSystemDpi(void);
+ADAPTER_API float GetDensityPixels(void);
 
 /* event */
 ADAPTER_API void RegisterInputEventCallBack(input_event_callback callback);

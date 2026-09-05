@@ -15,6 +15,9 @@
 #include <unistd.h>
 
 #define OEMRESOURCE
+
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "windef.h"
 #include "winbase.h"
 #include "wingdi.h"
@@ -478,7 +481,6 @@ static int process_events( DWORD mask )
 
         case CONFIG_CHANGED:
             TRACE("CONFIG_CHANGED dpi %u\n", event->data.cfg.dpi);
-            set_screen_dpi( event->data.cfg.dpi );
             break;
 
         case SURFACE_CHANGED: {
@@ -734,22 +736,30 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
             ERR("failed to get buffer handle\n");
             return FALSE;
         }
-        void *mapped_addr = mmap(buffer_handle->virAddr, buffer_handle->size,
-            PROT_READ | PROT_WRITE, MAP_SHARED, buffer_handle->fd, 0);
-        if (mapped_addr == MAP_FAILED) {
+
+        /* Use persistent mapping from native_buffer if available,
+         * otherwise fall back to per-flush mmap via map_native_buffer. */
+        BOOL needs_unmap = !buffer.mapped_addr;
+
+        if (map_native_buffer( &buffer ) != STATUS_SUCCESS)
+        {
             ERR("failed to mmap buffer handle\n");
             return FALSE;
         }
 
         src = (DWORD *)color_bits + (locked.top - rect->top) * color_info->bmiHeader.biWidth + (locked.left - rect->left);
-        dst = (DWORD *)mapped_addr + locked.top * buffer.stride + locked.left;
+        dst = (DWORD *)buffer.mapped_addr + locked.top * buffer.stride + locked.left;
         width = min(locked.right - locked.left, buffer.width);
 
         for (y = locked.top; y < min(buffer.height, locked.bottom); y++) {
             if (alpha_mask)
                 memcpy( dst, src, width * sizeof(*dst) );
             else if (alpha == 255)
+#ifdef __ARM_NEON
+                set_alpha_opaque_neon_batch(dst, src, width);
+#else
                 for (x = 0; x < width; x++) dst[x] = src[x] | 0xff000000;
+#endif
             else
             {
 #ifdef __ARM_NEON
@@ -791,11 +801,9 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
          * and breaks edit controls that update small regions. */
         perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &locked);
 
-        int result = munmap(mapped_addr, buffer_handle->size);
-        if (result == -1) {
-            ERR("failed to munmap buffer handle\n");
-            return FALSE;
-        }
+        if (needs_unmap)
+            unmap_native_buffer( &buffer );
+
     } else {
         TRACE("Unable to lock surface %p window %p buffer %d\n", surface, window_surface->hwnd, surface->widget_id);
     }
@@ -1297,7 +1305,7 @@ static void show_window(struct ohos_win_data *data)
          * correctly-sized buffer, eliminating the stretch.
          * Only flush when pending_configure is set (size changed),
          * otherwise the old buffer size matches the window and no
-         * stretching can occur a white flush would only cause an
+         * stretching can occur -- a white flush would only cause an
          * unnecessary flash. */
         if (!data->on_screen && data->pending_configure)
         {
@@ -1311,25 +1319,22 @@ static void show_window(struct ohos_win_data *data)
             data->pending_configure_time = 0;
             if (!perform(data->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc))
             {
-                BufferHandle *buffer_handle = buffer.buffer_handle;
-                if (buffer_handle)
+                BOOL needs_unmap = !buffer.mapped_addr;
+
+                if (map_native_buffer( &buffer ) == STATUS_SUCCESS)
                 {
-                    void *mapped_addr = mmap(buffer_handle->virAddr, buffer_handle->size,
-                        PROT_READ | PROT_WRITE, MAP_SHARED, buffer_handle->fd, 0);
-                    if (mapped_addr != MAP_FAILED)
+                    DWORD *bits = (DWORD *)buffer.mapped_addr;
+                    int y;
+                    for (y = 0; y < buffer.height; y++)
                     {
-                        DWORD *bits = (DWORD *)mapped_addr;
-                        int y;
-                        for (y = 0; y < buffer.height; y++)
-                        {
-                            int x;
-                            for (x = 0; x < buffer.width; x++)
-                                bits[x] = 0xFFFFFFFF;
-                            bits += buffer.stride;
-                        }
-                        munmap(mapped_addr, buffer_handle->size);
+                        int x;
+                        for (x = 0; x < buffer.width; x++)
+                            bits[x] = 0xFFFFFFFF;
+                        bits += buffer.stride;
                     }
                 }
+                if (needs_unmap)
+                    unmap_native_buffer( &buffer );
                 perform(data->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &rc);
             }
         }

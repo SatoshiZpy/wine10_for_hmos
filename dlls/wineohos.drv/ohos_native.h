@@ -18,6 +18,12 @@ struct native_buffer
     int stride;
     int buffer_id;
     int fence_id;
+    void *mapped_addr;      /* persistent mmap address (NULL if not mapped) */
+    int mapped_fd;          /* fd used for mmap (-1 if not mapped) */
+    size_t mapped_size;     /* mapped size for munmap */
 };
+
+extern void unmap_native_buffer( struct native_buffer *buffer );
+extern int map_native_buffer( struct native_buffer *buffer );
 
 #endif /* __WINE_OHOS_NATIVE_H */

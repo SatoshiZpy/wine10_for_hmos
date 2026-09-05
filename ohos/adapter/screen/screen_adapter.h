@@ -29,6 +29,10 @@ class ADAPTER_EXPORT_API ScreenAdapter {
   void RegisterDisplayMonitor();
   void RegisterCallback(DisplayChangeCallback callback);
   DisplayChangeCallback GetCallback();
+  WindowRect GetDisplayAvailArea();
+  int GetSystemDpi();
+  float GetDensityPixels();
+
   static ScreenAdapter& GetInstance();
 
  private:

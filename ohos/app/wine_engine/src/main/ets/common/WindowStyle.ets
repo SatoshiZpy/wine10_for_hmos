@@ -42,7 +42,7 @@ export class WindowStyle {
   @LogMethod
   public buildWindowStyles(feature_mask: number, window_state_mask: number): WindowStyles {
     let styles: WindowStyles = new WindowStyles();
-    let has_title_bar = this.hasValue(WindowFeatures.WINDOW_TITLE_BAR, feature_mask) && this.use_system_frame;
+    let has_title_bar = this.hasValue(WindowFeatures.WINDOW_TITLE_BAR, feature_mask);
     styles.hide_title_bar = !has_title_bar;
     styles.closable = has_title_bar && this.hasValue(WindowFeatures.WINDOW_CLOSE_BUTTON, feature_mask);
     styles.minimizable = has_title_bar && this.hasValue(WindowFeatures.WINDOW_MINIMIZE_BUTTON, feature_mask);

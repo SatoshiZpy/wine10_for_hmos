@@ -124,11 +124,6 @@ export class DragDropAdapter extends BaseAdapter {
       windowClass = this.systemFloatingWindowManager.getFloatWindow(id);
     }
     try {
-      const mainWindowProp = windowClass?.getWindowProperties();
-      let xComBorder: number = mainWindowProp?.drawableRect.left || 0;
-      let xComTop: number = mainWindowProp?.drawableRect.top || 0;
-      windowX -= xComBorder;
-      windowY -= xComTop;
       this.nativeContext.OnDragMoveCB(id, windowX, windowY);
     } catch (err) {
       LogUtil.error(TAG, 'Failed to obtain window properties:' + JSON.stringify(err));

@@ -38,13 +38,7 @@ export class SystemFloatingWindowAdapter extends BaseAdapter {
       return;
     }
 
-    let bounds: WindowBound = {
-      left: param.bounds.left,
-      top: param.bounds.top,
-      width: param.bounds.width,
-      height: param.bounds.height,
-    };
-    const out_bounds = this.adjustBounds(bounds);
+    let out_bounds: window.Rect = param.bounds;
     let config: window.Configuration = {
       name: StringUtil.widgetConvert(param.widget_id),
       windowType: window.WindowType.TYPE_FLOAT,
@@ -65,21 +59,6 @@ export class SystemFloatingWindowAdapter extends BaseAdapter {
           });
         } catch (exception) {
           LogUtil.error(TAG, 'move the window exception. Cause:' + JSON.stringify(exception));
-        }
-
-        try {
-          data.on('windowSizeChange', (size) => {
-            const windowProp = data.getWindowProperties();
-            let windowBound: WindowBound = {
-              left: windowProp.windowRect.left + windowProp.drawableRect.left,
-              top: windowProp.windowRect.top + windowProp.drawableRect.top,
-              width: size.width - windowProp.drawableRect.left - windowProp.drawableRect.left,
-              height: size.height - windowProp.drawableRect.top - windowProp.drawableRect.top,
-            };
-            this.nativeContext.OnWindowSizeChange(param.widget_id, windowBound);
-          });
-        } catch (exception) {
-          LogUtil.error(TAG,'Failed to enable the listener for window size changes. Cause: ' + JSON.stringify(exception));
         }
 
         try {
@@ -152,33 +131,19 @@ export class SystemFloatingWindowAdapter extends BaseAdapter {
       LogUtil.error(TAG, 'Failed to obtain the main window.');
       return;
     }
-
-    const windowProp = windowClass?.getWindowProperties();
-    let xComBorder: number = windowProp?.drawableRect.left || 0;
-    let xComTop: number = windowProp?.drawableRect.top || 0;
-    bounds.left -= xComBorder;
-    bounds.top -= xComTop;
-    bounds.width = bounds.width + xComBorder + xComBorder;
-    bounds.height = bounds.height + xComBorder + xComTop;
-
-    try {
-      windowClass.moveWindowTo(bounds.left, bounds.top)
-        .then(() => {
-          windowClass?.resize(bounds.width, bounds.height)
-            .then(() => {
-              onCompleted(true);
-            }).catch((err: BusinessError) => {
-            onCompleted(false);
-            LogUtil.error(TAG, 'Failed to change the window size. Cause:' + JSON.stringify(err));
-          });
-        }).catch((err: BusinessError) => {
-        onCompleted(false);
-        LogUtil.error(TAG, 'Failed to move the window. Cause:' + JSON.stringify(err));
-      });
-    } catch (exception) {
+    windowClass.moveWindowToAsync(bounds.left, bounds.top)
+      .then(() => {
+        windowClass?.resizeAsync(bounds.width, bounds.height)
+          .then(() => {
+            onCompleted(true);
+          }).catch((err: BusinessError) => {
+          onCompleted(false);
+          LogUtil.error(TAG, 'Failed to change the window size. Cause:' + JSON.stringify(err));
+        });
+      }).catch((err: BusinessError) => {
       onCompleted(false);
-      LogUtil.error(TAG, 'move the window exception. Cause:' + JSON.stringify(exception));
-    }
+      LogUtil.error(TAG, 'Failed to move the window. Cause:' + JSON.stringify(err));
+    });
   }
 
   @LogMethod
@@ -188,24 +153,16 @@ export class SystemFloatingWindowAdapter extends BaseAdapter {
                   maxHeight: number,
                   id: number) {
     let windowClass = this.systemFloatingWindowManager.getFloatWindow(id);
-    const windowProp = windowClass?.getWindowProperties();
-    let xComBorder: number = windowProp?.drawableRect.left || 0;
-    let xComTop: number = windowProp?.drawableRect.top || 0;
-
-    try {
-      let windowLimits: window.WindowLimits = {
-        minWidth: minWidth === 0 ? minWidth : minWidth + xComBorder + xComBorder,
-        minHeight: minHeight === 0 ? minHeight : minHeight + xComTop + xComBorder,
-        maxWidth: maxWidth === 0 ? maxWidth : maxWidth + xComBorder + xComBorder,
-        maxHeight: maxHeight === 0 ? maxHeight : maxHeight + xComTop + xComBorder,
-      };
-      windowClass?.setWindowLimits(windowLimits)
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to change the window limits. Cause: ' + JSON.stringify(err));
-        });
-    } catch (exception) {
-      LogUtil.error(TAG, 'change the window limits exception. Cause:' + JSON.stringify(exception));
-    }
+    let windowLimits: window.WindowLimits = {
+      minWidth: minWidth,
+      minHeight: minHeight,
+      maxWidth: maxWidth,
+      maxHeight: maxHeight,
+    };
+    windowClass?.setWindowLimits(windowLimits)
+      .catch((err: BusinessError) => {
+        LogUtil.error(TAG, 'Failed to change the window limits. Cause: ' + JSON.stringify(err));
+      });
   }
 
   @LogMethod
@@ -215,22 +172,6 @@ export class SystemFloatingWindowAdapter extends BaseAdapter {
     }).catch((err: BusinessError) => {
       LogUtil.error(TAG, `startWindowMoving fail, error info: ${JSON.stringify(err)}`);
     });
-  }
-
-  private adjustBounds(bounds: WindowBound): WindowBound {
-    let out_bounds = bounds;
-    let mainWindow = this.ctxAdapter.getActiveProxy().getWindow();
-    if (!mainWindow) {
-      return out_bounds;
-    }
-    const windowProp = mainWindow?.getWindowProperties();
-    let xComBorder: number = windowProp?.drawableRect.left || 0;
-    let xComTop: number = windowProp?.drawableRect.top || 0;
-    out_bounds.left -= xComBorder;
-    out_bounds.top -= xComTop;
-    out_bounds.width += xComBorder + xComBorder;
-    out_bounds.height += xComBorder + xComTop;
-    return out_bounds;
   }
 
   private cacheWindow(id: number, windowClass: window.Window) {

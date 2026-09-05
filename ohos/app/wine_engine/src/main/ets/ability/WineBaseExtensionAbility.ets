@@ -115,7 +115,7 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
       const windowProxy = this.session.getUIExtensionWindowProxy();
       const subWindowOpts: window.SubWindowOptions = {
         title: 'This is a subwindow',
-        decorEnabled: false,
+        decorEnabled: true,
         maximizeSupported: true,
         zLevelAboveParentLoosened: true
       };

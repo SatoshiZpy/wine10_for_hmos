@@ -11,6 +11,7 @@
 #include <string.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <ace/xcomponent/native_interface_xcomponent.h>
@@ -74,6 +75,45 @@ static int get_win_parent( HWND parent )
     return HandleToLong( parent );
 }
 
+void unmap_native_buffer( struct native_buffer *buffer )
+{
+    if (buffer->mapped_addr)
+    {
+        munmap( buffer->mapped_addr, buffer->mapped_size );
+        buffer->mapped_addr = NULL;
+        buffer->mapped_fd = -1;
+        buffer->mapped_size = 0;
+    }
+}
+
+int map_native_buffer( struct native_buffer *buffer )
+{
+    ohos_buffer_handle handle = buffer->buffer_handle;
+    if (!handle) return STATUS_INVALID_HANDLE;
+
+    /* Cache hit: same fd and same size, reuse existing mapping */
+    if (buffer->mapped_addr && buffer->mapped_fd == handle->fd &&
+        buffer->mapped_size == (size_t)handle->size)
+        return STATUS_SUCCESS;  /* cache hit */
+
+    /* Size changed: unmap the old mapping first */
+    if (buffer->mapped_addr) unmap_native_buffer( buffer );
+
+    buffer->mapped_addr = mmap( handle->virAddr, handle->size, PROT_READ | PROT_WRITE,
+                                MAP_SHARED, handle->fd, 0 );
+    if (buffer->mapped_addr == MAP_FAILED)
+    {
+        ERR( "mmap buffer handle failed\n" );
+        buffer->mapped_addr = NULL;
+        buffer->mapped_fd = -1;
+        buffer->mapped_size = 0;
+        return STATUS_MEMORY_NOT_ALLOCATED;
+    }
+    buffer->mapped_fd = handle->fd;
+    buffer->mapped_size = handle->size;
+    return STATUS_SUCCESS;
+}
+
 static void release_native_window( struct native_win_data *data )
 {
     unsigned int i;
@@ -82,6 +122,7 @@ static void release_native_window( struct native_win_data *data )
     {
         if (data->buffers[i])
         {
+            unmap_native_buffer( data->buffers[i] );
             OH_NativeWindow_NativeObjectUnreference(data->buffers[i]->win_buffer);
             free(data->buffers[i]);
             data->buffers[i] = NULL;
@@ -211,6 +252,7 @@ static int register_buffer( struct native_win_data *win, struct native_buffer *b
         {
             TRACE( "hwnd %p %d evicting buffer %p id %d from cache\n",
                 win->hwnd, win->widget_id, old_buffer, i );
+            unmap_native_buffer( old_buffer );
             OH_NativeWindow_NativeObjectUnreference(old_buffer->win_buffer);
             free(old_buffer);
             win->buffers[i] = NULL;
@@ -272,14 +314,51 @@ static int dequeueBuffer( HWND hwnd, struct native_buffer **buffer )
         return STATUS_BUFFER_OVERFLOW;
     }
 
+    /* Check if this win_buffer is already cached with a persistent mapping.
+     * OHOS uses triple-buffering; the same physical buffer is frequently
+     * recycled.  By reusing the cached native_buffer (with its mmap),
+     * we avoid redundant calloc/mmap/munmap/free per flush cycle. */
+    unsigned int i;
+    for (i = 0; i < NB_CACHED_BUFFERS; i++)
+    {
+        if (win_data->buffers[i] && win_data->buffers[i]->win_buffer == win_buffer)
+        {
+            struct native_buffer *buf = win_data->buffers[i];
+            /* Reuse cached buffer: update metadata that may have changed */
+            buf->buffer_handle = buffer_handle;
+            buf->width  = buffer_handle->width;
+            buf->height = buffer_handle->height;
+            buf->stride = buffer_handle->stride / sizeof(DWORD);
+            /* Remap if fd or size changed (e.g. after SET_BUFFER_GEOMETRY).
+             * map_native_buffer detects stale mappings by comparing fd
+             * and size, and automatically unmaps/remaps when needed. */
+            map_native_buffer( buf );
+            insert_buffer_lru( win_data, i );
+            *buffer = buf;
+            TRACE( "hwnd %p reused cached buffer %p id %d, size %d,%d\n",
+                hwnd, buf, i, buf->width, buf->height);
+            return STATUS_SUCCESS;
+        }
+    }
+
+    /* New buffer: allocate, mmap, and register */
     struct native_buffer *buf = calloc( 1, sizeof(*buf) );
 
     buf->win_buffer = win_buffer;
     buf->buffer_handle = buffer_handle;
     buf->fence_id = -1;  /* fence already waited and closed */
+    buf->mapped_fd = -1;
     buf->width  = buffer_handle->width;
     buf->height = buffer_handle->height;
     buf->stride = buffer_handle->stride / sizeof(DWORD);
+
+    /* Persistent mmap: map the DMA buffer once and cache the address.
+     * map_native_buffer caches the mapping; it remains valid after fd
+     * close and across FlushBuffer calls as long as the same physical
+     * buffer is reused via the LRU cache.  When the buffer is evicted
+     * or the window is destroyed, unmap_native_buffer is called from
+     * register_buffer() / release_native_window(). */
+    map_native_buffer( buf );
 
     int buffer_id = register_buffer( win_data, buf );
     buf->buffer_id = buffer_id;
