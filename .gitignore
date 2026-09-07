@@ -112,7 +112,46 @@ nativeBuild/
 autom4te.cache/
 build.log
 *.tar.xz
+!gnutls_tarballs/*.tar.xz
 arm64ecbuild/
 third_party/llvm/
 third_party/*.xz/
 **/oh_modules/
+nativeBuild
+build
+build-tools
+.omo
+*.dll
+*.exe
+
+# Certificates and keys
+debug*.cer
+debug*.csr
+debug*.pem
+debug*.p12
+debug*.b64
+debug-cert.*
+ohos-ca.cer
+ohos-root-ca.cer
+*.p7b
+
+# Build profiles (contain embedded certs)
+wine-profile*.json
+wite-profile*.p7b
+
+# Dist and logs
+dist/
+ohos/log-archive/
+
+# Toolchains (large binaries)
+ohos/tools/
+third_party/llvm-mingw/
+
+# Preset app binaries (too large for git)
+ohos/app/entry/src/main/resources/rawfile/preset/
+
+# Windows metadata
+*:Zone.Identifier
+
+# DXVK (separate repo, not a submodule here)
+third_party/dxvk/
