@@ -270,12 +270,10 @@ cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 # ubt_x32a64_win.dll is required by wow64 (32->64 translation), always copy (not gated on BUILD_ARM64EC)
 cp ${UBT_DIR}/ubt_x32a64_win.dll ${INSTALL_DIR}/lib/wine/aarch64-windows/ 2>/dev/null || true
 # Copy gnutls chain libs (bcrypt/schannel runtime deps) to out/
+# gmp/libtasn1/libunistring are statically absorbed into nettle/hogweed/gnutls.
 cp -d ${GNUTLS_STAGING}/lib/libgnutls.so.30* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
 cp -d ${GNUTLS_STAGING}/lib/libnettle.so.8* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
 cp -d ${GNUTLS_STAGING}/lib/libhogweed.so.6* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
-cp -d ${GNUTLS_STAGING}/lib/libgmp.so.10* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
-cp -d ${GNUTLS_STAGING}/lib/libtasn1.so.6* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
-cp -d ${GNUTLS_STAGING}/lib/libunistring.so.5* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
 
 echo "copy resources"
 cd ${ROOT_DIR}/
@@ -290,9 +288,6 @@ cp ${FREETYPE_DIR}/build/lib/libfreetype.so.6.20.6 ${APP_DIR}/wine_engine/libs/a
 cp -d ${GNUTLS_STAGING}/lib/libgnutls.so.30* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
 cp -d ${GNUTLS_STAGING}/lib/libnettle.so.8* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
 cp -d ${GNUTLS_STAGING}/lib/libhogweed.so.6* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
-cp -d ${GNUTLS_STAGING}/lib/libgmp.so.10* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
-cp -d ${GNUTLS_STAGING}/lib/libtasn1.so.6* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
-cp -d ${GNUTLS_STAGING}/lib/libunistring.so.5* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
 
 cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/

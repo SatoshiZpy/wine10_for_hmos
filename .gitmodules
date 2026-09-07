@@ -10,15 +10,3 @@
 [submodule "third_party/gnutls"]
 	path = third_party/gnutls
 	url = https://gitlab.com/gnutls/gnutls.git
-[submodule "third_party/gmp"]
-	path = third_party/gmp
-	url = https://github.com/alisw/GMP.git
-[submodule "third_party/libtasn1"]
-	path = third_party/libtasn1
-	url = https://gitlab.com/gnutls/libtasn1.git
-[submodule "third_party/nettle"]
-	path = third_party/nettle
-	url = https://git.lysator.liu.se/nettle/nettle.git
-[submodule "third_party/libunistring"]
-	path = third_party/libunistring
-	url = https://git.savannah.gnu.org/git/libunistring.git
