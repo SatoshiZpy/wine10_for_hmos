@@ -56,15 +56,16 @@ build_one() {
     "$src/configure" --host=aarch64-linux-gnu --prefix="$STAGING" \
         --libdir="$STAGING/lib" --disable-static \
         "$@"
+    local make_opts="-o Makefile"
     case "$name" in
         libtasn1)
             sed -i 's/^SUBDIRS = .*/SUBDIRS = lib src/' "$build/Makefile"
             touch "$build/Makefile"
             ;;
         libunistring)
-            sed -i 's/^SUBDIRS = .*/SUBDIRS = doc gnulib-local lib/' "$build/Makefile"
-            # libunistring 的 tests/Makefile.gnulib 有语法错误, 防 automake regen src/Makefile.in
-            touch "$build/Makefile" "$src/Makefile.in" "$src/aclocal.m4" "$src/Makefile.am" 2>/dev/null || true
+            # 无 --disable-tests; tests/pthread-rwlock.c 用 glibc 专有宏 (musl 无) 编译失败.
+            # 只构建 lib 子目录跳过 tests, 不改源码.
+            make_opts=""
             ;;
         gnutls)
             mkdir -p "$build/lib"
@@ -81,10 +82,21 @@ build_one() {
                 sed -i '1i #include "config.h"' "$build/lib/inih/ini.c"
                 touch "$build/lib/inih/ini.c" "$build/lib/inih/ini.h"
             fi
+            # src/gl/tests 同 libunistring 根因 (glibc 专有宏); --disable-tests 不关 gnulib tests,
+            # build-tree Makefile 去掉 tests 子目录 (configure 后 make 前, 不改源码).
+            if [ -f "$build/src/gl/Makefile" ]; then
+                sed -i 's/^SUBDIRS = . tests/SUBDIRS = ./' "$build/src/gl/Makefile"
+                touch "$build/src/gl/Makefile"
+            fi
             ;;
     esac
-    make -o Makefile -j$JOBS
-    make -o Makefile install
+    if [ "$name" = "libunistring" ]; then
+        make $make_opts -j$JOBS -C lib
+        make $make_opts install -C lib
+    else
+        make $make_opts -j$JOBS
+        make $make_opts install
+    fi
     # git-tree bootstrap leaves Version: UNKNOWN in libtasn1.pc; fix for downstream
     if [ "$name" = "libtasn1" ] && [ -f "$STAGING/lib/pkgconfig/libtasn1.pc" ]; then
         sed -i 's/^Version: UNKNOWN/Version: 4.20.0/' "$STAGING/lib/pkgconfig/libtasn1.pc"
@@ -93,16 +105,15 @@ build_one() {
 }
 
 # gmp: 用 release tarball 6.2.1 (gmp 无官方 git, 只有 Mercurial hg 在 gmplib.org;
-# 提交官方 release tarball 到 gnutls_tarballs/, git-lfs 跟踪)
-GMP_SRC="$SRC/gmp"
+# 提交官方 release tarball 到 gnutls_tarballs/, git-lfs 跟踪; 强制用 tarball, 不 fallback third_party/gmp)
 GMP_TARBALL="${ROOT_DIR}/gnutls_tarballs/gmp-6.2.1.tar.xz"
-GMP_TAR_DIR="${BUILD_DIR}/gnutls_tarballs/gmp"
-if [ -f "$GMP_TARBALL" ] && [ ! -f "$GMP_TAR_DIR/configure" ]; then
+GMP_SRC="${BUILD_DIR}/gnutls_tarballs/gmp"
+if [ ! -f "$GMP_SRC/configure" ]; then
+    [ -f "$GMP_TARBALL" ] || { echo "ERROR: gmp tarball 缺失: $GMP_TARBALL"; exit 1; }
     mkdir -p "${BUILD_DIR}/gnutls_tarballs"
     tar -xJf "$GMP_TARBALL" -C "${BUILD_DIR}/gnutls_tarballs/"
-    [ -d "${BUILD_DIR}/gnutls_tarballs/gmp-6.2.1" ] && mv "${BUILD_DIR}/gnutls_tarballs/gmp-6.2.1" "$GMP_TAR_DIR"
+    [ -d "${BUILD_DIR}/gnutls_tarballs/gmp-6.2.1" ] && mv "${BUILD_DIR}/gnutls_tarballs/gmp-6.2.1" "$GMP_SRC"
 fi
-[ -f "$GMP_TAR_DIR/configure" ] && GMP_SRC="$GMP_TAR_DIR"
 build_one gmp "$GMP_SRC" \
     --disable-assembly --enable-cxx=no --disable-dependency-tracking
 
@@ -128,11 +139,6 @@ build_one gnutls "$SRC/gnutls" \
     --without-p11-kit --without-tpm --without-brotli --without-zstd \
     --without-libpsl --without-idn --without-libidn2 --without-unbound \
     --without-libxml2 --disable-dependency-tracking
-
-# gnutls src/gl/tests uses glibc macros; exclude tests from build
-if [ -f "$BUILD_DIR/gnutls_build_aarch64/src/gl/Makefile" ]; then
-    sed -i 's/^SUBDIRS = . tests/SUBDIRS = ./' "$BUILD_DIR/gnutls_build_aarch64/src/gl/Makefile"
-fi
 
 echo "=== GnuTLS chain ready: $STAGING ==="
 export GNUTLS_STAGING
