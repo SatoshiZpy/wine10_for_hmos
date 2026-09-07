@@ -177,6 +177,10 @@ export KRB5_CFLAGS="-I${KRB5_INSTALL_DIR}/include/"
 export KRB5_LIBS="-L${KRB5_INSTALL_DIR}/lib -lkrb5 -lk5crypto -lcom_err"
 source ${ROOT_DIR}/ohos/script/build_krb5.sh
 
+# Build third_party gnutls chain (gmp/nettle/libtasn1/libunistring/gnutls) for bcrypt/schannel
+bash ${ROOT_DIR}/ohos/script/build_gnutls.sh || { echo "ERROR: build_gnutls.sh failed"; exit 1; }
+GNUTLS_STAGING=${ROOT_DIR}/build/gnutls_staging
+
 # ============================================================
 # 7. 运行 configure
 # ============================================================
@@ -193,8 +197,9 @@ else
     export CXXFLAGS="-fPIC -D__MUSL__=1"
 fi
 
-export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include ${KRB5_CFLAGS}"
-export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build/lib ${KRB5_LIBS}"
+export PKG_CONFIG_PATH="${GNUTLS_STAGING}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include -I${GNUTLS_STAGING}/include ${KRB5_CFLAGS}"
+export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build/lib -L${GNUTLS_STAGING}/lib ${KRB5_LIBS}"
 
 # --- 设置 MinGW 目标的 Clang 版本 ---
 export ac_cv_prog_x86_64_CC="${LLVM_TOOLCHAIN}/bin/clang"
@@ -225,7 +230,7 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
         --host=aarch64-linux-ohos \
         --with-mingw=clang \
         --with-wine-tools=${TOOLS_DIR} \
-        --enable-archs=aarch64,arm64ec,i386 \
+        --enable-archs=aarch64,arm64ec,x86_64,i386 \
         --disable-tests \
         --prefix=${INSTALL_DIR} \
         --exec-prefix=${INSTALL_DIR} \
@@ -262,6 +267,15 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
 fi
 cp ${ADAPTER_DIR}/lib/libadapter.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
 cp ${INSTALL_DIR}/bin/libwineserver.so ${INSTALL_DIR}/lib/wine/aarch64-unix/
+# ubt_x32a64_win.dll is required by wow64 (32->64 translation), always copy (not gated on BUILD_ARM64EC)
+cp ${UBT_DIR}/ubt_x32a64_win.dll ${INSTALL_DIR}/lib/wine/aarch64-windows/ 2>/dev/null || true
+# Copy gnutls chain libs (bcrypt/schannel runtime deps) to out/
+cp -d ${GNUTLS_STAGING}/lib/libgnutls.so.30* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libnettle.so.8* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libhogweed.so.6* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libgmp.so.10* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libtasn1.so.6* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libunistring.so.5* ${INSTALL_DIR}/lib/wine/aarch64-unix/ 2>/dev/null || true
 
 echo "copy resources"
 cd ${ROOT_DIR}/
@@ -272,6 +286,13 @@ cp ${INSTALL_DIR}/lib/wine/aarch64-unix/*.so ${APP_DIR}/wine_engine/libs/arm64-v
 cp -d ${FREETYPE_DIR}/build/lib/libfreetype.so ${APP_DIR}/wine_engine/libs/arm64-v8a
 cp -d ${FREETYPE_DIR}/build/lib/libfreetype.so.6 ${APP_DIR}/wine_engine/libs/arm64-v8a
 cp ${FREETYPE_DIR}/build/lib/libfreetype.so.6.20.6 ${APP_DIR}/wine_engine/libs/arm64-v8a
+# Copy gnutls chain libs to HAP (dlopen by bcrypt.so/secur32.so at runtime)
+cp -d ${GNUTLS_STAGING}/lib/libgnutls.so.30* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libnettle.so.8* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libhogweed.so.6* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libgmp.so.10* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libtasn1.so.6* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
+cp -d ${GNUTLS_STAGING}/lib/libunistring.so.5* ${APP_DIR}/wine_engine/libs/arm64-v8a 2>/dev/null || true
 
 cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
@@ -304,6 +325,10 @@ fi
 
 if [ "${COMPILE_HAP}" -eq 1 ]; then
     echo "compile hap"
+    # Use project-internal OHOS SDK (not system/DevEco Studio)
+    export PATH=${ROOT_DIR}/ohos_sdk/command-line-tools/bin:${PATH}
+    export DEVECO_SDK_HOME=${ROOT_DIR}/ohos_sdk/command-line-tools/sdk
+    export DEVECO_NODE_HOME=${ROOT_DIR}/ohos_sdk/command-line-tools/tool/node
     cd ${APP_DIR}/
     rm -rf ~/.hvigor
     ohpm install --all
