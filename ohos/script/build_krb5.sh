@@ -169,6 +169,25 @@ echo ">>> 编译完成"
 echo ">>> 安装到 ${KRB5_INSTALL_DIR}..."
 make install
 
+# ============================================================
+# 8. 生成静态库 (.a) — wine-preloader 用 -static 链接,需要 .a 而非 .so
+# ============================================================
+# krb5 的 configure 是二选一 (--enable-static 编纯 .a 禁 .so, 默认编纯 .so);
+# 但 wine 运行时要 .so、preloader 的 -static 要 .a, 两者都要。
+# shared 模式只生成 OBJS.SH (列出 .so PIC object); 为每个有 OBJS.SH 的目录
+# 建 OBJS.ST -> OBJS.SH 软链, 让 config/lib.in:30 的 .a 规则用同一批 .o
+# (PIC) 打出 .a。.a 里是 PIC .o, 链接进静态 preloader 功能正常。
+echo ">>> 生成静态库 (.a) 供 wine-preloader -static 链接..."
+for dir in $(find . -name OBJS.SH | sed 's|/OBJS.SH||'); do
+    ln -sf OBJS.SH "$dir/OBJS.ST"
+done
+(cd lib/krb5   && make libkrb5.a)   || true
+(cd lib/crypto && make libk5crypto.a) || true
+(cd util/et    && make libcom_err.a)  || true
+cp lib/krb5/libkrb5.a lib/crypto/libk5crypto.a util/et/libcom_err.a \
+   "${KRB5_INSTALL_DIR}/lib/" 2>/dev/null || true
+echo ">>> 静态库生成完成"
+
 echo ">>> 安装完成"
 echo ""
 echo "输出目录: ${KRB5_INSTALL_DIR}"
