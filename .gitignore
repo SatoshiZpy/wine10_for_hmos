@@ -94,8 +94,6 @@ ohos/app/wine_engine/src/main/resources/resfile/*
 out/*
 build/
 nativeBuild/
-- third_party/freetype
-- third_party/aki
 
 # Ignore any Android RenderTest goldens
 **/render_tests/*.png
@@ -117,9 +115,7 @@ arm64ecbuild/
 third_party/llvm/
 third_party/*.xz/
 **/oh_modules/
-nativeBuild
-build
-build-tools
+build-tools/
 .omo
 *.dll
 *.exe
@@ -137,7 +133,7 @@ ohos-root-ca.cer
 
 # Build profiles (contain embedded certs)
 wine-profile*.json
-wite-profile*.p7b
+wine-profile*.p7b
 
 # Dist and logs
 dist/
