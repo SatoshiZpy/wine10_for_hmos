@@ -92,7 +92,7 @@ bootstrap_gnutls() {
     # unictype/, unistr/), not at the top level — count recursively, else the
     # check always reads 0 and re-runs bootstrap needlessly.
     local unistring_c
-    unistring_c=$(find "$GNUTLS_SRC/lib/unistring" -name '*.c' 2>/dev/null | wc -l)
+    unistring_c=$( { find "$GNUTLS_SRC/lib/unistring" -name '*.c' 2>/dev/null || true; } | wc -l)
     if [ "$unistring_c" -gt 0 ] && [ -f "$GNUTLS_SRC/configure" ] \
        && [ -d "$GNUTLS_SRC/gl" ] && [ -d "$GNUTLS_SRC/lib/unistring/m4" ]; then
         echo "--- gnutls bootstrap already done ---"
@@ -108,9 +108,32 @@ bootstrap_gnutls() {
     # SUBMODULE_NOFETCH=1 -> --no-fetch: uninitialized optional submodules
     # (devel/openssl, tests/suite/...) fail fast instead of hanging on network.
     # bootstrap has no `set -e`, so those non-fatal failures don't abort.
+    # The stub must do the two things the real gtkdocize would, not just exit 0:
+    #   1. create gtk-doc.make  (doc/reference/Makefile.am does `include` it ->
+    #      "automake: cannot open < gtk-doc.make" on a fresh tree otherwise)
+    #   2. install m4/gtk-doc.m4 (configure.ac calls GTK_DOC_CHECK
+    #      unconditionally -> "possibly undefined macro" otherwise)
+    # Mirrors the fallback stub in gnutls's bootstrap.conf; docs are disabled
+    # via configure flags anyway.
     local stubbin="$BUILD_DIR/.stubbin"
     mkdir -p "$stubbin"
-    printf '#!/bin/sh\nexit 0\n' > "$stubbin/gtkdocize"
+    cat > "$stubbin/gtkdocize" <<'STUB'
+#!/bin/sh
+cat > gtk-doc.make <<'EOF'
+EXTRA_DIST =
+CLEANFILES =
+EOF
+mkdir -p m4
+cat > m4/gtk-doc.m4 <<'EOF'
+dnl Minimal GTK_DOC_CHECK replacement: docs disabled for this build.
+AC_DEFUN([GTK_DOC_CHECK],[
+  AM_CONDITIONAL([ENABLE_GTK_DOC], [false])
+  AM_CONDITIONAL([GTK_DOC_BUILD_HTML], [false])
+  AM_CONDITIONAL([GTK_DOC_BUILD_PDF], [false])
+])
+EOF
+exit 0
+STUB
     chmod +x "$stubbin/gtkdocize"
     (cd "$GNUTLS_SRC" && \
         PATH="$stubbin:$PATH" \
