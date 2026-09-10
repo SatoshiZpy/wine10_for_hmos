@@ -89,6 +89,9 @@ typedef struct _doc_t
         {
             int fd;
         } unixname;
+#ifdef __OHOS__
+        struct ohos_print_doc *ohos;
+#endif
 #ifdef SONAME_LIBCUPS
         struct
         {
@@ -110,6 +113,27 @@ typedef struct _doc_t
 #endif
     };
 } doc_t;
+
+#ifdef __OHOS__
+static BOOL ohos_write_doc(doc_t *doc, const BYTE *buf, unsigned int size)
+{
+    return print_write_doc(doc->ohos, buf, size);
+}
+
+static BOOL ohos_end_doc(doc_t *doc)
+{
+    return print_end_doc(doc->ohos);
+}
+
+static BOOL ohos_start_doc(doc_t *doc, const WCHAR *printer_id,
+        const WCHAR *document_title)
+{
+    if (!(doc->ohos = print_start_doc(printer_id, document_title))) return FALSE;
+    doc->write_doc = ohos_write_doc;
+    doc->end_doc = ohos_end_doc;
+    return TRUE;
+}
+#endif
 
 static BOOL pipe_write_doc(doc_t *doc, const BYTE *buf, unsigned int size)
 {
@@ -482,6 +506,11 @@ static NTSTATUS start_doc(void *args)
     else if (params->type == PORT_IS_CUPS)
         ret = cups_start_doc(doc, params->port + 5 /*strlen("cups:") */,
                 params->document_title);
+#ifdef __OHOS__
+    else if (params->type == PORT_IS_OHOS)
+        ret = ohos_start_doc(doc, params->port + 5 /* strlen("OHOS:") */,
+                params->document_title);
+#endif
 
     if (ret)
         *params->doc = (size_t)doc;

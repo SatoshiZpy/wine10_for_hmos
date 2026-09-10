@@ -26,6 +26,14 @@
 #include "wine/unixlib.h"
 
 extern HINSTANCE localspl_instance;
+#ifdef __OHOS__
+struct ohos_print_doc;
+
+extern struct ohos_print_doc *print_start_doc(const WCHAR *printer_id,
+        const WCHAR *document_title);
+extern BOOL print_write_doc(struct ohos_print_doc *doc, const BYTE *buf, unsigned int size);
+extern BOOL print_end_doc(struct ohos_print_doc *doc);
+#endif
 
 /* ## Resource-ID ## */
 #define IDS_FORM_LETTER 200
@@ -166,6 +174,9 @@ extern HINSTANCE localspl_instance;
 #define PORT_IS_PIPE     6
 #define PORT_IS_CUPS     7
 #define PORT_IS_LPR      8
+#ifdef __OHOS__
+#define PORT_IS_OHOS     9
+#endif
 
 struct start_doc_params
 {

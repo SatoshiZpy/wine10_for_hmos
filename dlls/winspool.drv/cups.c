@@ -95,7 +95,9 @@ static http_status_t (*pcupsGetPPD3)(http_t *, const char *, time_t *, char *, s
 
 static NTSTATUS process_attach( void *args )
 {
-#ifdef SONAME_LIBCUPS
+#ifdef __OHOS__
+    return STATUS_SUCCESS;
+#elif defined(SONAME_LIBCUPS)
     libcups_handle = dlopen( SONAME_LIBCUPS, RTLD_NOW );
     TRACE( "%p: %s loaded\n", libcups_handle, SONAME_LIBCUPS );
     if (!libcups_handle) return STATUS_DLL_NOT_FOUND;
@@ -234,7 +236,9 @@ static http_status_t cupsGetPPD3_wrapper( http_t *http, const char *name, time_t
 static NTSTATUS enum_printers( void *args )
 {
     const struct enum_printers_params *params = args;
-#ifdef SONAME_LIBCUPS
+#ifdef __OHOS__
+    return ohos_enum_printers( params );
+#elif defined(SONAME_LIBCUPS)
     unsigned int num, i, name_len, comment_len, location_len, needed;
     WCHAR *comment, *location, *ptr;
     struct printer_info *info;
@@ -403,7 +407,24 @@ struct printer_info32
     PTR32 comment;
     PTR32 location;
     BOOL  is_default;
+#ifdef __OHOS__
+    PTR32 ohos_info;
+#endif
 };
+
+#ifdef __OHOS__
+struct ohos_printer_details32
+{
+    PTR32 id;
+    PTR32 make;
+    PTR32 uri;
+    PTR32 page_sizes;
+    PTR32 options;
+    DWORD status;
+    DWORD color_modes;
+    DWORD duplex_modes;
+};
+#endif
 
 static NTSTATUS wow64_enum_printers( void *args )
 {
@@ -436,6 +457,22 @@ static NTSTATUS wow64_enum_printers( void *args )
             info32[i].comment = PtrToUlong(info[i].comment);
             info32[i].location = PtrToUlong(info[i].location);
             info32[i].is_default = info[i].is_default;
+#ifdef __OHOS__
+            info32[i].ohos_info = PtrToUlong(info[i].ohos_info);
+            if (info[i].ohos_info)
+            {
+                struct ohos_printer_details32 *ohos_info32 = (struct ohos_printer_details32 *)info[i].ohos_info;
+
+                ohos_info32->id = PtrToUlong(info[i].ohos_info->id);
+                ohos_info32->make = PtrToUlong(info[i].ohos_info->make);
+                ohos_info32->uri = PtrToUlong(info[i].ohos_info->uri);
+                ohos_info32->page_sizes = PtrToUlong(info[i].ohos_info->page_sizes);
+                ohos_info32->options = PtrToUlong(info[i].ohos_info->options);
+                ohos_info32->status = info[i].ohos_info->status;
+                ohos_info32->color_modes = info[i].ohos_info->color_modes;
+                ohos_info32->duplex_modes = info[i].ohos_info->duplex_modes;
+            }
+#endif
         }
     }
     return status;

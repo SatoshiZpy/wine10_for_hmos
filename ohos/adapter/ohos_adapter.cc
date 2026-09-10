@@ -5,6 +5,8 @@
 #include "ohos_adapter.h"
 
 #include <stdint.h>
+#include <cstring>
+#include <new>
 #include <unistd.h>
 #include <napi/native_api.h>
 
@@ -21,6 +23,7 @@
 #include "ohos/adapter/multiprocess/app_spawn_communication.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/ipc_lite/ipc_lite_adapter.h"
+#include "ohos/adapter/print/ohos_print_adapter.h"
 #include "ohos/adapter/screen/screen_adapter.h"
 #include "ohos/adapter/screenlock_monitor/screenlock_monitor_adapter.h"
 #include "ohos/adapter/window/window_common.h"
@@ -521,4 +524,26 @@ int OpenNativeFileWithChooser(const char *path)
     return 0;
 }
 
+int GetPrinters(struct ohos_printer_info *printers, uint32_t capacity)
+{
+    return ohos::adapter::print::PrintAdapter::GetInstance().GetPrinters(printers, capacity);
+}
+
+int PrintPostScript(const char *printer_id, const char *job_name,
+                        const void *data, uint32_t length)
+{
+    if (!data || !length) {
+        LOGE("PrintPostScript: invalid input, data=%{public}p length=%{public}u",
+            data, length);
+        return -1;
+    }
+    std::shared_ptr<char[]> buffer(new (std::nothrow) char[length]);
+    if (!buffer) {
+        LOGE("PrintPostScript: buffer allocation failed, length=%{public}u", length);
+        return -1;
+    }
+    std::memcpy(buffer.get(), data, length);
+    return ohos::adapter::print::PrintAdapter::GetInstance().PrintPostScript(
+        printer_id ? printer_id : "", job_name ? job_name : "", buffer, length) ? 0 : -1;
+}
 EXTERN_C_END

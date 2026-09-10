@@ -708,6 +708,9 @@ static WCHAR *get_ppd_dir( void )
     TRACE( "ppd temporary dir: %s\n", debugstr_w(dir) );
     return dir;
 }
+#ifdef __OHOS__
+static inline DWORD set_reg_szW( HKEY hkey, const WCHAR *keyname, const WCHAR *value );
+#endif
 
 static BOOL init_unix_printers( void )
 {
@@ -760,9 +763,15 @@ static BOOL init_unix_printers( void )
             if (!ppd_dir && !(ppd_dir = get_ppd_dir())) break;
             if (!add_printer_driver( printer->name, ppd_dir )) continue;
 
+#ifdef __OHOS__
+            port = malloc( sizeof(L"OHOS:") + wcslen( printer->ohos_info->id ) * sizeof(WCHAR) );
+            wcscpy( port, L"OHOS:" );
+            wcscat( port, printer->ohos_info->id );
+#else
             port = malloc( sizeof(L"CUPS:") + wcslen( printer->name ) * sizeof(WCHAR) );
             wcscpy( port, L"CUPS:" );
             wcscat( port, printer->name );
+#endif
 
             memset( &pi2, 0, sizeof(PRINTER_INFO_2W) );
             pi2.pPrinterName    = printer->name;
@@ -784,6 +793,20 @@ static BOOL init_unix_printers( void )
             free( port );
         }
         if (printer->is_default) default_printer = printer->name;
+#ifdef __OHOS__
+        if (printer->ohos_info && !open_printer_reg_key( printer->name, &printer_key ))
+        {
+            set_reg_szW( printer_key, L"OHOS Printer Id", printer->ohos_info->id );
+            set_reg_szW( printer_key, L"OHOS Printer Make", printer->ohos_info->make );
+            set_reg_szW( printer_key, L"OHOS Printer URI", printer->ohos_info->uri );
+            set_reg_szW( printer_key, L"OHOS Page Sizes", printer->ohos_info->page_sizes );
+            set_reg_szW( printer_key, L"OHOS Options", printer->ohos_info->options );
+            set_reg_DWORD( printer_key, L"OHOS Printer Status", printer->ohos_info->status );
+            set_reg_DWORD( printer_key, L"OHOS Color Modes", printer->ohos_info->color_modes );
+            set_reg_DWORD( printer_key, L"OHOS Duplex Modes", printer->ohos_info->duplex_modes );
+            RegCloseKey( printer_key );
+        }
+#endif
     }
 
     if (!default_printer && num) default_printer = enum_params.printers[0].name;
