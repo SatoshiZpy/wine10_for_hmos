@@ -156,5 +156,14 @@ int PermissionManagerAdapter::OpenPermissionConfirm(const OHOSPermissionType& ty
   return kOpenPermissionConfirmFail;
 }
 
+// C entry point for wine-side C code (e.g. dlls/wineohos.drv/clipboard.c) to
+// request a user_grant permission at runtime through the ArkTS binding.
+// Returns 0 on granted, -1 on explicit user denial, -2 on failure
+// (no JS binding / no active context).
+extern "C" ADAPTER_EXPORT_API int OhosAdapterRequestPermission(int32_t permission_type) {
+  return PermissionManagerAdapter::RequestPermissionCode(
+      static_cast<OHOSPermissionType>(permission_type));
+}
+
 }  // namespace permission
 }  // namespace ohos::adapter
