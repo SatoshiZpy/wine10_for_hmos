@@ -1522,7 +1522,7 @@ static void ipv4_forward_fill_entry( struct ipv4_route_data *entry, struct nsi_i
 }
 
 #ifdef __OHOS__
-static NTSTATUS ipv4_routes_from_proc( struct unix_route_list *list )OHOS
+static NTSTATUS ipv4_routes_from_proc( struct unix_route_list *list )
 {
     char buf[512], *ptr;
     struct in_addr mask;
@@ -1565,7 +1565,7 @@ static NTSTATUS ipv4_routes_from_proc( struct unix_route_list *list )OHOS
 static NTSTATUS ipv4_routes_get( struct unix_route_list *list )
 {
 #ifdef HAVE_LINUX_RTNETLINK_H
-    NTSTATUS status = netlink_dump_routes( AF_INET, list );OHOS
+    NTSTATUS status = netlink_dump_routes( AF_INET, list );
     if (status != STATUS_NOT_SUPPORTED) return status;
 #endif
     return ipv4_routes_from_proc( list );
