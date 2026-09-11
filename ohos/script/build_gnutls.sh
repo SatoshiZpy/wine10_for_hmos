@@ -7,12 +7,11 @@
 # No external third_party/{gmp,libtasn1,libunistring,nettle} needed.
 # Output -> ${ROOT_DIR}/build/gnutls_staging (for Wine bcrypt/schannel)
 # Idempotent: skips if all products present.
-set -euo pipefail
+set -ex
 
 # Use build.sh env vars; fallback if sourced standalone
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)}"
-OHOS_SDK="${OHOS_SDK:-${ROOT_DIR}/ohos_sdk/command-line-tools/sdk/default/openharmony}"
-OHOS_TOOLCHAIN="${OHOS_TOOLCHAIN:-${OHOS_SDK}/native/llvm}"
+# OHOS_SDK/OHOS_TOOLCHAIN 由 build.sh source env.sh 后注入（同 shell 继承），无需本脚本再 source
 BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build}"
 
 CLANG="${OHOS_TOOLCHAIN}/bin/clang"
@@ -37,7 +36,7 @@ idempotent_done() {
 
 if idempotent_done; then
     echo "GnuTLS chain already built, skipping"
-    exit 0
+    return 0
 fi
 
 mkdir -p "$STAGING/include" "$STAGING/lib" "$STAGING/lib/pkgconfig"

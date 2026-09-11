@@ -85,7 +85,6 @@ vs-chromium-project.txt
 .vscode
 .vscode-server
 
-ohos_sdk/command-line-tools/
 configure
 ohos/adapter/lib/*
 **/oh-package-lock.json5
@@ -112,8 +111,6 @@ build.log
 *.tar.xz
 !gnutls_tarballs/*.tar.xz
 arm64ecbuild/
-third_party/llvm/
-third_party/*.xz/
 **/oh_modules/
 build-tools/
 .omo
@@ -141,7 +138,6 @@ ohos/log-archive/
 
 # Toolchains (large binaries)
 ohos/tools/
-third_party/llvm-mingw/
 
 # Preset app binaries (too large for git)
 ohos/app/entry/src/main/resources/rawfile/preset/

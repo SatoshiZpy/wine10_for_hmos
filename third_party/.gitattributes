@@ -1,3 +1,2 @@
-LLVM-21.1.0-Linux-X64.tar.xz filter=lfs diff=lfs merge=lfs -text
 mono/wine-mono-10.1.0-x86.msi filter=lfs diff=lfs merge=lfs -text
 gecko/wine-gecko-2.47.4-x86_64.msi filter=lfs diff=lfs merge=lfs -text

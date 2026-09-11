@@ -9,27 +9,12 @@ set -ex
 basedir=$(dirname "$0")
 ROOT_DIR=$PWD
 
-# --- LLVM 工具路径 ---
-LLVM_ARCHIVE="${ROOT_DIR}/third_party/LLVM-21.1.0-Linux-X64.tar.xz"
-LLVM_DIR=${ROOT_DIR}/third_party/llvm
-LLVM_TOOLCHAIN=${LLVM_DIR}/LLVM-21.1.0-Linux-X64
-
-# --- Wine 源码路径 ---
+# --- Wine 源码/产物路径（工具链路径由 ohos/script/env.sh 统一发现，见 §4） ---
 BUILD_DIR=${ROOT_DIR}/build
 INSTALL_DIR=${ROOT_DIR}/out
 ADAPTER_DIR=${ROOT_DIR}/ohos/adapter
 APP_DIR=${ROOT_DIR}/ohos/app
 UBT_DIR=${ROOT_DIR}/ohos/ubt
-
-# --- OpenHarmony SDK 路径 ---
-OHOS_SDK=${ROOT_DIR}/ohos_sdk/command-line-tools/sdk/default/openharmony
-OHOS_SYSROOT=${OHOS_SDK}/native/sysroot
-OHOS_TOOLCHAIN=${OHOS_SDK}/native/llvm
-CMAKE_PATH=${OHOS_SDK}/native/build-tools/cmake/bin/cmake
-NINJA_PATH=${OHOS_SDK}/native/build-tools/cmake/bin/ninja
-CMAKE_FILE_PATH=${OHOS_SDK}/native/build/cmake/ohos.toolchain.cmake
-
-# --- Wine 工具路径 ---
 TOOLS_DIR=${ROOT_DIR}/build-tools
 
 # ============================================================
@@ -105,43 +90,12 @@ if [ ! -d "${TOOLS_DIR}" ]; then
 fi
 
 # ============================================================
-# 4. 准备 OpenHarmony 工具链
+# 4. 准备 OHOS SDK + PE LLVM 工具链（env.sh 统一发现与校验，不再解压 bundle）
 # ============================================================
 cd ${ROOT_DIR}
-
-# Extract ohos_sdk.
-COMMAND_LINE_TOOLS_TAR="ohos_sdk/commandline-tools-linux-x64-26.0.0.461.zip"
-COMMAND_LINE_TOOLS_DIR="ohos_sdk/command-line-tools"
-if [ ! -d "${COMMAND_LINE_TOOLS_DIR}" ]; then
-    unzip -q "${COMMAND_LINE_TOOLS_TAR}" -d ohos_sdk
-
-    file="${OHOS_TOOLCHAIN}/bin/lld-link"
-    if [ -L "$file" ]; then
-        echo "$file"
-    else
-        ln -sf ${OHOS_TOOLCHAIN}/bin/ld.lld ${OHOS_TOOLCHAIN}/bin/lld-link
-    fi
-fi
-export PATH=$PATH:${ROOT_DIR}/ohos_sdk/command-line-tools/bin
-
-# ============================================================
-# 5. 准备 LLVM 工具链
-# ============================================================
-if [ ! -f "${LLVM_ARCHIVE}" ]; then
-    echo "${LLVM_ARCHIVE} not exist"
-    exit 1
-fi
-
-if [ ! -d "${LLVM_DIR}" ]; then
-    mkdir -p ${LLVM_DIR}
-fi
-
-if [ ! -d "${LLVM_TOOLCHAIN}" ]; then
-    tar -xvf "${LLVM_ARCHIVE}" -C "${LLVM_DIR}"
-else
-    echo "${LLVM_TOOLCHAIN} is not empty, skip extracting LLVM."
-fi
-export PATH=${LLVM_TOOLCHAIN}/bin/:$PATH
+source ${ROOT_DIR}/ohos/script/env.sh
+# (legacy) 在 OHOS SDK llvm/bin 建 lld-link 软链（ld.lld 别名，兼容旧构建步骤）
+[ -e "${OHOS_TOOLCHAIN}/bin/lld-link" ] || ln -sf ld.lld "${OHOS_TOOLCHAIN}/bin/lld-link"
 
 # Clear build and install dir
 rm -rf ${INSTALL_DIR}
@@ -178,16 +132,14 @@ export KRB5_LIBS="-L${KRB5_INSTALL_DIR}/lib -lkrb5 -lk5crypto -lcom_err"
 source ${ROOT_DIR}/ohos/script/build_krb5.sh
 
 # Build third_party gnutls chain (gmp/nettle/libtasn1/libunistring/gnutls) for bcrypt/schannel
-bash ${ROOT_DIR}/ohos/script/build_gnutls.sh || { echo "ERROR: build_gnutls.sh failed"; exit 1; }
+source ${ROOT_DIR}/ohos/script/build_gnutls.sh
 GNUTLS_STAGING=${ROOT_DIR}/build/gnutls_staging
 
 # ============================================================
 # 7. 运行 configure
 # ============================================================
 
-# --- 设置环境变量, 为 --host 指定 Clang 版本 ---
-export CC="${OHOS_TOOLCHAIN}/bin/clang --target=aarch64-linux-ohos"
-export CXX="${OHOS_TOOLCHAIN}/bin/clang++ --target=aarch64-linux-ohos"
+# CC/CXX（aarch64-linux-ohos Unix 侧）由 env.sh 统一 export
 
 if [ "${DEBUG_MODE}" -eq 1 ]; then
     export CFLAGS="-fPIC -D__MUSL__=1 -O0 -fno-ident -fdata-sections -ffunction-sections -fno-omit-frame-pointer -g2 -ggnu-pubnames -funwind-tables -no-canonical-prefixes"
@@ -201,11 +153,7 @@ export PKG_CONFIG_PATH="${GNUTLS_STAGING}/lib/pkgconfig:${PKG_CONFIG_PATH}"
 export CPPFLAGS="-I${ADAPTER_DIR}/include -I${FREETYPE_DIR}/include -I${GNUTLS_STAGING}/include ${KRB5_CFLAGS}"
 export LDFLAGS="-L${ADAPTER_DIR}/lib -L${FREETYPE_DIR}/build/lib -L${GNUTLS_STAGING}/lib ${KRB5_LIBS}"
 
-# --- 设置 MinGW 目标的 Clang 版本 ---
-export ac_cv_prog_x86_64_CC="${LLVM_TOOLCHAIN}/bin/clang"
-export ac_cv_prog_i386_CC="${LLVM_TOOLCHAIN}/bin/clang"
-export ac_cv_prog_x86_64_CXX="${LLVM_TOOLCHAIN}/bin/clang++"
-export ac_cv_prog_i386_CXX="${LLVM_TOOLCHAIN}/bin/clang++"
+# ac_cv_prog_{x86_64,i386}_{CC,CXX}（PE 侧 LLVM clang）由 env.sh 统一 export
 
 time_start_for_build=$(date +%s)
 
@@ -320,10 +268,7 @@ fi
 
 if [ "${COMPILE_HAP}" -eq 1 ]; then
     echo "compile hap"
-    # Use project-internal OHOS SDK (not system/DevEco Studio)
-    export PATH=${ROOT_DIR}/ohos_sdk/command-line-tools/bin:${PATH}
-    export DEVECO_SDK_HOME=${ROOT_DIR}/ohos_sdk/command-line-tools/sdk
-    export DEVECO_NODE_HOME=${ROOT_DIR}/ohos_sdk/command-line-tools/tool/node
+    # PATH/DEVECO_SDK_HOME/DEVECO_NODE_HOME 由 env.sh 统一 export
     cd ${APP_DIR}/
     rm -rf ~/.hvigor
     ohpm install --all
