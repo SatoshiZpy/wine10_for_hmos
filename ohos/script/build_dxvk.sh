@@ -2,8 +2,9 @@
 
 # Build DXVK for OHOS (cross-compile to Windows PE DLLs)
 #
-# 64-bit: arm64ec (wow64 mode), 用 third_party/llvm 的 clang +
-#         llvm-mingw 的 arm64ec sysroot (见 build_llvm_mingw_ec.sh)
+# 64-bit: arm64ec (wow64 mode), 用环境变量 LLVM_TOOLCHAIN 指定的
+#         clang + llvm-mingw 的 arm64ec sysroot (环境变量
+#         LLVM_MINGW_SYSROOT, 见 build_llvm_mingw_ec.sh)
 # 32-bit: i386, 用系统 mingw-w64 工具链 (wow64 下 32 位游戏走 xtajit)
 
 set -ex
@@ -44,6 +45,7 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     # 依赖 build_llvm_mingw_ec.sh 导出的: EC_SYSROOT, EC_BUILTINS_LIB
     if [ -z "${EC_SYSROOT}" ]; then
         echo "ERROR: EC_SYSROOT not set, source ohos/script/build_llvm_mingw_ec.sh first"
+        echo "  (须先 export LLVM_MINGW_SYSROOT=/path/to/llvm-mingw-<tag>-ucrt-...-x86_64)"
         exit 1
     fi
 
@@ -55,8 +57,9 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
                 "${LLVM_TOOLCHAIN}/bin/llvm-strip" \
                 "${LLVM_TOOLCHAIN}/bin/llvm-readobj" \
                 "${LLDLINK}"; do
-        if [ ! -f "${tool}" ]; then
-            echo "ERROR: LLVM toolchain missing ${tool} (third_party/llvm)"
+        if [ ! -x "${tool}" ]; then
+            echo "ERROR: LLVM toolchain missing ${tool} (LLVM_TOOLCHAIN=${LLVM_TOOLCHAIN})"
+            echo "  export LLVM_TOOLCHAIN=/path/to/llvm-21.1.0-Linux-X64"
             exit 1
         fi
     done
@@ -90,7 +93,7 @@ EOF
             /OUT:${EC_IMPLIB_DIR}/d3dcompiler_43.lib
     fi
 
-    # windres: 优先 third_party/llvm 的 llvm-windres, 缺失则回退
+    # windres: 优先 LLVM_TOOLCHAIN 的 llvm-windres, 缺失则回退
     # llvm-mingw 的带前缀 windres; 包一层 shim 以固定 target
     if [ -f "${LLVM_TOOLCHAIN}/bin/llvm-windres" ]; then
         EC_WINDRES_BASE="${LLVM_TOOLCHAIN}/bin/llvm-windres"
@@ -98,7 +101,7 @@ EOF
         EC_WINDRES_BASE="${EC_SYSROOT}/../bin/arm64ec-w64-mingw32-windres"
     fi
     if [ ! -f "${EC_WINDRES_BASE}" ]; then
-        echo "ERROR: llvm-windres not found (neither third_party/llvm nor llvm-mingw)"
+        echo "ERROR: llvm-windres not found (neither LLVM_TOOLCHAIN=${LLVM_TOOLCHAIN} nor LLVM_MINGW_SYSROOT=${LLVM_MINGW_SYSROOT:-<未设置>})"
         exit 1
     fi
     cat > ${DXVK_BUILD_DIR}/windres-ec << EOF

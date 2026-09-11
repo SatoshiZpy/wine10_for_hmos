@@ -69,14 +69,13 @@ done
 
 clean_all_cache() {
     echo "清理项目缓存..."
-    # 注意: -x 会连 .gitignore 的文件一起删。工具链目录(从 tarball 解压
-    # 出来的几个 GB)不是构建缓存, 用 --exclude 保留, 避免每次 --no-cache
-    # 都重新解压; ohos_sdk/command-line-tools 同理。
+    # 注意: -x 会连 .gitignore 的文件一起删。工具链不再入仓库
+    # (c2d0191 起由环境变量 OHOS_SDK/LLVM_TOOLCHAIN/LLVM_MINGW_SYSROOT
+    # 定位, third_party/llvm、third_party/llvm-mingw 均已废弃);
+    # ohos_sdk/command-line-tools 若本地仍解压有 SDK, 用 --exclude 保留。
     # tarball 本身是 git 追踪的, clean 不会动它们。
     git clean -xfd \
-        --exclude='ohos_sdk/command-line-tools/' \
-        --exclude='third_party/llvm/' \
-        --exclude='third_party/llvm-mingw/'
+        --exclude='ohos_sdk/command-line-tools/'
     git submodule foreach --recursive 'git reset --hard HEAD' && git submodule foreach --recursive 'git clean -fdx'
     echo "所有缓存清理完成!"
 }
