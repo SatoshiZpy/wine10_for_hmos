@@ -145,5 +145,4 @@ ohos/app/entry/src/main/resources/rawfile/preset/
 # Windows metadata
 *:Zone.Identifier
 
-# DXVK (separate repo, not a submodule here)
-third_party/dxvk/
+# DXVK 现为 submodule（third_party/dxvk@2.6.2, third_party/dxvk-legacy@1.10.3）

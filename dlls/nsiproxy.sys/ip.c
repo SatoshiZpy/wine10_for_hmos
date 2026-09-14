@@ -1331,12 +1331,12 @@ static BOOL netlink_parse_route( struct nlmsghdr *nlh, struct unix_route *route 
     route->prefix_len = rtm->rtm_dst_len;
     if (rta[RTA_PRIORITY]) route->metric = *(int *)RTA_DATA( rta[RTA_PRIORITY] );
     if (rta[RTA_DST])
-        memcpy( rtm->rtm_family == AF_INET ? &route->prefix4 : &route->prefix6,
+        memcpy( rtm->rtm_family == AF_INET ? (void *)&route->prefix4 : (void *)&route->prefix6,
                 RTA_DATA( rta[RTA_DST] ), addr_len );
     if (rta[RTA_GATEWAY])
     {
         route->has_gateway = TRUE;
-        memcpy( rtm->rtm_family == AF_INET ? &route->gateway4 : &route->gateway6,
+        memcpy( rtm->rtm_family == AF_INET ? (void *)&route->gateway4 : (void *)&route->gateway6,
                 RTA_DATA( rta[RTA_GATEWAY] ), addr_len );
     }
 

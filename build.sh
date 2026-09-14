@@ -21,10 +21,11 @@ TOOLS_DIR=${ROOT_DIR}/build-tools
 # 2. 解析命令行参数
 # ============================================================
 NO_CACHE=0
-BUILD_ARM64EC=0
-COMPILE_DXVK=0
-COMPILE_HAP=0
+BUILD_ARM64EC=1
+COMPILE_DXVK=1
+COMPILE_HAP=1
 DEBUG_MODE=0
+DXVK_LEGACY=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-cache)
@@ -47,15 +48,20 @@ while [[ $# -gt 0 ]]; do
             DEBUG_MODE=1
             shift
             ;;
+        --dxvk-legacy)
+            DXVK_LEGACY=1
+            shift
+            ;;
         -h|--help)
-            echo "用法: $0 [--no-cache]"
+            echo "用法: $0 [--no-cache] [--debug]"
             echo ""
-            echo "选项:"
+            echo "选项 (默认已启用 --build-arm64ec --with-dxvk --compile-hap):"
             echo "  --no-cache        清理所有缓存后重新编译"
-            echo "  --build-arm64ec   编译arm64ec/wow64 mode dll"
-            echo "  --with-dxvk       编译DXVK子模块 (64位 arm64ec 需配合 --build-arm64ec)"
-            echo "  --compile-hap     编译HAP包"
+            echo "  --build-arm64ec   编译arm64ec/wow64 mode dll (默认启用)"
+            echo "  --with-dxvk       编译DXVK子模块 (默认启用, 需配合 --build-arm64ec)"
+            echo "  --compile-hap     编译HAP包 (默认启用)"
             echo "  --debug           启用调试模式"
+            echo "  --dxvk-legacy     用 DXVK 1.10.3 (dxvk-legacy) 替代默认 2.6.2"
             echo "  -h, --help        显示此帮助信息"
             exit 0
             ;;
@@ -70,12 +76,11 @@ done
 clean_all_cache() {
     echo "清理项目缓存..."
     # 注意: -x 会连 .gitignore 的文件一起删。工具链不再入仓库
-    # (c2d0191 起由环境变量 OHOS_SDK/LLVM_TOOLCHAIN/LLVM_MINGW_SYSROOT
+    # (c2d0191 起由环境变量 OHOS_SDK/LLVM_MINGW
     # 定位, third_party/llvm、third_party/llvm-mingw 均已废弃);
     # ohos_sdk/command-line-tools 若本地仍解压有 SDK, 用 --exclude 保留。
     # tarball 本身是 git 追踪的, clean 不会动它们。
-    git clean -xfd \
-        --exclude='ohos_sdk/command-line-tools/'
+    git clean -xfd
     git submodule foreach --recursive 'git reset --hard HEAD' && git submodule foreach --recursive 'git clean -fdx'
     echo "所有缓存清理完成!"
 }
@@ -119,7 +124,7 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     FOUND_DLLTOOL=$(command -v llvm-dlltool)
     if ! ${FOUND_DLLTOOL} --help 2>&1 | grep -q arm64ec; then
         echo "ERROR: llvm-dlltool (${FOUND_DLLTOOL}) 不支持 arm64ec 目标"
-        echo "  PATH 里的 llvm-dlltool 不是 ${LLVM_TOOLCHAIN} 的版本,"
+        echo "  PATH 里的 llvm-dlltool 不是 ${LLVM_MINGW} 的版本,"
         echo "  检查 PATH 顺序 (LLVM 21 须在 /usr/bin 之前)"
         exit 1
     fi
@@ -165,13 +170,14 @@ source ${ROOT_DIR}/ohos/script/build_gnutls.sh
 GNUTLS_STAGING=${ROOT_DIR}/build/gnutls_staging
 
 # Build DXVK (D3D11/DXGI to Vulkan translation layer)
-# arm64ec sysroot (llvm-mingw) 必须在 build_dxvk.sh 之前 source:
-# 它导出的 EC_SYSROOT/EC_BUILTINS_LIB 是后者的输入
+# arm64ec sysroot + EC_SYSROOT/EC_BUILTINS_LIB 已由 env.sh 派生并校验（COMPILE_DXVK+BUILD_ARM64EC 时）
 if [ "${COMPILE_DXVK}" -eq 1 ]; then
-    if [ "${BUILD_ARM64EC}" -eq 1 ]; then
-        source ${ROOT_DIR}/ohos/script/build_llvm_mingw_ec.sh
+    if [ "${DXVK_LEGACY}" -eq 1 ]; then
+        source ${ROOT_DIR}/ohos/script/build_dxvk_legacy.sh
+    else
+        source ${ROOT_DIR}/ohos/script/build_dxvk.sh
     fi
-    source ${ROOT_DIR}/ohos/script/build_dxvk.sh
+    source ${ROOT_DIR}/ohos/script/build_vkd3d_proton.sh
 fi
 
 # ============================================================
@@ -280,23 +286,32 @@ cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfil
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 cp -r ${INSTALL_DIR}/lib/wine/i386-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 
-# Copy DXVK DLLs to override Wine's built-in D3D11/DXGI
+# Copy DXVK + vkd3d-proton DLLs to override Wine's built-in D3D11/DXGI/D3D12
+# (dxvk-legacy 1.10.3 仅编译备用，不拷贝以避免与 2.6.2 的 d3d11/dxgi 冲突)
 if [ "${COMPILE_DXVK}" -eq 1 ]; then
-    DXVK_BUILD_DIR=${BUILD_DIR}/dxvk
-    # arm64ec DLLs (installec) 只在 --build-arm64ec 模式下生成, 拷贝到
-    # aarch64-windows (wow64 下 ARM64X/EC DLL 的落点)
-    # meson 版本不同 DLL 可能落在 bin/ 或 lib/, 两处都查
+    if [ "${DXVK_LEGACY}" -eq 1 ]; then DXVK_BUILD_DIR=${BUILD_DIR}/dxvk-legacy; else DXVK_BUILD_DIR=${BUILD_DIR}/dxvk; fi
+    # DXVK arm64ec (d3d11/dxgi)
     for ecdir in installec/bin installec/lib; do
         if [ -d "${DXVK_BUILD_DIR}/${ecdir}" ]; then
             echo "copying DXVK arm64ec DLLs (${ecdir})"
-            # Override Wine's built-in d3d11.dll and dxgi.dll with DXVK versions
             cp ${DXVK_BUILD_DIR}/${ecdir}/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/aarch64-windows/ 2>/dev/null || true
         fi
     done
     if [ -d "${DXVK_BUILD_DIR}/install32/bin" ]; then
         echo "copying DXVK 32-bit DLLs"
-        # Override Wine's built-in d3d11.dll and dxgi.dll with DXVK versions
         cp ${DXVK_BUILD_DIR}/install32/bin/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/i386-windows/ 2>/dev/null || true
+    fi
+    # vkd3d-proton (d3d12)
+    VKD3D_BUILD_DIR=${BUILD_DIR}/vkd3d-proton
+    for ecdir in installec/bin installec/lib; do
+        if [ -d "${VKD3D_BUILD_DIR}/${ecdir}" ]; then
+            echo "copying vkd3d-proton arm64ec DLLs (${ecdir})"
+            cp ${VKD3D_BUILD_DIR}/${ecdir}/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/aarch64-windows/ 2>/dev/null || true
+        fi
+    done
+    if [ -d "${VKD3D_BUILD_DIR}/install32/bin" ]; then
+        echo "copying vkd3d-proton 32-bit DLLs"
+        cp ${VKD3D_BUILD_DIR}/install32/bin/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/i386-windows/ 2>/dev/null || true
     fi
 fi
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
@@ -337,6 +352,7 @@ if [ "${COMPILE_HAP}" -eq 1 ]; then
     echo "copy hap"
     cd ${ROOT_DIR}/
     mkdir ${INSTALL_DIR}/wine_hap/
+    cp ${APP_DIR}/entry/build/default/outputs/default/entry-default-signed.hap ${INSTALL_DIR}/wine_hap/ 2>/dev/null || \
     cp ${APP_DIR}/entry/build/default/outputs/default/entry-default-unsigned.hap ${INSTALL_DIR}/wine_hap/
 fi
 

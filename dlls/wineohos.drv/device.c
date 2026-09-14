@@ -16,7 +16,6 @@
 
 #include <ace/xcomponent/native_interface_xcomponent.h>
 #include <ace/xcomponent/native_xcomponent_key_event.h>
-#include <multimodalinput/oh_input_manager.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS

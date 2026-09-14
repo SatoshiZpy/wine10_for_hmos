@@ -10,6 +10,14 @@
 [submodule "third_party/gnutls"]
 	path = third_party/gnutls
 	url = https://gitlab.com/gnutls/gnutls.git
+[submodule "third_party/dxvk-legacy"]
+	path = third_party/dxvk-legacy
+	url = https://gitcode.com/ohos-wine/dxvk.git
+	branch = ohos-dxvk-1.10.3
+[submodule "third_party/vkd3d-proton"]
+	path = third_party/vkd3d-proton
+	url = https://gitcode.com/ohos-wine/vkd3d-proton.git
 [submodule "third_party/dxvk"]
 	path = third_party/dxvk
 	url = https://gitcode.com/ohos-wine/dxvk.git
+	branch = ohos-dxvk-2.6.2

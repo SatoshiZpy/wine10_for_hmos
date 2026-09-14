@@ -1,18 +1,24 @@
 #!/bin/bash
 
-# Build DXVK for OHOS (cross-compile to Windows PE DLLs)
+# Build DXVK 2.6.2 for OHOS (cross-compile to Windows PE DLLs)
 #
-# 64-bit: arm64ec (wow64 mode), 用环境变量 LLVM_TOOLCHAIN 指定的
-#         clang + llvm-mingw 的 arm64ec sysroot (环境变量
-#         LLVM_MINGW_SYSROOT, 见 build_llvm_mingw_ec.sh)
+# 64-bit: arm64ec (wow64 mode), 用环境变量 LLVM_MINGW 指定的
+#         clang + llvm-mingw 的 arm64ec sysroot (见 env.sh)
 # 32-bit: i386, 用系统 mingw-w64 工具链 (wow64 下 32 位游戏走 xtajit)
+#
+# DXVK 2.6.2 与 1.10.3 的差异 (影响本脚本):
+#   - meson.build 用 check_header('vulkan/vulkan.h') 而非
+#     find_library('vulkan-1'), 不再需要预生成 vulkan-1.lib
+#   - 不再引用 d3dcompiler_43 (无 lib/libd3dcompiler_43.def 依赖)
+#   - 不再有 dxvk_library_path / lib-arm64ec 分支
+#   故本脚本无需生成任何 arm64ec 导入库, 只需 windres shim /
+#   cross-file / ld.lld wrapper (过滤 meson 的 --allow-shlib-undefined)。
 
 set -ex
+# DXVK_DIR / DXVK_BUILD_DIR 由 env.sh 派生
+#   (${OHOS_BUILD_ROOT}/third_party/dxvk, ${OHOS_BUILD_ROOT}/build/dxvk)
 
-DXVK_DIR="${ROOT_DIR}/third_party/dxvk"
-DXVK_BUILD_DIR="${BUILD_DIR}/dxvk"
-
-# DXVK (v1.10.3) 的 meson.build 硬依赖 glslangValidator 编译着色器
+# DXVK (2.6.2) 的 meson.build 硬依赖 glslangValidator 编译着色器
 # 查找顺序: PATH > Vulkan SDK (VULKAN_SDK 或默认 ~/1.3.290.0)
 GLSLANG_BIN="$(command -v glslangValidator || true)"
 if [ -z "${GLSLANG_BIN}" ] && [ -n "${VULKAN_SDK}" ] && [ -x "${VULKAN_SDK}/bin/glslangValidator" ]; then
@@ -42,66 +48,24 @@ mkdir -p ${DXVK_BUILD_DIR}
 # 1. Build 64-bit DXVK (arm64ec)
 # ============================================================
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
-    # 依赖 build_llvm_mingw_ec.sh 导出的: EC_SYSROOT, EC_BUILTINS_LIB
+    # 依赖 env.sh 导出的: EC_SYSROOT, EC_BUILTINS_LIB
     if [ -z "${EC_SYSROOT}" ]; then
-        echo "ERROR: EC_SYSROOT not set, source ohos/script/build_llvm_mingw_ec.sh first"
-        echo "  (须先 export LLVM_MINGW_SYSROOT=/path/to/llvm-mingw-<tag>-ucrt-...-x86_64)"
+        echo "ERROR: EC_SYSROOT not set, source ohos/script/env.sh first"
+        echo "  (须先 export LLVM_MINGW=/path/to/llvm-mingw-<tag>-ucrt-...-x86_64)"
         exit 1
     fi
 
-    CLANG="${LLVM_TOOLCHAIN}/bin/clang"
-    CLANGXX="${LLVM_TOOLCHAIN}/bin/clang++"
-    LLDLINK="${LLVM_TOOLCHAIN}/bin/lld-link"
-    for tool in "${CLANG}" "${CLANGXX}" \
-                "${LLVM_TOOLCHAIN}/bin/llvm-ar" \
-                "${LLVM_TOOLCHAIN}/bin/llvm-strip" \
-                "${LLVM_TOOLCHAIN}/bin/llvm-readobj" \
-                "${LLDLINK}"; do
-        if [ ! -x "${tool}" ]; then
-            echo "ERROR: LLVM toolchain missing ${tool} (LLVM_TOOLCHAIN=${LLVM_TOOLCHAIN})"
-            echo "  export LLVM_TOOLCHAIN=/path/to/llvm-21.1.0-Linux-X64"
-            exit 1
-        fi
-    done
+    # PE 工具由 env.sh 统一派生: PE_CLANG/PE_CXX/PE_LLDLINK/PE_AR/PE_STRIP/PE_READOBJ
 
-    # ------------------------------------------------------------
-    # 1.1 生成 arm64ec 导入库 (vulkan-1, d3dcompiler_43)
-    #
-    # dxvk meson.build 对非 x86_64 架构固定从源码树 lib32 找
-    # vulkan-1/d3dcompiler_43, 但 lib32 是 x86 库且与 i386 构建共用,
-    # 故为 arm64ec 单独生成 lib-arm64ec/ 目录:
-    #   - d3dcompiler_43: 用 dxvk 自带的 def (def 与架构无关)
-    #   - vulkan-1: dxvk 只引用 vkGetInstanceProcAddr 一个导入符号
-    #     (src/vulkan/vulkan_loader.cpp), 自写最小 def
-    # dxvk meson.build 的 dxvk_library_path 已加 aarch64 分支指向此目录
-    # ------------------------------------------------------------
-    EC_IMPLIB_DIR="${DXVK_DIR}/lib-arm64ec"
-    mkdir -p ${EC_IMPLIB_DIR}
-
-    if [ ! -f "${EC_IMPLIB_DIR}/vulkan-1.lib" ]; then
-        cat > ${DXVK_BUILD_DIR}/vulkan-1.def << 'EOF'
-LIBRARY vulkan-1.dll
-EXPORTS
-    vkGetInstanceProcAddr
-EOF
-        ${LLDLINK} /MACHINE:ARM64EC /NOLOGO /DEF:${DXVK_BUILD_DIR}/vulkan-1.def \
-            /OUT:${EC_IMPLIB_DIR}/vulkan-1.lib
-    fi
-
-    if [ ! -f "${EC_IMPLIB_DIR}/d3dcompiler_43.lib" ]; then
-        ${LLDLINK} /MACHINE:ARM64EC /NOLOGO /DEF:${DXVK_DIR}/lib/libd3dcompiler_43.def \
-            /OUT:${EC_IMPLIB_DIR}/d3dcompiler_43.lib
-    fi
-
-    # windres: 优先 LLVM_TOOLCHAIN 的 llvm-windres, 缺失则回退
+    # windres: 优先 LLVM_MINGW 的 llvm-windres, 缺失则回退
     # llvm-mingw 的带前缀 windres; 包一层 shim 以固定 target
-    if [ -f "${LLVM_TOOLCHAIN}/bin/llvm-windres" ]; then
-        EC_WINDRES_BASE="${LLVM_TOOLCHAIN}/bin/llvm-windres"
+    if [ -f "${LLVM_MINGW}/bin/llvm-windres" ]; then
+        EC_WINDRES_BASE="${LLVM_MINGW}/bin/llvm-windres"
     else
         EC_WINDRES_BASE="${EC_SYSROOT}/../bin/arm64ec-w64-mingw32-windres"
     fi
     if [ ! -f "${EC_WINDRES_BASE}" ]; then
-        echo "ERROR: llvm-windres not found (neither LLVM_TOOLCHAIN=${LLVM_TOOLCHAIN} nor LLVM_MINGW_SYSROOT=${LLVM_MINGW_SYSROOT:-<未设置>})"
+        echo "ERROR: llvm-windres not found (LLVM_MINGW=${LLVM_MINGW})"
         exit 1
     fi
     cat > ${DXVK_BUILD_DIR}/windres-ec << EOF
@@ -136,10 +100,10 @@ EOF
     #   目录找 arm64ec builtins (不存在) 而链接失败。
     cat > ${DXVK_BUILD_DIR}/build-arm64ec.txt << EOF
 [binaries]
-c = '${CLANG}'
-cpp = '${CLANGXX}'
-ar = '${LLVM_TOOLCHAIN}/bin/llvm-ar'
-strip = '${LLVM_TOOLCHAIN}/bin/llvm-strip'
+c = '${PE_CLANG}'
+cpp = '${PE_CXX}'
+ar = '${PE_AR}'
+strip = '${PE_STRIP}'
 windres = '${DXVK_BUILD_DIR}/windres-ec'
 
 [properties]
@@ -148,13 +112,13 @@ sys_root = '${EC_SYSROOT}'
 c_args = ['--target=arm64ec-w64-mingw32', '--sysroot=${EC_SYSROOT}',
           '-rtlib=compiler-rt'${EC_RESOURCE_ELEM}]
 cpp_args = ['--target=arm64ec-w64-mingw32', '--sysroot=${EC_SYSROOT}',
-            '-rtlib=compiler-rt', '-stdlib=libc++'${EC_RESOURCE_ELEM}]
+            '-rtlib=compiler-rt', '-stdlib=libc++', '-include', 'algorithm'${EC_RESOURCE_ELEM}]
 c_link_args = ['--target=arm64ec-w64-mingw32', '--sysroot=${EC_SYSROOT}',
-               '-rtlib=compiler-rt', '-unwindlib=libunwind', '-fuse-ld=lld'${EC_RESOURCE_ELEM},
+               '-rtlib=compiler-rt', '-unwindlib=libunwind', '-fuse-ld=lld', '--ld-path=${DXVK_BUILD_DIR}/ld.lld'${EC_RESOURCE_ELEM},
                '-L${EC_SYSROOT}/lib'${EC_BUILTINS_ELEM}]
 cpp_link_args = ['--target=arm64ec-w64-mingw32', '--sysroot=${EC_SYSROOT}',
                  '-rtlib=compiler-rt', '-stdlib=libc++', '-unwindlib=libunwind',
-                 '-fuse-ld=lld'${EC_RESOURCE_ELEM},
+                 '-fuse-ld=lld', '--ld-path=${DXVK_BUILD_DIR}/ld.lld'${EC_RESOURCE_ELEM},
                  '-L${EC_SYSROOT}/lib'${EC_BUILTINS_ELEM}]
 
 [host_machine]
@@ -164,17 +128,28 @@ cpu = 'arm64ec'
 endian = 'little'
 EOF
 
+    cat > ${DXVK_BUILD_DIR}/ld.lld << EOF
+#!/bin/bash
+# 过滤 meson find_library link test 加的 --allow-shlib-undefined (lld 不认)
+args=()
+for a in "\$@"; do
+  [ "\$a" = "--allow-shlib-undefined" ] && continue
+  args+=("\$a")
+done
+exec ${LLVM_MINGW}/bin/ld.lld "\${args[@]}"
+EOF
+    chmod +x ${DXVK_BUILD_DIR}/ld.lld
     echo "--- Building DXVK arm64ec ---"
     if [ ! -f "${DXVK_BUILD_DIR}/buildec/build.ninja" ]; then
-        PATH="${GLSLANG_DIR}:${PATH}" meson setup ${DXVK_BUILD_DIR}/buildec ${DXVK_DIR} \
+        PATH="${DXVK_BUILD_DIR}:${GLSLANG_DIR}:${PATH}" meson setup ${DXVK_BUILD_DIR}/buildec ${DXVK_DIR} \
             --cross-file ${DXVK_BUILD_DIR}/build-arm64ec.txt \
             --prefix ${DXVK_BUILD_DIR}/installec \
-            -Dbuildtype=release
+            -Dbuildtype=release -Db_lundef=false
     fi
 
     # Use limited parallelism to avoid OOM
     # ninja 编译着色器时也要调 glslangValidator, 同样命令级注入
-    PATH="${GLSLANG_DIR}:${PATH}" ninja -C ${DXVK_BUILD_DIR}/buildec -j4 install
+    PATH="${DXVK_BUILD_DIR}:${GLSLANG_DIR}:${PATH}" ninja -C ${DXVK_BUILD_DIR}/buildec -j4 install
 
     # Verify artifacts: machine type 必须是 ARM64EC (0xA641),
     # 防止 target 配错时静默编成纯 aarch64 (wow64 下无法加载)
@@ -188,9 +163,9 @@ EOF
             echo "MISSING: ${DXVK_BUILD_DIR}/installec/{bin,lib}/${dll}"
             exit 1
         fi
-        if ! ${LLVM_TOOLCHAIN}/bin/llvm-readobj --file-headers "${f}" | grep -q "ARM64EC"; then
+        if ! ${PE_READOBJ} --file-headers "${f}" | grep -q "ARM64EC"; then
             echo "ERROR: ${f} is not ARM64EC machine type"
-            ${LLVM_TOOLCHAIN}/bin/llvm-readobj --file-headers "${f}" | grep -i "machine"
+            ${PE_READOBJ} --file-headers "${f}" | grep -i "machine"
             exit 1
         fi
         echo "OK: ${f}"
