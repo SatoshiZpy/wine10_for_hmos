@@ -101,6 +101,21 @@ struct window_param
   int pid;
 };
 
+/* Client surface nested into the parent window page as an XComponent stacked
+ * over the GDI one. Geometry is given in pixels of the window rect (the GDI
+ * buffer maps window pixels 1:1 onto the page, top-left anchored), so the
+ * surface stays aligned with the GDI content whatever geometry the window
+ * manager assigns to the window. */
+struct client_surface_param
+{
+  int parent_widget_id;
+  int client_widget_id;   /* out, allocated by the adapter */
+  int off_x;              /* client offset within the window, in px */
+  int off_y;
+  int width;              /* client size in px */
+  int height;
+};
+
 struct launch_options
 {
   enum launch_process_type type;

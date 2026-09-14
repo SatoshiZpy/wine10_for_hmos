@@ -15,9 +15,6 @@
 #include "unixlib.h"
 #include "wine/debug.h"
 
-/* Define to the soname of the libGLESv3 library. */
-#define SONAME_LIBGLESV3 "libGLESv3.so"
-
 /* ohos private window data */
 struct ohos_win_data
 {
@@ -25,6 +22,7 @@ struct ohos_win_data
     HWND                parent;        /* parent hwnd for child windows */
     struct window_rects rects;         /* window rects in monitor DPI, relative to parent client area */
     int                 widget_id;     /* native window id */
+    int                 client_widget_id; /* nested client surface (vulkan), 0 if none */
     unsigned int        on_screen;     /* is window ordered in? (minimized or not) */
     unsigned int        shaped;        /* is window using a custom region shape? */
     unsigned int        layered;       /* is window layered and with valid attributes? */
@@ -34,6 +32,7 @@ struct ohos_win_data
     unsigned int        pending_change;
     unsigned int        pending_configure;  /* Wine-initiated size change, awaiting OS confirmation */
     DWORD               pending_configure_time; /* tick when pending_configure was set */
+    unsigned int        vulkan_active;  /* is Vulkan surface attached? Skip GDI flush if true */
     RECT                pending_rect;       /* Wine-initiated target rect */
     int                 buffer_width;       /* current buffer width */
     int                 buffer_height;      /* current buffer height */
@@ -56,11 +55,9 @@ extern void free_win_data( struct ohos_win_data *data );
 extern struct ohos_win_data *get_win_data( HWND hwnd );
 extern void release_win_data( struct ohos_win_data *data );
 extern struct ohos_client_surface *ohos_client_surface_create( HWND hwnd, BOOL force );
-extern UINT OHOS_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs );
 
 extern void create_native_window( struct ohos_win_data *data );
 extern void destroy_native_window( HWND hwnd );
-extern int create_client_window( HWND hwnd );
 extern int window_pos_changed( HWND hwnd, const struct window_rects *rects,
                                const struct window_rects *old_rects,
                                UINT style, UINT flags );
@@ -95,6 +92,9 @@ extern BOOL OHOS_GetWindowStateUpdates( HWND hwnd, UINT *state_cmd, UINT *config
 extern BOOL OHOS_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_rect, struct window_surface **surface );
 extern void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags, BOOL fullscreen,
                                       const struct window_rects *new_rects, struct window_surface *surface );
+
+extern UINT OHOS_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs );
+extern UINT OHOS_VulkanInit( UINT version, void *vulkan_handle, const struct vulkan_driver_funcs **driver_funcs );
 
 extern unsigned int screen_width;
 extern unsigned int screen_height;

@@ -20,6 +20,7 @@ enum class XComponentType {
   kUnknown,
   kWindow,
   kSubWindow,
+  kClientSurface,
 };
 
 struct XComponentInfo {

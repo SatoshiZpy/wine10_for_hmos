@@ -3,6 +3,7 @@ UNIXLIB   = wineohos.so
 IMPORTS   = ntoskrnl win32u
 EXTRAINCL = -I$(top_srcdir)/ohos/adapter/include
 UNIX_LIBS = -lwin32u $(PTHREAD_LIBS) $(OHOS_LIBS) $(ADAPTER_LIBS)
+EXTRADEFS = -DSONAME_LIBGLESV3="libGLESv3.so" -DSONAME_LIBVULKAN="libvulkan.so"
 
 SOURCES = \
 	clipboard.c \
@@ -12,4 +13,5 @@ SOURCES = \
 	init.c \
 	keyboard.c \
 	opengl.c \
+	vulkan.c \
 	window.c

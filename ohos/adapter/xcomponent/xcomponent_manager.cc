@@ -111,7 +111,8 @@ void XComponentManager::RequestLayout(int32_t widget_id) {
 void XComponentManager::OnActivationChanged(int32_t widget_id, bool active) {
   std::lock_guard<std::mutex> lock_protect(mutex_);
   auto render = GetXComponent(widget_id);
-  if (!render || render->GetType() == XComponentType::kSubWindow) {
+  if (!render || render->GetType() == XComponentType::kSubWindow ||
+      render->GetType() == XComponentType::kClientSurface) {
     LOGI("filter sub window render: %{public}d", widget_id);
     return;
   }
@@ -124,7 +125,8 @@ void XComponentManager::OnActivationChanged(int32_t widget_id, bool active) {
 void XComponentManager::OnWidgetAvailable(int32_t widget_id) {
   std::lock_guard<std::mutex> lock_protect(mutex_);
   auto render = GetXComponent(widget_id);
-  if (!render || render->GetType() == XComponentType::kSubWindow) {
+  if (!render || render->GetType() == XComponentType::kSubWindow ||
+      render->GetType() == XComponentType::kClientSurface) {
     LOGI("filter sub window render: %{public}d", widget_id);
     return;
   }

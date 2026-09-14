@@ -5517,6 +5517,20 @@ static void adjust_cs_coordinates( CREATESTRUCTW *cs )
     struct window_bounds bounds = GetInitialBounds();
     SetRect(&rect, bounds.left, bounds.top, bounds.width + bounds.left, bounds.height + bounds.top);
     if (!IsRectEmpty(&rect)) {
+        /* The initial bounds come from the OHOS window manager in physical
+         * pixels (the monitor DPI space), while cs is in the thread DPI
+         * space.  Rescale to the thread DPI or the driver boundary maps the
+         * rect a second time and the Wine window ends up bigger than the
+         * OHOS window it is bound to. */
+        UINT raw_dpi;
+        UINT dpi_from = monitor_dpi_from_rect( rect, get_thread_dpi(), &raw_dpi );
+        UINT dpi_to = get_thread_dpi();
+        if (!dpi_to)
+        {
+            dpi_to = monitor_dpi_from_rect( rect, get_thread_dpi(), &raw_dpi );
+            dpi_from = dpi_to;
+        }
+        rect = map_dpi_rect( rect, dpi_from, dpi_to );
         cs->x = rect.left;
         cs->y = rect.top;
         cs->cx = rect.right - rect.left;

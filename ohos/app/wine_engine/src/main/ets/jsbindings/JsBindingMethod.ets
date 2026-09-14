@@ -9,6 +9,7 @@ import { BatteryAdapterBind } from '../jsbindings/BatteryAdapterBind';
 import { BluetoothAdapterBind } from '../jsbindings/BluetoothAdapterBind';
 import { BluetoothLowEnergyAdapterBind } from '../jsbindings/BluetoothLowEnergyAdapterBind';
 import { CertManagerAdapterBind } from '../jsbindings/CertManagerAdapterBind';
+import { ClientSurfaceBind } from '../jsbindings/ClientSurfaceBind';
 import { ContextAdapterBind } from './ContextAdapterBind';
 import { ContextPathAdapterBind } from '../jsbindings/ContextPathAdapterBind';
 import { CursorAdapterBind } from '../jsbindings/CursorAdapterBind';
@@ -50,6 +51,7 @@ export class JsBindingMethod {
     BluetoothAdapterBind.bind();
     BluetoothLowEnergyAdapterBind.bind();
     CertManagerAdapterBind.bind();
+    ClientSurfaceBind.bind();
     ContextAdapterBind.bind();
     ContextPathAdapterBind.bind();
     CursorAdapterBind.bind();

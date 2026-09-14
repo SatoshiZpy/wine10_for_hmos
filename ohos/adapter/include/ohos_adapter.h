@@ -57,6 +57,12 @@ ADAPTER_API struct window_bounds GetInitialBounds(void);
 ADAPTER_API ohos_native_window GetNativeWindow(int widget_id);
 ADAPTER_API int GetFocusWindow(void);
 
+/* client surface: an XComponent nested into the parent window page */
+ADAPTER_API int CreateClientSurface(struct client_surface_param* param);
+ADAPTER_API void SetClientSurfaceBounds(int client_widget_id, int off_x, int off_y,
+                                        int width, int height);
+ADAPTER_API void DestroyClientSurface(int client_widget_id);
+
 /* process */
 ADAPTER_API int StartNativeProcess(int argc, char **argv, const struct launch_options *options);
 ADAPTER_API void KillNativeProcess(int exitcode);
