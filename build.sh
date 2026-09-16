@@ -252,6 +252,38 @@ echo "install wine in: ${INSTALL_DIR}"
 make install-lib
 
 # ============================================================
+# 8.5 覆盖 Wine 内置 D3D11/DXGI 为 DXVK 版本
+# make install-lib 会安装 Wine 内置的 d3d11.dll/dxgi.dll（导入 wined3d.dll），
+# 必须在此之后用 DXVK 版本覆盖，否则 D3D11CreateDeviceAndSwapChain 会使用
+# WineD3D 后端而非 Vulkan。
+# ============================================================
+if [ "${COMPILE_DXVK}" -eq 1 ]; then
+    if [ "${DXVK_LEGACY}" -eq 1 ]; then DXVK_BUILD_DIR=${BUILD_DIR}/dxvk-legacy; else DXVK_BUILD_DIR=${BUILD_DIR}/dxvk; fi
+    echo "overriding Wine built-in D3D11/DXGI with DXVK"
+    # 优先使用 ARM64EC (installec)，回退到 ARM64 (installarm64)
+    for dxvk_src in installec/bin installec/lib installarm64/bin installarm64/lib; do
+        if [ -d "${DXVK_BUILD_DIR}/${dxvk_src}" ]; then
+            echo "  copying DXVK DLLs from ${dxvk_src}"
+            cp ${DXVK_BUILD_DIR}/${dxvk_src}/*.dll ${INSTALL_DIR}/lib/wine/aarch64-windows/ 2>/dev/null || true
+        fi
+    done
+    if [ -d "${DXVK_BUILD_DIR}/install32/bin" ]; then
+        cp ${DXVK_BUILD_DIR}/install32/bin/*.dll ${INSTALL_DIR}/lib/wine/i386-windows/ 2>/dev/null || true
+    fi
+    # vkd3d-proton (d3d12)
+    VKD3D_BUILD_DIR=${BUILD_DIR}/vkd3d-proton
+    for vkd3d_src in installec/bin installec/lib installarm64/bin installarm64/lib; do
+        if [ -d "${VKD3D_BUILD_DIR}/${vkd3d_src}" ]; then
+            echo "  copying vkd3d-proton DLLs from ${vkd3d_src}"
+            cp ${VKD3D_BUILD_DIR}/${vkd3d_src}/*.dll ${INSTALL_DIR}/lib/wine/aarch64-windows/ 2>/dev/null || true
+        fi
+    done
+    if [ -d "${VKD3D_BUILD_DIR}/install32/bin" ]; then
+        cp ${VKD3D_BUILD_DIR}/install32/bin/*.dll ${INSTALL_DIR}/lib/wine/i386-windows/ 2>/dev/null || true
+    fi
+fi
+
+# ============================================================
 # 9. 编译应用程序
 # ============================================================
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
@@ -286,34 +318,9 @@ cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfil
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 cp -r ${INSTALL_DIR}/lib/wine/i386-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 
-# Copy DXVK + vkd3d-proton DLLs to override Wine's built-in D3D11/DXGI/D3D12
-# (dxvk-legacy 1.10.3 仅编译备用，不拷贝以避免与 2.6.2 的 d3d11/dxgi 冲突)
-if [ "${COMPILE_DXVK}" -eq 1 ]; then
-    if [ "${DXVK_LEGACY}" -eq 1 ]; then DXVK_BUILD_DIR=${BUILD_DIR}/dxvk-legacy; else DXVK_BUILD_DIR=${BUILD_DIR}/dxvk; fi
-    # DXVK arm64ec (d3d11/dxgi)
-    for ecdir in installec/bin installec/lib; do
-        if [ -d "${DXVK_BUILD_DIR}/${ecdir}" ]; then
-            echo "copying DXVK arm64ec DLLs (${ecdir})"
-            cp ${DXVK_BUILD_DIR}/${ecdir}/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/aarch64-windows/ 2>/dev/null || true
-        fi
-    done
-    if [ -d "${DXVK_BUILD_DIR}/install32/bin" ]; then
-        echo "copying DXVK 32-bit DLLs"
-        cp ${DXVK_BUILD_DIR}/install32/bin/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/i386-windows/ 2>/dev/null || true
-    fi
-    # vkd3d-proton (d3d12)
-    VKD3D_BUILD_DIR=${BUILD_DIR}/vkd3d-proton
-    for ecdir in installec/bin installec/lib; do
-        if [ -d "${VKD3D_BUILD_DIR}/${ecdir}" ]; then
-            echo "copying vkd3d-proton arm64ec DLLs (${ecdir})"
-            cp ${VKD3D_BUILD_DIR}/${ecdir}/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/aarch64-windows/ 2>/dev/null || true
-        fi
-    done
-    if [ -d "${VKD3D_BUILD_DIR}/install32/bin" ]; then
-        echo "copying vkd3d-proton 32-bit DLLs"
-        cp ${VKD3D_BUILD_DIR}/install32/bin/*.dll ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/i386-windows/ 2>/dev/null || true
-    fi
-fi
+# DXVK + vkd3d-proton DLLs 已在 step 8.5 中覆盖到 INSTALL_DIR，
+# 上面的 cp -r 从 INSTALL_DIR 复制到 resfile 时自动包含 DXVK 版本。
+# 无需再次拷贝。
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp -r ${ROOT_DIR}/third_party/gecko ${APP_DIR}/wine_engine/src/main/resources/resfile/share/wine/
     cp -r ${ROOT_DIR}/third_party/mono ${APP_DIR}/wine_engine/src/main/resources/resfile/share/wine/

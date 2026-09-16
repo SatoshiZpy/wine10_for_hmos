@@ -47,6 +47,33 @@ GLSLANG_DIR="$(dirname "${GLSLANG_BIN}")"
 mkdir -p ${VKD3D_BUILD_DIR}
 
 # ============================================================
+# 0. Apply OHOS patches (500K profile, query-no-int64, etc.)
+# ============================================================
+PATCH_DIR="${OHOS_BUILD_ROOT}/ohos/script/patches/vkd3d-proton"
+PATCHED_SRC="${VKD3D_BUILD_DIR}/src"
+STAMP="${PATCHED_SRC}/.ohos-patched"
+
+if [ ! -f "${STAMP}" ]; then
+    echo "Applying OHOS patches to vkd3d-proton..."
+    rm -rf "${PATCHED_SRC}"
+    mkdir -p "${PATCHED_SRC}"
+    # Copy source (excluding .git) to isolated directory
+    cp -a "${VKD3D_PROTON_DIR}/." "${PATCHED_SRC}/"
+    rm -rf "${PATCHED_SRC}/.git"
+    # Apply patches
+    for patch in "${PATCH_DIR}"/*.patch; do
+        echo "  applying $(basename "${patch}")"
+        (cd "${PATCHED_SRC}" && patch -p1 --forward --batch < "${patch}") || {
+            echo "WARNING: patch $(basename "${patch}") failed, continuing"
+        }
+    done
+    touch "${STAMP}"
+fi
+
+# Use patched source for builds
+VKD3D_PROTON_SRC="${PATCHED_SRC}"
+
+# ============================================================
 # 1. Build 64-bit vkd3d-proton (arm64ec)
 # ============================================================
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
@@ -113,7 +140,7 @@ widl = '${OHOS_BUILD_ROOT}/build-tools/tools/widl/widl'
 needs_exe_wrapper = true
 sys_root = '${EC_SYSROOT}'
 c_args = ['--target=arm64ec-w64-mingw32', '--sysroot=${EC_SYSROOT}',
-          '-rtlib=compiler-rt'${EC_RESOURCE_ELEM}]
+          '-rtlib=compiler-rt', '-Wno-incompatible-pointer-types'${EC_RESOURCE_ELEM}]
 cpp_args = ['--target=arm64ec-w64-mingw32', '--sysroot=${EC_SYSROOT}',
             '-rtlib=compiler-rt', '-stdlib=libc++', '-include', 'algorithm'${EC_RESOURCE_ELEM}]
 c_link_args = ['--target=arm64ec-w64-mingw32', '--sysroot=${EC_SYSROOT}',
@@ -144,7 +171,7 @@ EOF
     chmod +x ${VKD3D_BUILD_DIR}/ld.lld
     echo "--- Building vkd3d-proton arm64ec ---"
     if [ ! -f "${VKD3D_BUILD_DIR}/buildec/build.ninja" ]; then
-        PATH="${VKD3D_BUILD_DIR}:${GLSLANG_DIR}:${OHOS_BUILD_ROOT}/build-tools/tools/widl:${PATH}" meson setup ${VKD3D_BUILD_DIR}/buildec ${VKD3D_PROTON_DIR} \
+        PATH="${VKD3D_BUILD_DIR}:${GLSLANG_DIR}:${OHOS_BUILD_ROOT}/build-tools/tools/widl:${PATH}" meson setup ${VKD3D_BUILD_DIR}/buildec ${VKD3D_PROTON_SRC} \
             --cross-file ${VKD3D_BUILD_DIR}/build-arm64ec.txt \
             --prefix ${VKD3D_BUILD_DIR}/installec \
             -Dbuildtype=release -Db_lundef=false
@@ -211,7 +238,7 @@ EOF
 
 echo "--- Building vkd3d-proton x86 ---"
 if [ ! -f "${VKD3D_BUILD_DIR}/build32/build.ninja" ]; then
-    PATH="${GLSLANG_DIR}:${OHOS_BUILD_ROOT}/build-tools/tools/widl:${PATH}" meson setup ${VKD3D_BUILD_DIR}/build32 ${VKD3D_PROTON_DIR} \
+    PATH="${GLSLANG_DIR}:${OHOS_BUILD_ROOT}/build-tools/tools/widl:${PATH}" meson setup ${VKD3D_BUILD_DIR}/build32 ${VKD3D_PROTON_SRC} \
         --cross-file ${VKD3D_BUILD_DIR}/build-ohos32.txt \
         --prefix ${VKD3D_BUILD_DIR}/install32 \
         -Dbuildtype=release

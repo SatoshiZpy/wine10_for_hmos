@@ -26,7 +26,7 @@ export class WineLoaderAdapter extends BaseAdapter {
     this.presetDeployer = presetDeployer;
   }
 
-  async loadWine(exe_path: string, sock_path: string, file_path: string): Promise<void> {
+  async loadWine(exe_path: string, sock_path: string, file_path: string, argv?: string[]): Promise<void> {
     const context = this.ctxAdapter.getActiveContext();
     if (!context) {
       LogUtil.error(TAG, 'context is undefined');
@@ -76,15 +76,15 @@ export class WineLoaderAdapter extends BaseAdapter {
     // Force Vulkan renderer for D3D11/D3D12 via WINE_D3D_CONFIG
     // this.setEnv(environ, 'WINE_D3D_CONFIG', 'renderer=vulkan');
 
-    // DXVK integration: force native DLL loading for D3D11/DXGI
+    // DXVK integration: force native DLL loading for D3D11/DXGI/D3D12
     // This makes Wine load DXVK's d3d11.dll and dxgi.dll instead of built-in versions
-    this.setEnv(environ, 'WINEDLLOVERRIDES', 'd3d9=n;d3d10=n;d3d10_1=n;d3d10core=n;d3d11=n;dxgi=n');
+    this.setEnv(environ, 'WINEDLLOVERRIDES', 'd3d8=n;d3d9=n;d3d10=n;d3d10_1=n;d3d10core=n;d3d11=n;dxgi=n;d3d12=n');
 
     // DXVK logging configuration
     this.setEnv(environ, 'DXVK_LOG_LEVEL', 'info');
 
-    // DXVK relax features
-    this.setEnv(environ, 'OHOS_DXVK_FEATURES', '1');
+    // DXVK relax features (Maleoon driver capability gaps)
+    this.setEnv(environ, 'DXVK_RELAX_FEATURES', '1');
 
     const config = context.resourceManager.getConfigurationSync();
     const locale = config?.locale;
@@ -102,7 +102,8 @@ export class WineLoaderAdapter extends BaseAdapter {
         'c:\\windows\\system32\\notepad.exe' : exe_path;
       const cmd: string[] = [
         loader,
-        !CheckEmptyUtils.checkStrIsEmpty(file_path) ? file_path : exePath
+        !CheckEmptyUtils.checkStrIsEmpty(file_path) ? file_path : exePath,
+        ...(argv || [])
       ];
       LogUtil.info(TAG, `cmd=${cmd.toString()}`);
       this.nativeContext.runWine(cmd, env);
