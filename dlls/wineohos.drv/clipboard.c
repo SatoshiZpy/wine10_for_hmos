@@ -193,7 +193,6 @@ static BOOL worker_extract_import( OH_Pasteboard *pbs, struct pending_clip *out 
 
     if (!(ud = OH_Pasteboard_GetData(pbs, &ret)))
     {
-        WARN("DIAGCLIP import: GetData failed ret=%d\n", ret);
         /* most likely READ_PASTEBOARD is not granted: remember it; the
          * runtime request is deferred until a win32 app reads the clipboard */
         InterlockedExchange(&import_denied, 1);
@@ -293,7 +292,6 @@ static BOOL worker_extract_import( OH_Pasteboard *pbs, struct pending_clip *out 
 
     OH_UdmfData_Destroy(ud);
 
-    if (!any) WARN("DIAGCLIP import: pasteboard had no supported data\n");
     return any;
 }
 
@@ -473,11 +471,7 @@ static void worker_push_export( OH_Pasteboard *pbs, struct pending_clip *exp )
     }
 
     if (have_record)
-    {
-        int set_ret = OH_Pasteboard_SetData(pbs, data);
-        WARN("DIAGCLIP export: pushed multi-record data ret=%d change=%u\n",
-             set_ret, OH_Pasteboard_GetChangeCount(pbs));
-    }
+        OH_Pasteboard_SetData(pbs, data);
 
     /* single owner: frees all records it holds */
     OH_UdmfData_Destroy(data);
@@ -498,12 +492,7 @@ static void *pbs_worker(void *arg)
     struct pending_clip exp;
 
     pbs = OH_Pasteboard_Create();
-    if (!pbs)
-    {
-        ERR("DIAGCLIP pbs_worker: OH_Pasteboard_Create failed\n");
-        return NULL;
-    }
-    WARN("DIAGCLIP pbs_worker started\n");
+    if (!pbs) return NULL;
     seen = OH_Pasteboard_GetChangeCount(pbs);
 
     for (;;)
@@ -531,14 +520,8 @@ static void *pbs_worker(void *arg)
                      OH_Pasteboard_HasType(pbs, PASTEBOARD_MIMETYPE_TEXT_URI)))
                 {
                     if (worker_extract_import(pbs, &imp))
-                    {
-                        WARN("DIAGCLIP import: prefetched text=%d html=%d uri=%d change=%u\n",
-                             imp.text ? 1 : 0, imp.html ? 1 : 0, imp.urilist ? 1 : 0, cc);
                         put_import_pending(&imp);
-                    }
                 }
-                else
-                    WARN("DIAGCLIP import: no supported type, skip change=%u\n", cc);
             }
         }
 
@@ -553,7 +536,6 @@ static void *pbs_worker(void *arg)
             InterlockedExchange(&perm_inflight, 1);
 
             ret = OhosAdapterRequestPermission(OHOS_PERMISSION_PASTEBOARD);
-            WARN("DIAGCLIP permission: request READ_PASTEBOARD ret=%d\n", ret);
 
             if (ret == 0)
             {
@@ -561,8 +543,6 @@ static void *pbs_worker(void *arg)
                  * next clipboard query by a win32 app sees the data */
                 if (worker_extract_import(pbs, &imp))
                     put_import_pending(&imp);
-                else
-                    WARN("DIAGCLIP permission: nothing to import after grant\n");
             }
             else if (ret == -1)
                 InterlockedExchange(&perm_denied_by_user, 1);
