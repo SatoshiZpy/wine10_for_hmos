@@ -46,6 +46,51 @@ WINE_DECLARE_DEBUG_CHANNEL(fps);
 
 static const struct vulkan_driver_funcs *driver_funcs;
 
+#ifdef __OHOS__
+/* Present pacing.
+ *
+ * The OHOS buffer queue does not block vkQueuePresentKHR on the display
+ * refresh (a SET_SWAP_INTERVAL on the native window is ignored by the
+ * Vulkan swapchain path), so an unthrottled producer runs ahead of the
+ * compositor (~146fps on a 120Hz panel) and frames land across vblank
+ * boundaries unevenly, which reads as stutter even though the fps counter
+ * is high.  Pacing every present to a fixed vblank tick backfires though:
+ * the queue then drains, vkAcquireNextImageKHR starts blocking a full
+ * refresh period as well, and production drops to ~74fps.
+ *
+ * Instead pace like a display-linked presenter does: only delay a present
+ * when it comes sooner than one refresh period after the previous one;
+ * a frame that already took longer is presented immediately.  Production
+ * settles slightly below the panel rate with evenly spaced presents. */
+static pthread_mutex_t g_present_pace_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void pace_present(void)
+{
+    /* ~120Hz refresh period with a small margin for scheduling jitter */
+    const int64_t period_ns = 8300000;
+    static int64_t last_present_ns;
+    struct timespec ts;
+    int64_t now, deadline;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    now = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+
+    pthread_mutex_lock(&g_present_pace_mutex);
+    if (last_present_ns && now < (deadline = last_present_ns + period_ns))
+    {
+        ts.tv_sec = (time_t)(deadline / 1000000000);
+        ts.tv_nsec = (long)(deadline % 1000000000);
+        pthread_mutex_unlock(&g_present_pace_mutex);
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        now = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+        pthread_mutex_lock(&g_present_pace_mutex);
+    }
+    last_present_ns = now;
+    pthread_mutex_unlock(&g_present_pace_mutex);
+}
+#endif /* __OHOS__ */
+
 struct surface
 {
     struct vulkan_surface obj;
@@ -433,6 +478,11 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
 
     present_info_host.pSwapchains = swapchains;
 
+#ifdef __OHOS__
+    /* delay only when presenting sooner than one refresh period after the
+     * previous present (see pace_present above) */
+    pace_present();
+#endif
     res = device->p_vkQueuePresentKHR( queue->host.queue, &present_info_host );
 
     for (i = 0; i < present_info->swapchainCount; i++)

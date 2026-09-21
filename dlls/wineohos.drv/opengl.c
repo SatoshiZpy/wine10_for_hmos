@@ -103,9 +103,48 @@ static BOOL ohos_surface_create( HWND hwnd, HDC hdc, int format, struct opengl_d
 
 static void ohos_init_egl_platform( struct egl_platform *platform )
 {
+    /* Mesa's OHOS EGL backend provides desktop OpenGL through ZINK. */
     platform->type = EGL_PLATFORM_OHOS_KHR;
     platform->native_display = EGL_DEFAULT_DISPLAY;
     egl = platform;
+}
+
+static UINT ohos_init_pixel_formats( UINT *onscreen_count )
+{
+    static const EGLint gl_attribs[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE };
+    static const EGLint es3_attribs[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_NONE };
+    struct egl_platform *platform = (struct egl_platform *)egl;
+    const EGLint *attribs = gl_attribs;
+    EGLConfig *configs = NULL;
+    EGLint count = 0;
+
+    /* The OHOS system EGL exposes GLES configs only; desktop GL is provided
+     * by the libGLv4 wrapper on top of them. */
+    funcs->p_eglChooseConfig( platform->display, attribs, NULL, 0, &count );
+    if (count <= 0)
+    {
+        TRACE( "no EGL_OPENGL_BIT configs, falling back to ES3 configs\n" );
+        attribs = es3_attribs;
+        funcs->p_eglChooseConfig( platform->display, attribs, NULL, 0, &count );
+    }
+    if (count <= 0)
+    {
+        ERR( "Failed to get any configs from eglChooseConfig\n" );
+        return 0;
+    }
+    if (!(configs = malloc( count * sizeof(*configs) ))) return 0;
+    if (!funcs->p_eglChooseConfig( platform->display, attribs, configs, count, &count ) || !count)
+    {
+        ERR( "Failed to get configs from eglChooseConfig\n" );
+        free( configs );
+        return 0;
+    }
+
+    platform->configs = configs;
+    platform->config_count = count;
+    *onscreen_count = count;
+    TRACE( "obtained %u EGL configs\n", count );
+    return 2 * count;
 }
 
 static void *ohos_get_proc_address( const char *name )
@@ -166,7 +205,7 @@ UINT OHOS_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, con
     }
     funcs = opengl_funcs;
 
-    ohos_driver_funcs.p_init_pixel_formats = (*driver_funcs)->p_init_pixel_formats;
+    ohos_driver_funcs.p_init_pixel_formats = ohos_init_pixel_formats;
     ohos_driver_funcs.p_describe_pixel_format = (*driver_funcs)->p_describe_pixel_format;
     ohos_driver_funcs.p_init_wgl_extensions = (*driver_funcs)->p_init_wgl_extensions;
     ohos_driver_funcs.p_context_create = (*driver_funcs)->p_context_create;

@@ -80,10 +80,6 @@ class WindowNodeController extends NodeController {
         if (this.config.widgetId === ConfigData.DEFAULT_WIDGET_ID) {
           this.setDefaultBounds();
         }
-
-        setTimeout(() => {
-          this.config.bgColor = Color.White;
-        }, 5000);
       })
 
     try {

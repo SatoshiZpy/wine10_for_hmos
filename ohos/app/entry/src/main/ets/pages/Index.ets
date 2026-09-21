@@ -41,11 +41,10 @@ struct Index {
     .width('100%')
     .height('100%')
     .padding({
-      top: this.getStatusBarHeight(),
+      // System status bar avoid area; the value from avoidArea is already in
+      // px, pass it through as a px string without a vp round trip to avoid
+      // sub-pixel drift.
+      top: `${this.statusBarHeight}px`,
     })
-  }
-  getStatusBarHeight(): number {
-    LogUtil.info(TAG, 'Avoidance function, statusBarHeight:' + this.statusBarHeight + ',density:' + this.density);
-    return this.getUIContext().px2vp(this.statusBarHeight);
   }
 }

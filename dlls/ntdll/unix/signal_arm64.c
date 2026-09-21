@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
 #ifdef HAVE_SYS_PARAM_H
@@ -49,6 +50,9 @@
 #endif
 #ifdef HAVE_SYS_UCONTEXT_H
 # include <sys/ucontext.h>
+#endif
+#ifdef HAVE_SYS_UIO_H
+# include <sys/uio.h>
 #endif
 #ifdef __OHOS__
 #include <errno.h>
@@ -1071,12 +1075,91 @@ static BOOL handle_syscall_fault( ucontext_t *context, EXCEPTION_RECORD *rec )
  *
  * Handler for SIGSEGV.
  */
+#ifdef __OHOS__
+/* Unaligned-access emulation for translated x86 code.
+ *
+ * x86 allows unaligned memory accesses (including atomic read-modify-write
+ * instructions on naturally misaligned addresses, e.g. Interlocked* on
+ * packed structs), but ARM64 raises SIGBUS(BUS_ADRALN)/SIGSEGV for them.
+ * Delivering a Windows alignment exception into translated contexts is not
+ * survivable, so instead the faulting instruction is decoded here and
+ * executed manually (byte-wise copies, atomics emulated non-atomically),
+ * which keeps games with miscompiled or packed-data atomics running.
+ * See emulate_unaligned_access() below for details. */
+
+/* result codes for emulate_unaligned_access */
+#define EMU_OK          0  /* access emulated, execution may continue */
+#define EMU_UNSUPPORTED 1  /* instruction not handled */
+#define EMU_FAULT       2  /* target address inaccessible -> access violation */
+
+/* try to make the target address accessible (wine demand-paging), then copy
+ * without raising signals (returns FALSE on inaccessible memory) */
+static BOOL safe_read( void *dst, unsigned long long addr, unsigned int len, void *stack )
+{
+    struct iovec local = { dst, len };
+    struct iovec remote = { (void *)(unsigned long)addr, len };
+    if (!len) return TRUE;
+    if (syscall( __NR_process_vm_readv, getpid(), &local, 1, &remote, 1, 0 ) != len)
+    {
+        EXCEPTION_RECORD rec = { EXCEPTION_ACCESS_VIOLATION };
+        rec.NumberParameters = 2;
+        rec.ExceptionInformation[0] = EXCEPTION_READ_FAULT;
+        rec.ExceptionInformation[1] = addr;
+        if (!virtual_handle_fault( &rec, stack )) return FALSE;
+        if (syscall( __NR_process_vm_readv, getpid(), &local, 1, &remote, 1, 0 ) != len )
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL safe_write( unsigned long long addr, const void *src, unsigned int len, void *stack )
+{
+    struct iovec local = { (void *)src, len };
+    struct iovec remote = { (void *)(unsigned long)addr, len };
+    if (!len) return TRUE;
+    if (syscall( __NR_process_vm_writev, getpid(), &local, 1, &remote, 1, 0 ) != len)
+    {
+        EXCEPTION_RECORD rec = { EXCEPTION_ACCESS_VIOLATION };
+        rec.NumberParameters = 2;
+        rec.ExceptionInformation[0] = EXCEPTION_WRITE_FAULT;
+        rec.ExceptionInformation[1] = addr;
+        if (!virtual_handle_fault( &rec, stack )) return FALSE;
+        if (syscall( __NR_process_vm_writev, getpid(), &local, 1, &remote, 1, 0 ) != len )
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static int emulate_unaligned_access( ucontext_t *context, unsigned long long *fault_addr,
+                                     int *fault_write );
+#endif
+
 static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
     EXCEPTION_RECORD rec = { 0 };
     ucontext_t *context = sigcontext;
     DWORD64 esr = get_fault_esr( context );
 
+#ifdef __OHOS__
+    /* alignment faults may also surface as SIGSEGV (DFSC 0x21) */
+    if ((esr & 0x3f) == 0x21)
+    {
+        unsigned long long faddr = 0;
+        int fwrite = 0;
+        int res = emulate_unaligned_access( context, &faddr, &fwrite );
+        if (res == EMU_OK) return;
+        if (res == EMU_FAULT)
+        {
+            rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+            rec.NumberParameters = 2;
+            rec.ExceptionInformation[0] = fwrite;
+            rec.ExceptionInformation[1] = faddr;
+            if (!virtual_handle_fault( &rec, (void *)SP_sig(context) )) return;
+            setup_exception( context, &rec );
+            return;
+        }
+    }
+#endif
     rec.NumberParameters = 2;
     if ((esr & 0xf0000000) == 0x80000000) rec.ExceptionInformation[0] = EXCEPTION_EXECUTE_FAULT;
     else if (esr & 0x40) rec.ExceptionInformation[0] = EXCEPTION_WRITE_FAULT;
@@ -1116,6 +1199,339 @@ static void ill_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 }
 
 
+#ifdef __OHOS__
+/**********************************************************************
+ *		emulate_unaligned_access
+ *
+ * Emulate an unaligned load/store instruction.
+ *
+ * x86 code translated by ubt may perform unaligned memory accesses,
+ * which are legal on x86 but raise SIGBUS(BUS_ADRALN) on ARM64.
+ * Decode the faulting instruction and execute the access with
+ * byte-wise copies, then skip the instruction.  Memory accesses are
+ * performed through process_vm_readv/writev so that an inaccessible
+ * target address is reported as EMU_FAULT instead of raising a
+ * nested (fatal) signal inside the handler.
+ */
+static int emulate_unaligned_access( ucontext_t *context, unsigned long long *fault_addr,
+                                     int *fault_write )
+{
+    unsigned int instr = *(unsigned int *)PC_sig( context );
+    unsigned int size, v, opc, rn, rt, rt2, l, acc_size, scale;
+    unsigned long long addr, addr2, val, base;
+
+    size = (instr >> 30) & 3;
+    v    = (instr >> 26) & 1;
+    opc  = (instr >> 22) & 3;
+    rt   = instr & 31;
+
+    if ((instr & 0x3b000000) == 0x39000000)  /* LDR/STR (immediate, unsigned offset) */
+    {
+        unsigned int imm12 = (instr >> 10) & 0xfff;
+        rn = (instr >> 5) & 31;
+        scale = 1 << size;
+        if (v && size == 0 && opc >= 2) scale = 16;  /* 128-bit SIMD */
+        addr = REGn_sig( rn, context ) + (unsigned long long)imm12 * scale;
+    }
+    else if ((instr & 0x3b000000) == 0x38000000 && !(instr & 0x00200000))  /* unscaled / post / pre / register (bit21=0; LSE atomics have bit21=1) */
+    {
+        unsigned int sub = (instr >> 10) & 3;
+        rn = (instr >> 5) & 31;
+        base = REGn_sig( rn, context );
+        if (sub == 2)  /* register offset */
+        {
+            unsigned int rm = (instr >> 16) & 31;
+            unsigned int option = (instr >> 13) & 7;
+            unsigned int s = (instr >> 12) & 1;
+            unsigned long long index = REGn_sig( rm, context );
+            if (option != 3 /* LSL */) return EMU_UNSUPPORTED;
+            if (s) index <<= size;
+            addr = base + index;
+        }
+        else
+        {
+            unsigned int imm9 = (instr >> 12) & 0x1ff;
+            long long simm9 = (long long)(int)(imm9 << 23) >> 23;
+            if (sub == 0)      addr = base + simm9;                          /* unscaled */
+            else if (sub == 1) { addr = base; REGn_sig( rn, context ) = base + simm9; }  /* post-index */
+            else               { addr = base + simm9; REGn_sig( rn, context ) = addr; } /* pre-index */
+        }
+    }
+    else if ((instr & 0x38000000) == 0x28000000)  /* LDP/STP */
+    {
+        unsigned int mode = (instr >> 23) & 3;
+        unsigned int imm7 = (instr >> 15) & 0x7f;
+        long long simm7 = (long long)(int)(imm7 << 25) >> 25;
+        rt2 = (instr >> 10) & 31;
+        rn  = (instr >> 5) & 31;
+        l   = (instr >> 22) & 1;
+        if (mode == 0) return EMU_UNSUPPORTED;  /* LDXP/STXP (exclusive) unsupported */
+        if (v) acc_size = (opc == 0) ? 4 : (opc == 1) ? 8 : 16;
+        else   acc_size = (opc >> 1) ? 8 : 4;
+        scale = acc_size;
+        base = REGn_sig( rn, context );
+        if (mode == 1)      { addr = base; REGn_sig( rn, context ) = base + simm7 * scale; }  /* post */
+        else if (mode == 2) { addr = base + simm7 * scale; }                                   /* offset */
+        else                { addr = base + simm7 * scale; REGn_sig( rn, context ) = addr; }  /* pre */
+        addr2 = addr + acc_size;
+
+        if (!l)  /* STP */
+        {
+            if (v)
+            {
+                struct fpsimd_context *fpsimd = get_fpsimd_context( context );
+                if (!fpsimd) return EMU_UNSUPPORTED;
+                if (!safe_write( addr, &fpsimd->vregs[rt], acc_size, (void *)SP_sig(context) ) ||
+                    !safe_write( addr2, &fpsimd->vregs[rt2], acc_size, (void *)SP_sig(context) ))
+                    { *fault_write = 1; goto fault; }
+            }
+            else
+            {
+                val = REGn_sig( rt, context ) & ((acc_size == 8) ? ~0ull : 0xffffffffull);
+                if (!safe_write( addr, &val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+                val = REGn_sig( rt2, context ) & ((acc_size == 8) ? ~0ull : 0xffffffffull);
+                if (!safe_write( addr2, &val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+            }
+        }
+        else  /* LDP */
+        {
+            if (v)
+            {
+                struct fpsimd_context *fpsimd = get_fpsimd_context( context );
+                if (!fpsimd) return EMU_UNSUPPORTED;
+                memset( &fpsimd->vregs[rt], 0, 16 );
+                memset( &fpsimd->vregs[rt2], 0, 16 );
+                if (!safe_read( &fpsimd->vregs[rt], addr, acc_size, (void *)SP_sig(context) ) ||
+                    !safe_read( &fpsimd->vregs[rt2], addr2, acc_size, (void *)SP_sig(context) ))
+                    { *fault_write = 0; goto fault; }
+            }
+            else
+            {
+                if (!safe_read( &val, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+                if (acc_size == 4) val = (unsigned int)val;
+                if (rt != 31) REGn_sig( rt, context ) = val;
+                if (!safe_read( &val, addr2, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+                if (acc_size == 4) val = (unsigned int)val;
+                if (rt2 != 31) REGn_sig( rt2, context ) = val;
+            }
+        }
+        PC_sig( context ) += 4;
+        return EMU_OK;
+    }
+    else if ((instr & 0x0ffffc00) == 0x08dffc00)  /* LDAR/LDARH/LDARB (any size) */
+    {
+        acc_size = 1 << size;
+        rn = (instr >> 5) & 31;
+        addr = REGn_sig( rn, context );
+        memset( &val, 0, 8 );
+        if (!safe_read( &val, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+        if (rt != 31) REGn_sig( rt, context ) = (acc_size < 8) ? (unsigned int)val : val;
+        PC_sig( context ) += 4;
+        return EMU_OK;
+    }
+    else if ((instr & 0x0ffffc00) == 0x089ffc00)  /* STLR/STLRH/STLRB (any size) */
+    {
+        acc_size = 1 << size;
+        rn = (instr >> 5) & 31;
+        addr = REGn_sig( rn, context );
+        val = REGn_sig( rt, context );
+        if (!safe_write( addr, &val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+        PC_sig( context ) += 4;
+        return EMU_OK;
+    }
+    else if ((instr & 0x3f800000) == 0x08000000 && (instr & 0x00200000) &&
+             (instr & 0x0000fc00) == 0x00007c00)  /* CASP/CASPA/CASPL/CASPAL (compare-and-swap pair) */
+    {
+        /* CASP Xs,Xs+1 / Xt,Xt+1: compare the register pair with 2*acc_size
+         * bytes at [Xn]; if equal store the new pair; the destination pair
+         * always receives the old memory pair.  size: 0 = 32-bit regs,
+         * 1 = 64-bit regs (2 << size bytes total). */
+        unsigned int rs = (instr >> 16) & 31;
+        unsigned long long old_lo = 0, old_hi = 0, cmp_lo, cmp_hi, new_lo, new_hi;
+        acc_size = 4 << ((instr >> 30) & 1);
+        rn = (instr >> 5) & 31;
+        addr = REGn_sig( rn, context );
+        if (!safe_read( &old_lo, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+        if (!safe_read( &old_hi, addr + acc_size, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+        cmp_lo = REGn_sig( rs, context );
+        cmp_hi = REGn_sig( rs < 31 ? rs + 1 : rs, context );
+        new_lo = REGn_sig( rt, context );
+        new_hi = REGn_sig( rt < 31 ? rt + 1 : rt, context );
+        if (acc_size == 4)
+        {
+            old_lo = (unsigned int)old_lo; old_hi = (unsigned int)old_hi;
+            cmp_lo = (unsigned int)cmp_lo; cmp_hi = (unsigned int)cmp_hi;
+            new_lo = (unsigned int)new_lo; new_hi = (unsigned int)new_hi;
+        }
+        if (old_lo == cmp_lo && old_hi == cmp_hi)
+        {
+            if (!safe_write( addr, &new_lo, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+            if (!safe_write( addr + acc_size, &new_hi, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+        }
+        if (rt != 31)
+        {
+            REGn_sig( rt, context ) = (acc_size == 4) ? (unsigned int)old_lo : old_lo;
+            if (rt < 31) REGn_sig( rt + 1, context ) = (acc_size == 4) ? (unsigned int)old_hi : old_hi;
+        }
+        PC_sig( context ) += 4;
+        return EMU_OK;
+    }
+    else if ((instr & 0x3f800000) == 0x08000000)  /* LDXR/LDAXR/STXR/STLXR (exclusive; bit21=0, CASP handled above) */
+    {
+        acc_size = 1 << size;
+        rn = (instr >> 5) & 31;
+        addr = REGn_sig( rn, context );
+        if ((instr >> 22) & 1)  /* load */
+        {
+            memset( &val, 0, 8 );
+            if (!safe_read( &val, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+            if (rt != 31) REGn_sig( rt, context ) = (acc_size < 8) ? (unsigned int)val : val;
+        }
+        else  /* store: perform the store and always report success */
+        {
+            unsigned int rs = (instr >> 16) & 31;
+            val = REGn_sig( rt, context );
+            if (!safe_write( addr, &val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+            if (rs != 31) REGn_sig( rs, context ) = 0;
+        }
+        PC_sig( context ) += 4;
+        return EMU_OK;
+    }
+    else if ((instr & 0x3f000000) == 0x38000000 && (instr & 0x00200000))  /* LSE atomics: SWP/LDADD/LDCLR/LDEOR/LDSET/LDSMAX/... */
+    {
+        unsigned int op = (instr >> 12) & 0xf;
+        unsigned int rs = (instr >> 16) & 31;
+        unsigned long long rs_val, new_val;
+        acc_size = 1 << ((instr >> 30) & 3);
+        rn = (instr >> 5) & 31;
+        addr = REGn_sig( rn, context );
+        if (op > 8) return EMU_UNSUPPORTED;  /* CASP and other exotic forms */
+        if (!safe_read( &val, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+        rs_val = REGn_sig( rs, context );
+        if (acc_size < 8) { val = (unsigned int)val; rs_val = (unsigned int)rs_val; }
+        switch (op)
+        {
+        case 0: new_val = val + rs_val; break;                    /* LDADD */
+        case 1: new_val = val & ~rs_val; break;                   /* LDCLR */
+        case 2: new_val = val ^ rs_val; break;                    /* LDEOR */
+        case 3: new_val = val | rs_val; break;                    /* LDSET */
+        case 4:  /* LDSMAX */
+        case 5:  /* LDSMIN */
+        case 6:  /* LDUMAX */
+        case 7:  /* LDUMIN */
+        {
+            unsigned long long a = val, b = rs_val;
+            if (op < 6)  /* signed */
+            {
+                if (acc_size == 1) { a = (signed char)a; b = (signed char)b; }
+                else if (acc_size == 2) { a = (short)a; b = (short)b; }
+                else if (acc_size == 4) { a = (int)a; b = (int)b; }
+            }
+            new_val = (op == 4 || op == 6) ? ((a > b) ? a : b) : ((a < b) ? a : b);
+            break;
+        }
+        default: new_val = rs_val; break;                         /* SWP */
+        }
+        if (!safe_write( addr, &new_val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+        if (rt != 31) REGn_sig( rt, context ) = (acc_size < 8) ? (unsigned int)val : val;
+        PC_sig( context ) += 4;
+        return EMU_OK;
+    }
+    else if ((instr & 0x3f800000) == 0x08800000 && (instr & 0x00007c00) == 0x00007c00)  /* CAS */
+    {
+        unsigned int rs = (instr >> 16) & 31;
+        unsigned long long new_val;
+        acc_size = 1 << ((instr >> 30) & 3);
+        rn = (instr >> 5) & 31;
+        addr = REGn_sig( rn, context );
+        if (!safe_read( &val, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+        if (acc_size < 8) val = (unsigned int)val;
+        if ((acc_size < 8) ? ((unsigned int)val == (unsigned int)REGn_sig( rs, context ))
+                           : (val == REGn_sig( rs, context )))
+        {
+            new_val = REGn_sig( rt, context );
+            if (!safe_write( addr, &new_val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+        }
+        if (rt != 31) REGn_sig( rt, context ) = (acc_size < 8) ? (unsigned int)val : val;
+        PC_sig( context ) += 4;
+        return EMU_OK;
+    }
+    else return EMU_UNSUPPORTED;
+
+    /* single register access: compute size */
+    if (v)
+    {
+        if (size == 0) acc_size = (opc < 2) ? 1 : 16;  /* B or Q */
+        else acc_size = 1 << size;  /* H, S, D */
+        if (opc & 2) return EMU_UNSUPPORTED;  /* invalid SIMD opc */
+    }
+    else
+    {
+        acc_size = 1 << size;
+        if (size == 3 && opc == 2) return EMU_UNSUPPORTED;  /* PRFM */
+        if (size == 3 && opc == 3) return EMU_UNSUPPORTED;  /* invalid */
+    }
+
+    if (opc & 1)  /* loads */
+    {
+        if (v)
+        {
+            struct fpsimd_context *fpsimd = get_fpsimd_context( context );
+            if (!fpsimd) return EMU_UNSUPPORTED;
+            memset( &fpsimd->vregs[rt], 0, 16 );
+            if (!safe_read( &fpsimd->vregs[rt], addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+        }
+        else
+        {
+            if (!safe_read( &val, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+            switch (opc)
+            {
+            case 1:  /* LDRB/LDRH/LDR/LDR */
+                if (acc_size < 8) val = (unsigned int)val;
+                break;
+            case 2:  /* LDRSB/LDRSH/LDRSW (64-bit destination) */
+            case 3:  /* LDRSB/LDRSH (32-bit destination) */
+                switch (acc_size)
+                {
+                case 1: val = (long long)(signed char)val; break;
+                case 2: val = (long long)(short)val; break;
+                case 4: val = (long long)(int)val; break;
+                }
+                if (opc == 3) val = (unsigned int)val;
+                break;
+            }
+            if (rt != 31) REGn_sig( rt, context ) = val;
+        }
+    }
+    else  /* stores */
+    {
+        if (v)
+        {
+            struct fpsimd_context *fpsimd = get_fpsimd_context( context );
+            if (!fpsimd) return EMU_UNSUPPORTED;
+            if (!safe_write( addr, &fpsimd->vregs[rt], acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+        }
+        else
+        {
+            val = REGn_sig( rt, context );
+            if (!safe_write( addr, &val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
+        }
+    }
+    PC_sig( context ) += 4;
+    return EMU_OK;
+
+fault:
+    /* Inaccessible target: skip the instruction (loads yield 0, stores are
+     * discarded) instead of raising an exception, which translated contexts
+     * may not survive.  wine demand-paged views were already committed by
+     * safe_read/safe_write before getting here. */
+    *fault_addr = addr;
+    if (!*fault_write && rt != 31) REGn_sig( rt, context ) = 0;
+    PC_sig( context ) += 4;
+    return EMU_OK;
+}
+#endif  /* __OHOS__ */
+
 /**********************************************************************
  *		bus_handler
  *
@@ -1125,6 +1541,29 @@ static void bus_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
     EXCEPTION_RECORD rec = { EXCEPTION_DATATYPE_MISALIGNMENT };
 
+#ifdef __OHOS__
+    if (siginfo->si_code == BUS_ADRALN)
+    {
+        unsigned long long faddr = 0;
+        int fwrite = 0;
+        int res;
+
+        res = emulate_unaligned_access( sigcontext, &faddr, &fwrite );
+        if (res == EMU_OK)
+            return;
+        if (res == EMU_FAULT)
+        {
+            /* inaccessible target: report access violation like x86 would */
+            rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+            rec.NumberParameters = 2;
+            rec.ExceptionInformation[0] = fwrite;
+            rec.ExceptionInformation[1] = faddr;
+            setup_exception( sigcontext, &rec );
+            return;
+        }
+        /* unsupported instruction: raise the alignment exception below */
+    }
+#endif
     setup_exception( sigcontext, &rec );
 }
 
@@ -1148,6 +1587,16 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     case TRAP_TRACE:
         rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
         break;
+#ifdef __OHOS__
+    case TRAP_HWBKPT:  /* hardware breakpoint/watchpoint (x86 DRx debug exception) */
+        /* x86 hardware debug exceptions surface to the application as
+         * EXCEPTION_SINGLE_STEP; the x86 state (DR6) is maintained by the
+         * wow64/ubt layer.  Do not modify PC: data watchpoints abort the
+         * access on ARM64 and must be re-executed (or skipped) by whoever
+         * set them. */
+        rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
+        break;
+#endif
     case TRAP_BRKPT:
         /* debug exceptions do not update ESR on Linux, so we fetch the instruction directly. */
         if (!(PSTATE_sig( context ) & 0x10) && /* AArch64 (not WoW) */
@@ -1430,6 +1879,13 @@ void signal_init_process(void)
     sig_act.sa_sigaction = ill_handler;
     if (sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
     sig_act.sa_sigaction = bus_handler;
+#ifdef __OHOS__
+    /* Do not use the alternate stack for SIGBUS: the OHOS unaligned-atomic
+     * emulation runs safely on the faulting stack, and threads whose wine
+     * altstack is being torn down would otherwise fail signal delivery
+     * entirely (kernel falls back to the default action and kills us). */
+    sig_act.sa_flags = SA_SIGINFO | SA_RESTART;
+#endif
     if (sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
     return;
 

@@ -1659,12 +1659,14 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
         /* 16:9 */
         { 960,  540},
         {1280,  720},
+        {1366,  768},
         {1600,  900},
         {1920, 1080},
         {2560, 1440},
         {2880, 1620},
         {3200, 1800},
         /* 16:10 */
+        {1280,  800},
         {1440,  900},
         {1680, 1050},
         {1920, 1200},
@@ -6600,18 +6602,10 @@ int get_system_metrics( int index )
         return get_system_metrics( SM_CYCAPTION ) + 2 * get_system_metrics( SM_CYFRAME );
     case SM_CXSIZE:
         get_entry( &entry_CAPTIONWIDTH, 0, &ret );
-#ifdef __OHOS__
-        ret = max( ret, max( 8, (system_dpi / 96) * 20 ) );
-        return ret;
-#else
         return max( ret, 8 );
-#endif
     case SM_CYSIZE:
         ncm.cbSize = sizeof(ncm);
         NtUserSystemParametersInfo( SPI_GETNONCLIENTMETRICS, 0, &ncm, 0 );
-#ifdef __OHOS__
-        ncm.iCaptionHeight = max( ncm.iCaptionHeight, max( 8, (system_dpi / 96) * 20 ) );
-#endif
         return ncm.iCaptionHeight;
     case SM_CXFRAME:
         get_entry( &entry_BORDER, 0, &ret );

@@ -69,8 +69,6 @@ export class WineLoaderAdapter extends BaseAdapter {
     this.setEnv(environ, 'WINELOADER', loader);
     this.setEnv(environ, 'WINEDLLPATH', dllDir);
     this.setEnv(environ, 'WINEPREFIX', prefixDir);
-    let wineDebug = '';
-    this.setEnv(environ, 'WINEDEBUG', wineDebug);
     this.setEnv(environ, 'WINEDEBUGLOG', logPath);
 
     // Force Vulkan renderer for D3D11/D3D12 via WINE_D3D_CONFIG
@@ -78,10 +76,28 @@ export class WineLoaderAdapter extends BaseAdapter {
 
     // DXVK integration: force native DLL loading for D3D11/DXGI/D3D12
     // This makes Wine load DXVK's d3d11.dll and dxgi.dll instead of built-in versions
-    this.setEnv(environ, 'WINEDLLOVERRIDES', 'd3d8=n;d3d9=n;d3d10=n;d3d10_1=n;d3d10core=n;d3d11=n;dxgi=n;d3d12=n');
+    // DXVK (d3d8/9/10core/11/dxgi) and vkd3d-proton (d3d12) are genuine native PEs
+    // deployed in the engine dll dir; =n makes the prefix/resfile native copy win
+    // over any builtin-stamped file. d3d10/d3d10_1 are wine builtins (thin layers
+    // over d3d10core) and must NOT be overridden.
+    this.setEnv(environ, 'WINEDLLOVERRIDES', 'd3d8=n;d3d9=n;d3d10core=n;d3d11=n;dxgi=n;d3d12=n');
 
-    // DXVK logging configuration
-    this.setEnv(environ, 'DXVK_LOG_LEVEL', 'info');
+    // DXVK options via env (newline-separated; single source of DXVK config):
+    // - no forced dxgi.syncInterval: apps present with SyncInterval=0, DXVK
+    //   then prefers MAILBOX (latest-frame replacement, no queued backlog);
+    //   if the surface does not support it it falls back to FIFO, where
+    //   acquire backpressure phase-locks production to the panel rate.
+    //   Forcing syncInterval=1 stacked DXVK's own vblank wait on top of the
+    //   OHOS queue pacing and produced an uneven cadence.
+    // - maxFrameLatency=3: keep the queue deep enough that acquire does not
+    //   serialize with the render time (latency 1/2 measured 74/81fps).
+    // - numCompilerThreads=0: auto (multi-threaded) pipeline compilation,
+    //   overriding the stale single-thread entry in the persistent conf.
+    this.setEnv(environ, 'DXVK_CONFIG', 'dxgi.maxFrameLatency = 3\ndxvk.numCompilerThreads = 0');
+    // No DXVK_FRAME_RATE: present pacing is done by the native window's
+    // swap interval (set when the Vulkan surface is created), which aligns
+    // every present to the vsync grid.  DXVK's sleep-based limiter composed
+    // badly with the OHOS buffer queue (a 115/120 cap measured 74/76fps).
 
     // DXVK relax features (Maleoon driver capability gaps)
     this.setEnv(environ, 'DXVK_RELAX_FEATURES', '1');
@@ -98,7 +114,7 @@ export class WineLoaderAdapter extends BaseAdapter {
     LogUtil.info(TAG, `env=${env.toString()}, prefixDir=${prefixDir}`);
 
     if (CheckEmptyUtils.checkStrIsEmpty(sock_path)) {
-      let exePath = CheckEmptyUtils.checkStrIsEmpty(exe_path) ?
+      const exePath = CheckEmptyUtils.checkStrIsEmpty(exe_path) ?
         'c:\\windows\\system32\\notepad.exe' : exe_path;
       const cmd: string[] = [
         loader,

@@ -258,10 +258,11 @@ make install-lib
 # WineD3D 后端而非 Vulkan。
 # ============================================================
 if [ "${COMPILE_DXVK}" -eq 1 ]; then
-    if [ "${DXVK_LEGACY}" -eq 1 ]; then DXVK_BUILD_DIR=${BUILD_DIR}/dxvk-legacy; else DXVK_BUILD_DIR=${BUILD_DIR}/dxvk; fi
+    # DXVK 路径由 env.sh 统一派生 (legacy 用 DXVK_LEGACY_BUILD_DIR)
+    if [ "${DXVK_LEGACY}" -eq 1 ]; then DXVK_BUILD_DIR=${DXVK_LEGACY_BUILD_DIR}; fi
     echo "overriding Wine built-in D3D11/DXGI with DXVK"
-    # 优先使用 ARM64EC (installec)，回退到 ARM64 (installarm64)
-    for dxvk_src in installec/bin installec/lib installarm64/bin installarm64/lib; do
+    # 优先使用 ARM64X (installec)，不拷贝 installarm64 (会覆盖 ARM64X)
+    for dxvk_src in installec/bin installec/lib; do
         if [ -d "${DXVK_BUILD_DIR}/${dxvk_src}" ]; then
             echo "  copying DXVK DLLs from ${dxvk_src}"
             cp ${DXVK_BUILD_DIR}/${dxvk_src}/*.dll ${INSTALL_DIR}/lib/wine/aarch64-windows/ 2>/dev/null || true
@@ -270,8 +271,7 @@ if [ "${COMPILE_DXVK}" -eq 1 ]; then
     if [ -d "${DXVK_BUILD_DIR}/install32/bin" ]; then
         cp ${DXVK_BUILD_DIR}/install32/bin/*.dll ${INSTALL_DIR}/lib/wine/i386-windows/ 2>/dev/null || true
     fi
-    # vkd3d-proton (d3d12)
-    VKD3D_BUILD_DIR=${BUILD_DIR}/vkd3d-proton
+    # vkd3d-proton (d3d12); VKD3D_BUILD_DIR 由 env.sh 派生, 此处无需重绑
     for vkd3d_src in installec/bin installec/lib installarm64/bin installarm64/lib; do
         if [ -d "${VKD3D_BUILD_DIR}/${vkd3d_src}" ]; then
             echo "  copying vkd3d-proton DLLs from ${vkd3d_src}"

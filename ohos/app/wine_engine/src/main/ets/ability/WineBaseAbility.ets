@@ -8,6 +8,7 @@ import window from '@ohos.window';
 import Want from '@ohos.app.ability.Want';
 import AbilityConstant from '@ohos.app.ability.AbilityConstant';
 import JsBindingUtils from '../utils/JsBindingUtils';
+import ArgvUtil from '../utils/ArgvUtil';
 import Inject from '../common/InjectModule';
 import lazy { NativeContext, WindowStyles } from '../interface/CommonInterface';
 import { CommandType, ContextType } from '../common/Constants';
@@ -66,6 +67,10 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
       const fileUriObj = new fileUri.FileUri(storePath);
       this.startUri = fileUriObj.path;
     }
+  }
+
+  protected buildWineArgv(): string[] | undefined {
+    return ArgvUtil.parseArgs(this.args);
   }
 
   protected getContentPath(): string {

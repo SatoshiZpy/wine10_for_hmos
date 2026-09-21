@@ -11,11 +11,27 @@ find_library() 的每次链接探测都带着该参数而失败。
 去除该 flag。lld PE 前端下此 flag 无任何合法用途, 无条件去除是安全的。
 
 用法: python3 patch_meson_lld.py [linkers.py 路径]
+      省略路径时自动定位当前 python3 的 mesonbuild 安装。
 """
+import subprocess
 import sys
 
-DEFAULT = '/home/wsl/.local/lib/python3.12/site-packages/mesonbuild/linkers/linkers.py'
-p = sys.argv[1] if len(sys.argv) > 1 else DEFAULT
+# 自动发现 mesonbuild 包内 linkers.py 的路径 (调用方可用 argv[1] 覆盖)
+if len(sys.argv) > 1:
+    p = sys.argv[1]
+else:
+    try:
+        p = subprocess.run(
+            [sys.executable, '-c',
+             'import mesonbuild, os; print(os.path.join(os.path.dirname('
+             'mesonbuild.__file__), "linkers", "linkers.py"))'],
+            capture_output=True, text=True, check=True).stdout.strip()
+    except subprocess.CalledProcessError:
+        p = ''
+    if not p:
+        print('ERROR: 无法定位 mesonbuild/linkers/linkers.py, '
+              '请显式传入路径: python3 patch_meson_lld.py <linkers.py>')
+        sys.exit(1)
 
 src = open(p, encoding='utf-8').read()
 

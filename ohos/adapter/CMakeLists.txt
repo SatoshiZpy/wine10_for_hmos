@@ -61,7 +61,7 @@ add_subdirectory(window)
 add_subdirectory(xcomponent)
 add_subdirectory(ipc_lite)
 
-target_link_libraries(adapter PUBLIC aki_jsbind ohcommonevent hitrace_ndk.z native_window native_window_manager ohinput ace_ndk.z
+target_link_libraries(adapter PUBLIC aki_jsbind ohcommonevent hitrace_ndk.z native_window native_window_manager native_vsync ohinput ace_ndk.z
 ace_napi.z deviceinfo_ndk.z ohfileuri image_ndk.z image_receiver_ndk.z time_service_ndk child_process bundle_ndk.z
 ipc_capi)
 

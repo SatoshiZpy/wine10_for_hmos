@@ -31,6 +31,10 @@
 #include "rtworkq.h"
 #include "ole2.h"
 #include "propsys.h"
+#ifdef __OHOS__
+#define USE_COMPILER_EXCEPTIONS
+#endif
+#include "wine/exception.h"
 #include "d3d11.h"
 #include "uuids.h"
 
@@ -739,6 +743,34 @@ static HRESULT register_transform(const CLSID *clsid, const WCHAR *name, UINT32 
 
     if (SUCCEEDED(hr) && attributes)
     {
+#ifdef __OHOS__
+        /* wow64/ubt: the 9th (stack-passed) parameter may arrive corrupted
+         * for calls made from translated x86 code; guard the attribute
+         * serialization with SEH so registration still succeeds. */
+        __TRY
+        {
+            if (SUCCEEDED(hr = MFGetAttributesAsBlobSize(attributes, &size)))
+            {
+                if ((blob = malloc(size)))
+                {
+                    if (SUCCEEDED(hr = MFGetAttributesAsBlob(attributes, blob, size)))
+                    {
+                        if ((ret = RegSetValueExW(hclsid, L"Attributes", 0, REG_BINARY, blob, size)))
+                            hr = HRESULT_FROM_WIN32(ret);
+                    }
+                    free(blob);
+                }
+                else
+                    hr = E_OUTOFMEMORY;
+            }
+        }
+        __EXCEPT_ALL
+        {
+            FIXME("exception using attributes %p, skipping attribute blob\n", attributes);
+            hr = S_OK;
+        }
+        __ENDTRY
+#else
         if (SUCCEEDED(hr = MFGetAttributesAsBlobSize(attributes, &size)))
         {
             if ((blob = malloc(size)))
@@ -753,6 +785,7 @@ static HRESULT register_transform(const CLSID *clsid, const WCHAR *name, UINT32 
             else
                 hr = E_OUTOFMEMORY;
         }
+#endif
     }
 
     if (SUCCEEDED(hr) && flags)
@@ -3405,6 +3438,18 @@ HRESULT WINAPI MFGetAttributesAsBlobSize(IMFAttributes *attributes, UINT32 *size
     GUID key;
 
     TRACE("%p, %p.\n", attributes, size);
+
+#ifdef __OHOS__
+    /* wow64/ubt: the 9th (stack-passed) parameter of MFTRegister calls made
+     * from translated x86 code may arrive corrupted; guard against a bogus
+     * interface pointer instead of crashing on the vtable dispatch. */
+    if (attributes && (IsBadReadPtr(attributes, sizeof(void *)) ||
+                       IsBadReadPtr(*(void **)attributes, sizeof(void *) * 4)))
+    {
+        FIXME("ignoring invalid attributes pointer %p\n", attributes);
+        return E_POINTER;
+    }
+#endif
 
     IMFAttributes_LockStore(attributes);
 

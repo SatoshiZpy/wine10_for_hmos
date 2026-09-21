@@ -133,10 +133,6 @@ export struct WineWindow {
         if (this.widgetId === ConfigData.DEFAULT_WIDGET_ID) {
           this.setDefaultBounds();
         }
-
-        setTimeout(() => {
-          this.bgColor = Color.White;
-        }, 5000);
       })
       .id(this.XCOMPONENT_NAME)
       .renderFit(RenderFit.TOP_LEFT)
@@ -149,9 +145,9 @@ export struct WineWindow {
         type: XComponentType.SURFACE,
         libraryname: this.LIBRARY_NAME
       })
-        .position({ x: px2vp(this.clientSurface.offX), y: px2vp(this.clientSurface.offY) })
-        .size({ width: px2vp(this.clientSurface.width), height: px2vp(this.clientSurface.height) })
-        .renderFit(RenderFit.RESIZE_COVER)
+        .position({ x: `${this.clientSurface.offX}px`, y: `${this.clientSurface.offY}px` })
+        .size({ width: `${this.clientSurface.width}px`, height: `${this.clientSurface.height}px` })
+        .renderFit(RenderFit.TOP_LEFT)
         .hitTestBehavior(HitTestMode.None)
         .backgroundColor(Color.Transparent)
     }

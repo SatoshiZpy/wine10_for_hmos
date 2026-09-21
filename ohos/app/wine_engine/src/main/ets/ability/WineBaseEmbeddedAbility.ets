@@ -81,7 +81,7 @@ export class WineBaseEmbeddedAbility extends WineBaseExtensionAbility {
     let storage: LocalStorage = new LocalStorage(param);
     session.loadContent('pages/EmbeddedWindow', storage);
 
-    this.wineLoader?.loadWine(this.exePath, this.sockPath, this.startUri)
+    this.wineLoader?.loadWine(this.exePath, this.sockPath, this.startUri, this.buildWineArgv())
       .catch((err: Object) => {
         LogUtil.error(TAG, `loadWine failed: ${JSON.stringify(err)}`);
       });

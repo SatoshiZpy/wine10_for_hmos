@@ -140,9 +140,11 @@ export PE_CLANG PE_CXX PE_LLDLINK PE_AR PE_STRIP PE_READOBJ EC_SYSROOT EC_BUILTI
 # DXVK / vkd3d-proton 路径（供 build 脚本复用，避免重复定义）
 DXVK_DIR="${OHOS_BUILD_ROOT}/third_party/dxvk"
 DXVK_BUILD_DIR="${OHOS_BUILD_ROOT}/build/dxvk"
+DXVK_LEGACY_DIR="${OHOS_BUILD_ROOT}/third_party/dxvk-legacy"
+DXVK_LEGACY_BUILD_DIR="${OHOS_BUILD_ROOT}/build/dxvk-legacy"
 VKD3D_PROTON_DIR="${OHOS_BUILD_ROOT}/third_party/vkd3d-proton"
 VKD3D_BUILD_DIR="${OHOS_BUILD_ROOT}/build/vkd3d-proton"
-export DXVK_DIR DXVK_BUILD_DIR VKD3D_PROTON_DIR VKD3D_BUILD_DIR
+export DXVK_DIR DXVK_BUILD_DIR DXVK_LEGACY_DIR DXVK_LEGACY_BUILD_DIR VKD3D_PROTON_DIR VKD3D_BUILD_DIR
 
 # arm64ec sysroot 校验（仅 --with-dxvk + --build-arm64ec 时）
 if [ "${COMPILE_DXVK:-0}" = "1" ] && [ "${BUILD_ARM64EC:-0}" = "1" ]; then

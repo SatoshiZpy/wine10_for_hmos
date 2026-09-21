@@ -36,6 +36,237 @@ static PFN_vkCreateInstance p_vkCreateInstance;
 static PFN_vkEnumerateInstanceVersion p_vkEnumerateInstanceVersion;
 static PFN_vkEnumerateInstanceExtensionProperties p_vkEnumerateInstanceExtensionProperties;
 
+#ifdef __OHOS__
+/*
+ * OHOS: DXVK's SPIR-V module builder can emit module-scope instructions
+ * (types, constants, spec constants) after function bodies have started,
+ * which violates the SPIR-V logical layout (SPIR-V spec section 2.4).
+ * Desktop drivers tolerate this, but the Maleoon shader converter
+ * ("bisheng") strictly enforces the layout and rejects such modules with
+ * "SPV01: Invalid SPIRVInstruction", causing every affected
+ * vkCreateGraphicsPipelines call to fail with VK_ERROR_OUT_OF_HOST_MEMORY.
+ *
+ * wine_vkCreateShaderModule() below rewrites such modules by moving the
+ * misplaced instructions back to global scope (right before the first
+ * OpFunction), preserving their relative order.
+ */
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+#define SPIRV_OP_TYPE_FIRST 19   /* OpTypeVoid */
+#define SPIRV_OP_TYPE_LAST  39   /* OpTypeForwardPointer */
+#define SPIRV_OP_CONST_TRUE 41
+#define SPIRV_OP_CONST_FALSE 42
+#define SPIRV_OP_CONST 43
+#define SPIRV_OP_CONST_COMPOSITE 44
+#define SPIRV_OP_CONST_SAMPLER 45
+#define SPIRV_OP_CONST_NULL 46
+#define SPIRV_OP_SPEC_CONST_TRUE 48
+#define SPIRV_OP_SPEC_CONST_FALSE 49
+#define SPIRV_OP_SPEC_CONST 50
+#define SPIRV_OP_SPEC_CONST_COMPOSITE 51
+#define SPIRV_OP_SPEC_CONST_OP 52
+#define SPIRV_OP_VARIABLE 59
+#define SPIRV_OP_FUNCTION 54
+#define SPIRV_OP_FUNCTION_END 56
+
+static BOOL spirv_is_module_scope_instruction(uint32_t opcode, const uint32_t *instr)
+{
+    if (opcode >= SPIRV_OP_TYPE_FIRST && opcode <= SPIRV_OP_TYPE_LAST)
+        return TRUE;
+    switch (opcode)
+    {
+    case SPIRV_OP_CONST_TRUE:
+    case SPIRV_OP_CONST_FALSE:
+    case SPIRV_OP_CONST:
+    case SPIRV_OP_CONST_COMPOSITE:
+    case SPIRV_OP_CONST_SAMPLER:
+    case SPIRV_OP_CONST_NULL:
+    case SPIRV_OP_SPEC_CONST_TRUE:
+    case SPIRV_OP_SPEC_CONST_FALSE:
+    case SPIRV_OP_SPEC_CONST:
+    case SPIRV_OP_SPEC_CONST_COMPOSITE:
+    case SPIRV_OP_SPEC_CONST_OP:
+        return TRUE;
+    case SPIRV_OP_VARIABLE:
+        /* word layout: [0]=opcode/wordcount [1]=result type
+         * [2]=storage class [3]=result id; Function storage class is 0 */
+        if (instr[2] != 0) return TRUE;
+        return FALSE;
+    default:
+        return FALSE;
+    }
+}
+
+/* Returns a malloc'd, layout-fixed copy of the module, or NULL when the
+ * module is already well-formed. */
+static uint32_t *spirv_fix_module_layout(const uint32_t *code, size_t size)
+{
+    const uint32_t *end = code + size / 4;
+    const uint32_t *instr = code + 5; /* skip 5-word header */
+    const uint32_t *first_function = NULL;
+    const uint32_t **misplaced = NULL;
+    uint32_t misplaced_count = 0, misplaced_index = 0;
+    BOOL in_function = FALSE;
+    uint32_t *fixed, *out;
+
+    if (size < 20 || code[0] != 0x07230203) return NULL;
+
+    /* pass 1: find misplaced module-scope instructions inside function
+     * bodies and the position of the first OpFunction */
+    while (instr < end)
+    {
+        uint32_t word_count = instr[0] >> 16;
+        uint32_t opcode = instr[0] & 0xffff;
+        if (!word_count || instr + word_count > end) break;
+
+        if (opcode == SPIRV_OP_FUNCTION)
+        {
+            if (!first_function) first_function = instr;
+            in_function = TRUE;
+        }
+        else if (opcode == SPIRV_OP_FUNCTION_END)
+            in_function = FALSE;
+        else if (in_function && spirv_is_module_scope_instruction(opcode, instr))
+        {
+            const uint32_t **grown = realloc(misplaced, (misplaced_count + 1) * sizeof(*misplaced));
+            if (!grown) break;
+            misplaced = grown;
+            misplaced[misplaced_count++] = instr;
+        }
+        instr += word_count;
+    }
+    if (!misplaced_count || !first_function)
+    {
+        free(misplaced);
+        return NULL;
+    }
+
+    /* output = [header .. first_function) + misplaced instructions +
+     * [first_function .. end) minus the misplaced instructions */
+    fixed = malloc(size);
+    if (!fixed)
+    {
+        free(misplaced);
+        return NULL;
+    }
+    out = fixed;
+    memcpy(out, code, (first_function - code) * 4);
+    out += first_function - code;
+
+    for (misplaced_index = 0; misplaced_index < misplaced_count; misplaced_index++)
+    {
+        const uint32_t *src = misplaced[misplaced_index];
+        uint32_t word_count = src[0] >> 16;
+        memcpy(out, src, word_count * 4);
+        out += word_count;
+    }
+
+    instr = first_function;
+    while (instr < end)
+    {
+        uint32_t word_count = instr[0] >> 16;
+        BOOL skip = FALSE;
+        if (!word_count || instr + word_count > end) break;
+
+        for (uint32_t j = 0; j < misplaced_count; j++)
+            if (misplaced[j] == instr) { skip = TRUE; break; }
+        if (!skip)
+        {
+            memcpy(out, instr, word_count * 4);
+            out += word_count;
+        }
+        instr += word_count;
+    }
+
+    free(misplaced);
+    if ((size_t)(out - fixed) * 4 != size)
+    {
+        ERR("SPIR-V layout fixup produced %lu bytes from %lu (%u misplaced instructions)\n",
+            (unsigned long)((out - fixed) * 4), (unsigned long)size, misplaced_count);
+        free(fixed);
+        return NULL;
+    }
+    return fixed;
+}
+
+struct ohos_shader_module_fixup
+{
+    VkDevice host_device;
+    PFN_vkCreateShaderModule orig;
+};
+#define OHOS_MAX_SHADER_FIXUP_DEVICES 16
+static struct ohos_shader_module_fixup ohos_shader_module_fixups[OHOS_MAX_SHADER_FIXUP_DEVICES];
+static pthread_mutex_t ohos_shader_module_fixup_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static VkResult ohos_vkCreateShaderModule_fixup(VkDevice host_device,
+                                                const VkShaderModuleCreateInfo *pCreateInfo,
+                                                const VkAllocationCallbacks *pAllocator,
+                                                VkShaderModule *pShaderModule)
+{
+    PFN_vkCreateShaderModule orig = NULL;
+    uint32_t *fixed;
+    VkResult res;
+    int i;
+
+    pthread_mutex_lock(&ohos_shader_module_fixup_lock);
+    for (i = 0; i < OHOS_MAX_SHADER_FIXUP_DEVICES; i++)
+        if (ohos_shader_module_fixups[i].host_device == host_device)
+        { orig = ohos_shader_module_fixups[i].orig; break; }
+    pthread_mutex_unlock(&ohos_shader_module_fixup_lock);
+
+    if (!orig)
+    {
+        WARN("no original vkCreateShaderModule for host device %p\n", host_device);
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    if (pCreateInfo && pCreateInfo->pCode)
+    {
+        fixed = spirv_fix_module_layout(pCreateInfo->pCode, pCreateInfo->codeSize);
+        if (fixed)
+        {
+            VkShaderModuleCreateInfo fixed_info = *pCreateInfo;
+            fixed_info.pCode = fixed;
+            res = orig(host_device, &fixed_info, pAllocator, pShaderModule);
+            free(fixed);
+            return res;
+        }
+    }
+    return orig(host_device, pCreateInfo, pAllocator, pShaderModule);
+}
+
+static void ohos_install_shader_module_fixup(VkDevice host_device, PFN_vkCreateShaderModule *slot)
+{
+    int i, free_slot = -1;
+    pthread_mutex_lock(&ohos_shader_module_fixup_lock);
+    for (i = 0; i < OHOS_MAX_SHADER_FIXUP_DEVICES; i++)
+    {
+        if (ohos_shader_module_fixups[i].host_device == host_device) break;
+        if (!ohos_shader_module_fixups[i].host_device && free_slot < 0) free_slot = i;
+    }
+    if (i == OHOS_MAX_SHADER_FIXUP_DEVICES && free_slot >= 0) i = free_slot;
+    if (i < OHOS_MAX_SHADER_FIXUP_DEVICES && *slot)
+    {
+        ohos_shader_module_fixups[i].host_device = host_device;
+        ohos_shader_module_fixups[i].orig = *slot;
+        *slot = ohos_vkCreateShaderModule_fixup;
+    }
+    pthread_mutex_unlock(&ohos_shader_module_fixup_lock);
+}
+
+static void ohos_remove_shader_module_fixup(VkDevice host_device)
+{
+    int i;
+    pthread_mutex_lock(&ohos_shader_module_fixup_lock);
+    for (i = 0; i < OHOS_MAX_SHADER_FIXUP_DEVICES; i++)
+        if (ohos_shader_module_fixups[i].host_device == host_device)
+            ohos_shader_module_fixups[i].host_device = VK_NULL_HANDLE;
+    pthread_mutex_unlock(&ohos_shader_module_fixup_lock);
+}
+#endif /* __OHOS__ */
+
 static struct wine_instance *wine_instance_from_handle(VkInstance handle)
 {
     struct vulkan_instance *object = vulkan_instance_from_handle(handle);
@@ -970,6 +1201,12 @@ VkResult wine_vkCreateDevice(VkPhysicalDevice client_physical_device, const VkDe
     ALL_VK_DEVICE_FUNCS
 #undef USE_VK_FUNC
 
+#ifdef __OHOS__
+    /* OHOS: wrap vkCreateShaderModule to fix SPIR-V layout violations
+     * (misplaced module-scope instructions inside function bodies). */
+    ohos_install_shader_module_fixup(device->obj.host.device, &device->obj.p_vkCreateShaderModule);
+#endif
+
     for (i = 0; i < create_info_host.queueCreateInfoCount; i++)
         wine_vk_device_init_queues(device, create_info_host.pQueueCreateInfos + i);
 
@@ -1086,6 +1323,9 @@ void wine_vkDestroyDevice(VkDevice client_device, const VkAllocationCallbacks *a
         return;
 
     device->obj.p_vkDestroyDevice(device->obj.host.device, NULL /* pAllocator */);
+#ifdef __OHOS__
+    ohos_remove_shader_module_fixup(device->obj.host.device);
+#endif
     for (i = 0; i < device->queue_count; i++)
         vulkan_instance_remove_object(instance, &device->queues[i].obj.obj);
     vulkan_instance_remove_object(instance, &device->obj.obj);

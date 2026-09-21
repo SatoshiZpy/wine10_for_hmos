@@ -175,7 +175,7 @@ export class WineAbility extends WineBaseAbility {
         LogUtil.error(TAG, 'Failed to get window limits or get ui context:' + JSON.stringify(exception));
       }
 
-      this.wineLoader?.loadWine(this.exePath, this.sockPath, this.startUri)
+      this.wineLoader?.loadWine(this.exePath, this.sockPath, this.startUri, this.buildWineArgv())
         .catch((err: Object) => {
           LogUtil.error(TAG, `loadWine failed: ${JSON.stringify(err)}`);
         });

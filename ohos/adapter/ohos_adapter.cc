@@ -14,6 +14,9 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <atomic>
+
+#include <native_vsync/native_vsync.h>
 
 #include "ohos/adapter/aki_hook/aki_hook.h"
 #include "ohos/adapter/common/constants.h"
@@ -386,6 +389,57 @@ ohos_native_window GetNativeWindow(int widget_id)
     return WindowAdapter::GetInstance().GetWindow(widget_id);
 }
 
+/* LTPO frame-rate hint for Vulkan client surfaces.
+ *
+ * The DXVK swap chain presents directly on the client XComponent's
+ * OHNativeWindow, so frame production is paced by how fast the compositor
+ * releases buffers, which follows the panel refresh rate.  With no hint the
+ * panel stays at 60Hz and the game is capped at ~60fps regardless of how
+ * fast it renders (a pure render loop measures >400fps).  Keeping a vsync
+ * client with an expected rate range of {60,120,120} active while a Vulkan
+ * client surface exists makes the dynamic refresh policy lift the panel to
+ * its top rate, so the swap chain can run at up to ~120fps.  This mirrors
+ * the reference implementation, whose renderer sets the same range. */
+static std::atomic<int> g_vulkan_surface_count{0};
+static std::atomic<bool> g_vulkan_vsync_running{false};
+static OH_NativeVSync* g_vulkan_vsync = nullptr;
+
+static void vulkan_vsync_tick(long long timestamp, void* data)
+{
+    if (g_vulkan_vsync_running.load(std::memory_order_relaxed))
+        OH_NativeVSync_RequestFrame(g_vulkan_vsync, vulkan_vsync_tick, nullptr);
+}
+
+static void vulkan_frame_rate_hint_start(void)
+{
+    if (g_vulkan_surface_count.fetch_add(1) != 0) return;
+
+    static const char name[] = "WineVulkan";
+    g_vulkan_vsync = OH_NativeVSync_Create(name, sizeof(name) - 1);
+    if (!g_vulkan_vsync) {
+        LOGE("vulkan frame rate hint: NativeVSync create failed");
+        g_vulkan_surface_count.store(0);
+        return;
+    }
+    OH_NativeVSync_ExpectedRateRange range = {60, 120, 120};
+    int ret = OH_NativeVSync_SetExpectedFrameRateRange(g_vulkan_vsync, &range);
+    if (ret != 0)
+        LOGE("vulkan frame rate hint: set range failed, ret=%{public}d", ret);
+    g_vulkan_vsync_running.store(true);
+    OH_NativeVSync_RequestFrame(g_vulkan_vsync, vulkan_vsync_tick, nullptr);
+    LOGI("vulkan frame rate hint started ({60,120,120})");
+}
+
+static void vulkan_frame_rate_hint_stop(void)
+{
+    if (g_vulkan_surface_count.fetch_sub(1) != 1) return;
+    /* stop re-arming; the vsync connection goes idle.  The handle is kept
+     * so it can be reused (and to avoid destroying it while a callback may
+     * still be in flight). */
+    g_vulkan_vsync_running.store(false);
+    LOGI("vulkan frame rate hint stopped");
+}
+
 int CreateClientSurface(struct client_surface_param* param)
 {
     if (!param || param->parent_widget_id <= 0) {
@@ -423,6 +477,7 @@ int CreateClientSurface(struct client_surface_param* param)
         if (WindowAdapter::GetInstance().GetWindow(param->client_widget_id)) {
             LOGI("CreateClientSurface success, parent %{public}d, client %{public}d",
                  param->parent_widget_id, param->client_widget_id);
+            vulkan_frame_rate_hint_start();
             return param->client_widget_id;
         }
         usleep(50 * 1000);
@@ -445,6 +500,7 @@ void SetClientSurfaceBounds(int client_widget_id, int off_x, int off_y,
 
 void DestroyClientSurface(int client_widget_id)
 {
+    vulkan_frame_rate_hint_stop();
     auto jsFunc = GetJSFunction("ClientSurface.Destroy");
     if (!jsFunc) {
         LOGE("DestroyClientSurface: ClientSurface.Destroy not found");

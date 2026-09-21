@@ -664,31 +664,14 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
     struct native_buffer buffer;
     RECT rc;
 
-    /* When Vulkan (DXVK) is active, only flush the non-client area (title bar).
-     * The client area is rendered by Vulkan via its own swap chain, so flushing
-     * GDI content there would overwrite the Vulkan-rendered 3D content. */
-    RECT vk_clip_rect = {0, 0, 0, 0};
-    BOOL vulkan_clipping = FALSE;
-    {
-        struct ohos_win_data *data = get_win_data( window_surface->hwnd );
-        if (data && data->vulkan_active)
-        {
-            /* The bitmap rect covers the full window. The client area within
-             * the bitmap starts at (client.left - window.left, client.top - window.top).
-             * We want to flush everything EXCEPT the client area. */
-            RECT client = data->rects.client;
-            RECT window = data->rects.window;
-            /* Convert client rect to bitmap coordinates */
-            vk_clip_rect.left   = client.left   - window.left;
-            vk_clip_rect.top    = client.top    - window.top;
-            vk_clip_rect.right  = client.right  - window.left;
-            vk_clip_rect.bottom = client.bottom - window.top;
-            vulkan_clipping = TRUE;
-            TRACE("hwnd %p: vulkan_active, client area %s (bitmap coords), skipping client flush\n",
-                  window_surface->hwnd, wine_dbgstr_rect(&vk_clip_rect));
-        }
-        if (data) release_win_data( data );
-    }
+    /* The whole window DIB is flushed, client area included.  GL/Vulkan
+     * client content is rendered on a separate nested XComponent surface
+     * stacked over the client area, so it can never be overwritten by a
+     * GDI flush.  Clipping the client area here would leave the native
+     * buffer's client region (and the side/bottom borders) unwritten;
+     * because the compositor rotates through recycled buffers, those
+     * regions would show up as white flashes around/behind the client
+     * surface, most visibly during resize or maximize transitions. */
 
     if (!perform(window_surface->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc))
     {
@@ -699,42 +682,13 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         DWORD *src, *dst;
         int x, y, width;
         RECT locked;
+        BOOL needs_unmap;
 
         locked.left = rc.left;
         locked.top = rc.top;
         locked.right = rc.right;
         locked.bottom = rc.bottom;
         intersect_rect(&locked, &locked, rect);
-
-        /* When Vulkan is active, clip the locked rect to exclude the client area.
-         * The client area is rendered by Vulkan via its own swap chain. */
-        if (vulkan_clipping)
-        {
-            RECT client_clip;
-            client_clip.left   = vk_clip_rect.left;
-            client_clip.top    = vk_clip_rect.top;
-            client_clip.right  = vk_clip_rect.right;
-            client_clip.bottom = vk_clip_rect.bottom;
-            intersect_rect(&client_clip, &client_clip, &locked);
-
-            /* If locked rect is entirely within client area, nothing to flush */
-            if (EqualRect(&locked, &client_clip))
-            {
-                TRACE("hwnd %p: locked rect %s is entirely in Vulkan client area, skip flush\n",
-                      window_surface->hwnd, wine_dbgstr_rect(&locked));
-                perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, NULL);
-                return TRUE;
-            }
-
-            /* Clip locked rect to exclude client area.
-             * The non-client area is typically the title bar above the client area.
-             * Clip to the region above the client area. */
-            if (client_clip.top > locked.top)
-                locked.bottom = client_clip.top;
-            /* If there's still area below the client, clip that too */
-            if (client_clip.bottom < locked.bottom)
-                locked.top = client_clip.bottom;
-        }
 
         TRACE("hwnd %p, surface_rect %s, dirty %s, locked %s, surface %p\n", window_surface->hwnd,
               wine_dbgstr_rect(&rc), wine_dbgstr_rect(dirty), wine_dbgstr_rect(&locked), surface);
@@ -795,7 +749,7 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
 
         /* Use persistent mapping from native_buffer if available,
          * otherwise fall back to per-flush mmap via map_native_buffer. */
-        BOOL needs_unmap = !buffer.mapped_addr;
+        needs_unmap = !buffer.mapped_addr;
 
         if (map_native_buffer( &buffer ) != STATUS_SUCCESS)
         {
