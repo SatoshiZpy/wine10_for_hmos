@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include "vulkan_loader.h"
 #include "winreg.h"
+#include "winbase.h"
+#include "winternl.h"
 #include "ntuser.h"
 #include "initguid.h"
 #include "devguid.h"
@@ -325,14 +327,50 @@ static NTSTATUS WINAPI call_vulkan_debug_utils_callback(void *args, ULONG size)
     return NtCallbackReturn(&ret, sizeof(ret), STATUS_SUCCESS);
 }
 
+#if defined(__OHOS__) && !defined(_WIN64)
+
+/* Reserve the low-address pool the unix side carves WOW64 vkMapMemory
+ * windows from.  This runs from the client's own translated context, so the
+ * reservation is visible to translated code; allocations performed later
+ * from unix callbacks would not be. */
+static void wow64_reserve_window_pool(UINT64 *base, UINT64 *size)
+{
+    static const SIZE_T attempts[] = { 256 << 20, 128 << 20, 64 << 20, 32 << 20, 16 << 20, 8 << 20 };
+    SIZE_T i;
+
+    *base = *size = 0;
+    for (i = 0; i < ARRAY_SIZE(attempts); i++)
+    {
+        void *addr = NULL;
+        SIZE_T pool_size = attempts[i];
+        if (!NtAllocateVirtualMemory( GetCurrentProcess(), &addr, 0, &pool_size,
+                                      MEM_RESERVE, PAGE_NOACCESS ))
+        {
+            *base = (UINT_PTR)addr;
+            *size = pool_size;
+            return;
+        }
+    }
+}
+
+#endif /* __OHOS__ && !_WIN64 */
+
 static BOOL WINAPI wine_vk_init(INIT_ONCE *once, void *param, void **context)
 {
     struct vk_callback_funcs callback_funcs =
     {
         .call_vulkan_debug_report_callback = (ULONG_PTR)call_vulkan_debug_report_callback,
         .call_vulkan_debug_utils_callback = (ULONG_PTR)call_vulkan_debug_utils_callback,
+#if defined(__OHOS__) && !defined(_WIN64)
+        .wow64_window_pool_base = 0,
+        .wow64_window_pool_size = 0,
+#endif
     };
 
+#if defined(__OHOS__) && !defined(_WIN64)
+    wow64_reserve_window_pool(&callback_funcs.wow64_window_pool_base,
+                              &callback_funcs.wow64_window_pool_size);
+#endif
     return !__wine_init_unix_call() && !UNIX_CALL(init, &callback_funcs);
 }
 

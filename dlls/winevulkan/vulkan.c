@@ -24,6 +24,11 @@
 #include "config.h"
 #include <time.h>
 
+#include <string.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#include <unistd.h>
+
 #include "vulkan_private.h"
 #include "wine/vulkan_driver.h"
 #include "wine/rbtree.h"
@@ -303,6 +308,530 @@ static BOOL use_external_memory(void)
 }
 
 static ULONG_PTR zero_bits = 0;
+
+#if defined(_WIN64) && defined(__OHOS__)
+
+/*
+ * WOW64 32-bit vkMapMemory support (OHOS).
+ *
+ * The host mapping returned by the driver may land above 4GB, which a 32-bit
+ * client cannot represent.  Without VK_EXT_map_memory_placed or
+ * VK_EXT_external_memory_host (both unavailable on the OHOS Maleoon driver)
+ * the client instead receives a window carved from a low-address pool that
+ * the PE side reserved during wine_vk_init().  The window is demand-zero:
+ * the client writes its upload data into it and the contents are flushed
+ * back to the driver mapping on every QueueSubmit / QueueSubmit2.  Data the
+ * GPU writes to the host mapping (readback) is copied to the window when it
+ * is flushed or unmapped.
+ */
+
+static struct list wow64_copy_maps = LIST_INIT( wow64_copy_maps );
+static pthread_mutex_t wow64_copy_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static BOOL wow64_copy_from_window( void *dst, const void *src, size_t size );
+static BOOL wow64_copy_to_window( void *dst, const void *src, size_t size );
+
+static PFN_vkQueueSubmit wow64_real_vkQueueSubmit;
+static PFN_vkQueueSubmit2 wow64_real_vkQueueSubmit2;
+static PFN_vkQueueSubmit2KHR wow64_real_vkQueueSubmit2KHR;
+static PFN_vkWaitForFences wow64_real_vkWaitForFences;
+static PFN_vkGetFenceStatus wow64_real_vkGetFenceStatus;
+static PFN_vkQueueWaitIdle wow64_real_vkQueueWaitIdle;
+static PFN_vkDeviceWaitIdle wow64_real_vkDeviceWaitIdle;
+static PFN_vkFlushMappedMemoryRanges wow64_real_vkFlushMappedMemoryRanges;
+static PFN_vkInvalidateMappedMemoryRanges wow64_real_vkInvalidateMappedMemoryRanges;
+static PFN_vkWaitSemaphores wow64_real_vkWaitSemaphores;
+static PFN_vkGetSemaphoreCounterValue wow64_real_vkGetSemaphoreCounterValue;
+
+static ULONG_PTR wow64_zero_bits(void)
+{
+    if (zero_bits) return zero_bits;
+    if (NtCurrentTeb()->WowTebOffset)
+    {
+        SYSTEM_BASIC_INFORMATION info;
+        if (!NtQuerySystemInformation( SystemEmulationBasicInformation, &info, sizeof(info), NULL ))
+            return (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
+        return 0x7fffffff;
+    }
+    return 0;
+}
+
+/* WOW64 low window pool.
+ *
+ * On the OHOS kernel ubt translator only memory that was mapped from the
+ * client's own top-level translated context is visible to translated code.
+ * Allocations made by this unix library -- or even by a PE callback nested
+ * inside a unix call -- stay invisible and fault on the first translated
+ * store.  The PE side therefore reserves a large low-address pool during
+ * wine_vk_init() (which runs translated, from the client's own flow) and
+ * passes it down; vkMapMemory windows are carved out of it here.
+ */
+/* window pool carved out of the PE-side reservation */
+struct wow64_pool_range
+{
+    struct list entry;
+    SIZE_T offset;
+    SIZE_T size;
+};
+
+static void *wow64_pool_base;
+static SIZE_T wow64_pool_size;
+static struct list wow64_pool_free = LIST_INIT( wow64_pool_free );
+static SIZE_T wow64_pool_used;
+
+static BOOL wow64_alloc_placed( ULONG_PTR bits, SIZE_T *alloc_size, void **placed )
+{
+    struct wow64_pool_range *range, *best = NULL;
+    SIZE_T want = (*alloc_size + 0xffff) & ~0xffff;
+    NTSTATUS status;
+
+    *placed = NULL;
+    if (!wow64_pool_base || !want) return FALSE;
+
+    LIST_FOR_EACH_ENTRY( range, &wow64_pool_free, struct wow64_pool_range, entry )
+        if (range->size >= want && (!best || range->size < best->size)) best = range;
+    if (!best)
+    {
+        if (wow64_pool_used + want > wow64_pool_size) return FALSE;
+        if (!(best = malloc( sizeof(*best) ))) return FALSE;
+        best->offset = wow64_pool_used;
+        best->size = want;
+        wow64_pool_used += want;
+    }
+    else
+    {
+        list_remove( &best->entry );
+        if (best->size > want)
+        {
+            /* split the tail back into the free list */
+            struct wow64_pool_range *tail = malloc( sizeof(*tail) );
+            if (tail)
+            {
+                tail->offset = best->offset + want;
+                tail->size = best->size - want;
+                list_add_tail( &wow64_pool_free, &tail->entry );
+                best->size = want;
+            }
+        }
+    }
+
+    *placed = (char *)wow64_pool_base + best->offset;
+    *alloc_size = best->size;
+    status = NtAllocateVirtualMemory( GetCurrentProcess(), placed, 0, alloc_size,
+                                      MEM_COMMIT, PAGE_READWRITE );
+    if (status)
+    {
+        ERR( "WOW64 pool commit %p (%s) failed status=%x\n",
+             *placed, wine_dbgstr_longlong( best->size ), status );
+        free( best );
+        *placed = NULL;
+        return FALSE;
+    }
+    free( best );
+    return TRUE;
+}
+
+static void wow64_free_placed( void *window, SIZE_T size )
+{
+    struct wow64_pool_range *range;
+    SIZE_T offset;
+
+    if (!window || !wow64_pool_base || !size) return;
+    offset = (char *)window - (char *)wow64_pool_base;
+    if (offset >= wow64_pool_size) return;
+    NtFreeVirtualMemory( GetCurrentProcess(), &window, &size, MEM_DECOMMIT );
+    if (!(range = malloc( sizeof(*range) ))) return;
+    range->offset = offset;
+    range->size = size;
+    list_add_tail( &wow64_pool_free, &range->entry );
+}
+
+static BOOL wow64_window_in_pool( void *window )
+{
+    return wow64_pool_base && (char *)window >= (char *)wow64_pool_base &&
+           (char *)window < (char *)wow64_pool_base + wow64_pool_size;
+}
+
+
+/* write back only the ranges the 32-bit client actually modified; blindly
+ * copying everything would destroy GPU results that landed in the host
+ * mapping and have not been synced back into the window yet. */
+static void wow64_flush_one( struct wine_device_memory *memory )
+{
+    const char *window = memory->vm_map, *shadow = memory->wow64_shadow;
+    size_t size = (size_t)memory->wow64_map_size;
+
+    if (!memory->host_map || !window || !size) return;
+    if (!shadow)
+    {
+        wow64_copy_from_window( memory->host_map, window, size );
+        return;
+    }
+    {
+        size_t page = 0;
+        while (page < size)
+        {
+            size_t run;
+
+            if (!memcmp( window + page, shadow + page, 0x1000 ))
+            {
+                page += 0x1000;
+                continue;
+            }
+            for (run = page + 0x1000; run < size; run += 0x1000)
+                if (!memcmp( window + run, shadow + run, 0x1000 )) break;
+            memcpy( (char *)memory->host_map + page, window + page, run - page );
+            memcpy( (void *)shadow + page, window + page, run - page );
+            page = run;
+        }
+    }
+}
+
+static void wow64_flush_copies(void)
+{
+    struct wine_device_memory *memory;
+
+    pthread_mutex_lock( &wow64_copy_mutex );
+    LIST_FOR_EACH_ENTRY( memory, &wow64_copy_maps, struct wine_device_memory, wow64_entry )
+        wow64_flush_one( memory );
+    pthread_mutex_unlock( &wow64_copy_mutex );
+}
+
+/* Set when GPU work that may write host-visible mappings is in flight; the
+ * fence/queue wait shims copy the host content back into the windows once
+ * it completes, so 32-bit readback of GPU results works. */
+static BOOL wow64_gpu_pending;
+
+static void wow64_sync_copies(void)
+{
+    struct wine_device_memory *memory;
+
+    if (!wow64_gpu_pending) return;
+    wow64_gpu_pending = FALSE;
+    pthread_mutex_lock( &wow64_copy_mutex );
+    LIST_FOR_EACH_ENTRY( memory, &wow64_copy_maps, struct wine_device_memory, wow64_entry )
+    {
+        char *window = memory->vm_map, *shadow = memory->wow64_shadow;
+        const char *host = memory->host_map;
+        size_t size = (size_t)memory->wow64_map_size, off;
+
+        if (!host || !window || !size) continue;
+        if (!shadow)
+        {
+            wow64_copy_to_window( window, host, size );
+            continue;
+        }
+        /* only bring back pages the 32-bit client has not written since the
+         * last flush; a blanket host->window copy would destroy in-flight
+         * client uploads and tear rendered frames */
+        for (off = 0; off < size; off += 0x1000)
+        {
+            if (memcmp( window + off, shadow + off, 0x1000 )) continue;
+            memcpy( window + off, host + off, 0x1000 );
+            memcpy( shadow + off, window + off, 0x1000 );
+        }
+    }
+    pthread_mutex_unlock( &wow64_copy_mutex );
+}
+
+static VkResult VKAPI_PTR wow64_vkQueueSubmit( VkQueue queue, uint32_t count,
+                                               const VkSubmitInfo *infos, VkFence fence )
+{
+    VkResult result;
+
+    wow64_flush_copies();
+    result = wow64_real_vkQueueSubmit( queue, count, infos, fence );
+    if (result == VK_SUCCESS) wow64_gpu_pending = TRUE;
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkQueueSubmit2( VkQueue queue, uint32_t count,
+                                                const VkSubmitInfo2 *infos, VkFence fence )
+{
+    VkResult result;
+
+    wow64_flush_copies();
+    result = wow64_real_vkQueueSubmit2( queue, count, infos, fence );
+    if (result == VK_SUCCESS) wow64_gpu_pending = TRUE;
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkQueueSubmit2KHR( VkQueue queue, uint32_t count,
+                                                   const VkSubmitInfo2 *infos, VkFence fence )
+{
+    VkResult result;
+
+    wow64_flush_copies();
+    result = wow64_real_vkQueueSubmit2KHR( queue, count, infos, fence );
+    if (result == VK_SUCCESS) wow64_gpu_pending = TRUE;
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkWaitForFences( VkDevice device, uint32_t fence_count,
+                                                 const VkFence *fences, VkBool32 wait_all,
+                                                 uint64_t timeout )
+{
+    VkResult result = wow64_real_vkWaitForFences( device, fence_count, fences, wait_all, timeout );
+    if (result == VK_SUCCESS) wow64_sync_copies();
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkGetFenceStatus( VkDevice device, VkFence fence )
+{
+    VkResult result = wow64_real_vkGetFenceStatus( device, fence );
+    if (result == VK_SUCCESS) wow64_sync_copies();
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkQueueWaitIdle( VkQueue queue )
+{
+    VkResult result = wow64_real_vkQueueWaitIdle( queue );
+    if (result == VK_SUCCESS) wow64_sync_copies();
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkDeviceWaitIdle( VkDevice device )
+{
+    VkResult result = wow64_real_vkDeviceWaitIdle( device );
+    if (result == VK_SUCCESS) wow64_sync_copies();
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkWaitSemaphores( VkDevice device, const VkSemaphoreWaitInfo *wait_info,
+                                                   uint64_t timeout )
+{
+    VkResult result = wow64_real_vkWaitSemaphores( device, wait_info, timeout );
+    if (result == VK_SUCCESS) wow64_sync_copies();
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkGetSemaphoreCounterValue( VkDevice device, VkSemaphore semaphore,
+                                                            uint64_t *value )
+{
+    VkResult result = wow64_real_vkGetSemaphoreCounterValue( device, semaphore, value );
+    if (result == VK_SUCCESS) wow64_sync_copies();
+    return result;
+}
+
+static VkResult VKAPI_PTR wow64_vkFlushMappedMemoryRanges( VkDevice device, uint32_t range_count,
+                                                           const VkMappedMemoryRange *ranges )
+{
+    wow64_flush_copies();
+    return wow64_real_vkFlushMappedMemoryRanges( device, range_count, ranges );
+}
+
+static VkResult VKAPI_PTR wow64_vkInvalidateMappedMemoryRanges( VkDevice device, uint32_t range_count,
+                                                                const VkMappedMemoryRange *ranges )
+{
+    VkResult result = wow64_real_vkInvalidateMappedMemoryRanges( device, range_count, ranges );
+    if (result == VK_SUCCESS) wow64_sync_copies();
+    return result;
+}
+
+static void wow64_install_queue_shims( struct vulkan_device *device )
+{
+    if (!device) return;
+    if (device->p_vkQueueSubmit && !wow64_real_vkQueueSubmit)
+    {
+        wow64_real_vkQueueSubmit = device->p_vkQueueSubmit;
+        device->p_vkQueueSubmit = wow64_vkQueueSubmit;
+    }
+    if (device->p_vkQueueSubmit2 && !wow64_real_vkQueueSubmit2)
+    {
+        wow64_real_vkQueueSubmit2 = device->p_vkQueueSubmit2;
+        device->p_vkQueueSubmit2 = wow64_vkQueueSubmit2;
+    }
+    if (device->p_vkQueueSubmit2KHR && !wow64_real_vkQueueSubmit2KHR)
+    {
+        wow64_real_vkQueueSubmit2KHR = device->p_vkQueueSubmit2KHR;
+        device->p_vkQueueSubmit2KHR = wow64_vkQueueSubmit2KHR;
+    }
+    if (device->p_vkWaitForFences && !wow64_real_vkWaitForFences)
+    {
+        wow64_real_vkWaitForFences = device->p_vkWaitForFences;
+        device->p_vkWaitForFences = wow64_vkWaitForFences;
+    }
+    if (device->p_vkGetFenceStatus && !wow64_real_vkGetFenceStatus)
+    {
+        wow64_real_vkGetFenceStatus = device->p_vkGetFenceStatus;
+        device->p_vkGetFenceStatus = wow64_vkGetFenceStatus;
+    }
+    if (device->p_vkQueueWaitIdle && !wow64_real_vkQueueWaitIdle)
+    {
+        wow64_real_vkQueueWaitIdle = device->p_vkQueueWaitIdle;
+        device->p_vkQueueWaitIdle = wow64_vkQueueWaitIdle;
+    }
+    if (device->p_vkDeviceWaitIdle && !wow64_real_vkDeviceWaitIdle)
+    {
+        wow64_real_vkDeviceWaitIdle = device->p_vkDeviceWaitIdle;
+        device->p_vkDeviceWaitIdle = wow64_vkDeviceWaitIdle;
+    }
+    if (device->p_vkFlushMappedMemoryRanges && !wow64_real_vkFlushMappedMemoryRanges)
+    {
+        wow64_real_vkFlushMappedMemoryRanges = device->p_vkFlushMappedMemoryRanges;
+        device->p_vkFlushMappedMemoryRanges = wow64_vkFlushMappedMemoryRanges;
+    }
+    if (device->p_vkInvalidateMappedMemoryRanges && !wow64_real_vkInvalidateMappedMemoryRanges)
+    {
+        wow64_real_vkInvalidateMappedMemoryRanges = device->p_vkInvalidateMappedMemoryRanges;
+        device->p_vkInvalidateMappedMemoryRanges = wow64_vkInvalidateMappedMemoryRanges;
+    }
+    if (device->p_vkWaitSemaphores && !wow64_real_vkWaitSemaphores)
+    {
+        wow64_real_vkWaitSemaphores = device->p_vkWaitSemaphores;
+        device->p_vkWaitSemaphores = wow64_vkWaitSemaphores;
+    }
+    if (device->p_vkGetSemaphoreCounterValue && !wow64_real_vkGetSemaphoreCounterValue)
+    {
+        wow64_real_vkGetSemaphoreCounterValue = device->p_vkGetSemaphoreCounterValue;
+        device->p_vkGetSemaphoreCounterValue = wow64_vkGetSemaphoreCounterValue;
+    }
+    TRACE( "WOW64 queue shims installed (sem=%d/%d fence=%d/%d)\n",
+           device->p_vkWaitSemaphores != NULL, device->p_vkGetSemaphoreCounterValue != NULL,
+           device->p_vkWaitForFences != NULL, device->p_vkQueueSubmit != NULL );
+}
+
+/* The low 32-bit VA is exposed to native 64-bit code as read-only aliases
+ * by the wow64/ubt translation layer: reads work, but direct stores fault
+ * with SIGBUS.  Copies touching the low window must therefore go through
+ * the kernel (process_vm_writev / process_vm_readv), the same trick the
+ * fork's unaligned-access emulator uses. */
+static BOOL wow64_copy_from_window( void *dst, const void *src, size_t size )
+{
+    struct iovec local = { dst, size };
+    struct iovec remote = { (void *)src, size };
+    if (!size) return TRUE;
+    return syscall( __NR_process_vm_readv, getpid(), &local, 1, &remote, 1, 0 ) == (ssize_t)size;
+}
+
+/* Writes into the low window: the ubt bridge itself memcpy()s into guest
+ * memory (lkv_GuestMman::writeToGuestMem), so plain native stores to the
+ * low window work, even though the kernel-mediated paths (process_vm_writev,
+ * /proc/self/mem) are denied with EACCES on this kernel. */
+static BOOL wow64_copy_to_window( void *dst, const void *src, size_t size )
+{
+    if (!size) return TRUE;
+    memcpy( dst, src, size );
+    return TRUE;
+}
+
+static void wow64_accept_map( struct wine_device_memory *memory, void *placed, void *window,
+                              void *host, VkDeviceSize map_size, BOOL alias, void **data,
+                              const char *how )
+{
+    memory->vm_map = placed;
+    memory->host_map = host;
+    memory->wow64_alias = alias;
+    memory->wow64_copy = !alias;
+    memory->wow64_window = window;
+    memory->wow64_map_size = map_size;
+    if (!alias)
+    {
+        list_init( &memory->wow64_entry );
+        pthread_mutex_lock( &wow64_copy_mutex );
+        list_add_tail( &wow64_copy_maps, &memory->wow64_entry );
+        pthread_mutex_unlock( &wow64_copy_mutex );
+        /* the window is demand-zero; seed it with the host content so data
+         * the GPU wrote before this map is visible to the 32-bit client */
+        wow64_copy_to_window( memory->vm_map, memory->host_map, (size_t)map_size );
+        if ((memory->wow64_shadow = malloc( (size_t)map_size )))
+            memcpy( memory->wow64_shadow, memory->vm_map, (size_t)map_size );
+    }
+    *data = placed;
+    TRACE( "WOW64 %s vkMapMemory %p -> %p (%s bytes)\n",
+           how, host, placed, wine_dbgstr_longlong( map_size ) );
+}
+
+static VkResult wow64_remap_map( struct wine_device_memory *memory,
+                                 const VkMemoryMapInfoKHR *map_info, void **data )
+{
+    ULONG_PTR bits = wow64_zero_bits();
+    SIZE_T alloc_size;
+    SIZE_T want_size;
+    void *placed = NULL;
+    void *host = *data;
+    void *client;
+    VkDeviceSize map_size;
+    SIZE_T lead;
+
+    if (!bits)
+    {
+        ERR( "WOW64 vkMapMemory %p does not fit 32-bit and zero_bits is unset\n", host );
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+
+    /* Only map the range the client asked for: the ICD VMA covers the whole
+     * allocation, but nothing beyond [host, host + map_size) is guaranteed
+     * accessible. */
+    map_size = map_info->size;
+    if (map_size > memory->size - map_info->offset || map_size == VK_WHOLE_SIZE)
+        map_size = memory->size - map_info->offset;
+
+    /* The window keeps the host pointer's page alignment so that the client
+     * pointer stays usable for aligned SSE and atomics. */
+    lead = (uintptr_t)host & 0xfff;
+    want_size = ((SIZE_T)map_size + lead + 0xfff) & ~(SIZE_T)0xfff;
+    alloc_size = want_size;
+    placed = NULL;
+    if (!wow64_alloc_placed( bits, &alloc_size, &placed ))
+    {
+        ERR( "WOW64 window allocation of %s failed for vkMapMemory\n",
+             wine_dbgstr_longlong( (ULONGLONG)want_size ) );
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    memory->wow64_window_size = (SIZE_T)alloc_size;
+    client = (char *)placed + lead;
+    TRACE( "WOW64 window %p-%p (%s)\n", placed, (char *)placed + (SIZE_T)want_size,
+           wine_dbgstr_longlong( (ULONGLONG)want_size ) );
+
+    /* The window stays demand-zero: the 32-bit client writes its upload data
+     * The 32-bit client writes its upload data directly into the window,
+     * directly into it.  Writes are flushed back to the driver mapping on
+     * every QueueSubmit; data the GPU writes to the host mapping (readback)
+     * is copied to the window when it is flushed or unmapped. */
+    wow64_accept_map( memory, client, placed, host, map_size, FALSE, data, "CPU fallback" );
+    return VK_SUCCESS;
+}
+
+static void wow64_release_map( struct vulkan_device *device, struct wine_device_memory *memory )
+{
+    void *window;
+
+    if (!memory->wow64_alias && !memory->wow64_copy) return;
+
+    if (memory->wow64_copy && memory->host_map && memory->vm_map && memory->wow64_map_size)
+        wow64_flush_one( memory );
+    if (memory->wow64_copy)
+    {
+        pthread_mutex_lock( &wow64_copy_mutex );
+        list_remove( &memory->wow64_entry );
+        list_init( &memory->wow64_entry );
+        memory->wow64_copy = FALSE;
+        pthread_mutex_unlock( &wow64_copy_mutex );
+    }
+
+    if (device && device->p_vkUnmapMemory && memory->host.device_memory)
+        device->p_vkUnmapMemory( device->host.device, memory->host.device_memory );
+
+    window = memory->wow64_window;
+    if (window)
+    {
+        if (wow64_window_in_pool( window ))
+            wow64_free_placed( window, memory->wow64_window_size );
+        else if (memory->wow64_window_size)
+            munmap( window, memory->wow64_window_size );
+    }
+    memory->vm_map = NULL;
+    memory->host_map = NULL;
+    memory->wow64_window = NULL;
+    memory->wow64_window_size = 0;
+    memory->wow64_map_size = 0;
+    memory->wow64_alias = FALSE;
+    free( memory->wow64_shadow );
+    memory->wow64_shadow = NULL;
+}
+
+#endif /* _WIN64 && __OHOS__ */
 
 #define wine_vk_count_struct(s, t) wine_vk_count_struct_((void *)s, VK_STRUCTURE_TYPE_##t)
 static uint32_t wine_vk_count_struct_(void *s, VkStructureType t)
@@ -904,6 +1433,13 @@ NTSTATUS init_vulkan(void *arg)
     }
 
     callback_funcs = *funcs;
+#ifdef __OHOS__
+    wow64_pool_base = (void *)(UINT_PTR)funcs->wow64_window_pool_base;
+    wow64_pool_size = funcs->wow64_window_pool_size;
+    if (wow64_pool_base)
+        TRACE( "WOW64 window pool %p-%s\n", wow64_pool_base,
+               wine_dbgstr_longlong( (ULONGLONG)wow64_pool_size ) );
+#endif
     p_vkCreateInstance = (PFN_vkCreateInstance)vk_funcs->p_vkGetInstanceProcAddr(NULL, "vkCreateInstance");
     p_vkEnumerateInstanceVersion = (PFN_vkEnumerateInstanceVersion)vk_funcs->p_vkGetInstanceProcAddr(NULL, "vkEnumerateInstanceVersion");
     p_vkEnumerateInstanceExtensionProperties = (PFN_vkEnumerateInstanceExtensionProperties)vk_funcs->p_vkGetInstanceProcAddr(NULL, "vkEnumerateInstanceExtensionProperties");
@@ -1205,6 +1741,11 @@ VkResult wine_vkCreateDevice(VkPhysicalDevice client_physical_device, const VkDe
     /* OHOS: wrap vkCreateShaderModule to fix SPIR-V layout violations
      * (misplaced module-scope instructions inside function bodies). */
     ohos_install_shader_module_fixup(device->obj.host.device, &device->obj.p_vkCreateShaderModule);
+#endif
+
+#if defined(_WIN64) && defined(__OHOS__)
+    /* WOW64: flush CPU-copy vkMapMemory aliases on QueueSubmit. */
+    if (wow64_zero_bits()) wow64_install_queue_shims( &device->obj );
 #endif
 
     for (i = 0; i < create_info_host.queueCreateInfoCount; i++)
@@ -2031,6 +2572,15 @@ VkResult wine_vkAllocateMemory(VkDevice client_device, const VkMemoryAllocateInf
     vulkan_object_init(&memory->obj, host_device_memory);
     memory->size = info.allocationSize;
     memory->vm_map = mapping;
+#ifdef __OHOS__
+    memory->host_map = NULL;
+    memory->wow64_alias = FALSE;
+    memory->wow64_copy = FALSE;
+    list_init( &memory->wow64_entry );
+    memory->wow64_window = NULL;
+    memory->wow64_window_size = 0;
+    memory->wow64_map_size = 0;
+#endif
     vulkan_instance_insert_object(instance, &memory->obj);
 
     *ret = memory->client.device_memory;
@@ -2048,6 +2598,11 @@ void wine_vkFreeMemory(VkDevice client_device, VkDeviceMemory memory_handle, con
         return;
     memory = wine_device_memory_from_handle(memory_handle);
 
+#if defined(_WIN64) && defined(__OHOS__)
+    if (memory->wow64_alias || memory->wow64_copy)
+        wow64_release_map( device, memory );
+    else
+#endif
     if (memory->vm_map && !physical_device->external_memory_align)
     {
         const VkMemoryUnmapInfoKHR info =
@@ -2152,10 +2707,19 @@ VkResult wine_vkMapMemory2KHR(VkDevice client_device, const VkMemoryMapInfoKHR *
 #ifdef _WIN64
     if (NtCurrentTeb()->WowTebOffset && result == VK_SUCCESS && (UINT_PTR)*data >> 32)
     {
+#ifdef __OHOS__
+        /* OHOS: remap into the low window pool (see wow64 section above). */
+        if ((result = wow64_remap_map( memory, map_info, data )) != VK_SUCCESS)
+        {
+            device->p_vkUnmapMemory(device->host.device, memory->host.device_memory);
+            *data = NULL;
+        }
+#else
         FIXME("returned mapping %p does not fit 32-bit pointer\n", *data);
         device->p_vkUnmapMemory(device->host.device, memory->host.device_memory);
         *data = NULL;
         result = VK_ERROR_OUT_OF_HOST_MEMORY;
+#endif
     }
 #endif
 
@@ -2180,6 +2744,14 @@ VkResult wine_vkUnmapMemory2KHR(VkDevice client_device, const VkMemoryUnmapInfoK
     struct wine_device_memory *memory = wine_device_memory_from_handle(unmap_info->memory);
     VkMemoryUnmapInfoKHR info;
     VkResult result;
+
+#if defined(_WIN64) && defined(__OHOS__)
+    if (memory->wow64_alias || memory->wow64_copy)
+    {
+        wow64_release_map( device, memory );
+        return VK_SUCCESS;
+    }
+#endif
 
     if (memory->vm_map && physical_device->external_memory_align)
         return VK_SUCCESS;

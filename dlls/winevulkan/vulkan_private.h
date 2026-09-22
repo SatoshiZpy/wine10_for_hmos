@@ -26,6 +26,9 @@
 #include "vulkan_thunks.h"
 
 #include "wine/rbtree.h"
+#ifdef __OHOS__
+#include "wine/list.h"
+#endif
 
 extern const struct vulkan_funcs *vk_funcs;
 
@@ -123,6 +126,17 @@ struct wine_device_memory
     VULKAN_OBJECT_HEADER( VkDeviceMemory, device_memory );
     VkDeviceSize size;
     void *vm_map;
+#ifdef __OHOS__
+    void *host_map;          /* 64-bit host pointer when WOW64 remapped */
+    BOOL wow64_alias;        /* vm_map shares pages with the host mapping */
+    BOOL wow64_copy;         /* vm_map is a CPU copy of host_map */
+    struct list wow64_entry; /* entry in the WOW64 copy tracking list */
+    void *wow64_window;      /* low 32-bit window base backing vm_map */
+    SIZE_T wow64_window_size; /* nonzero when the window is a raw mmap */
+    VkDeviceSize wow64_map_size; /* bytes actually mapped by the last vkMapMemory */
+    void *wow64_shadow;      /* native copy of the window content at the last
+                              * flush/sync; used to detect 32-bit client writes */
+#endif
 };
 
 static inline struct wine_device_memory *wine_device_memory_from_handle(VkDeviceMemory handle)

@@ -1562,6 +1562,9 @@ static void bus_handler( int signal, siginfo_t *siginfo, void *sigcontext )
             return;
         }
         /* unsupported instruction: raise the alignment exception below */
+        ERR( "unaligned access: unsupported instruction %08x at pc %p addr %s write=%d\n",
+             *(unsigned int *)PC_sig( (ucontext_t *)sigcontext ), (void *)PC_sig( (ucontext_t *)sigcontext ),
+             wine_dbgstr_longlong( faddr ), fwrite );
     }
 #endif
     setup_exception( sigcontext, &rec );

@@ -97,7 +97,19 @@ struct vk_callback_funcs
 {
     UINT64 call_vulkan_debug_report_callback;
     UINT64 call_vulkan_debug_utils_callback;
+#ifdef __OHOS__
+    UINT64 wow64_window_pool_base;
+    UINT64 wow64_window_pool_size;
+#endif
 };
+
+#ifdef __OHOS__
+/* WOW64 window pool (OHOS): the 32-bit client must receive mappings below
+ * 4GB.  On the OHOS kernel ubt translator only memory mapped from top-level
+ * translated context is visible to translated code, so winevulkan's PE side
+ * reserves a large low window pool during its first (translated)
+ * initialization and the unix side carves committed windows out of it. */
+#endif
 
 /* debug callbacks params */
 
