@@ -1,0 +1,33 @@
+From: OHOS wine port
+Subject: [PATCH] meson: make libatomic lookup optional for llvm-mingw x86
+
+libatomic is a GCC-specific shim library; when building the 32-bit x86
+target with the llvm-mingw toolchain, the compiler-rt builtins
+(libclang_rt.builtins) already provide the __atomic_*_8 entry points and
+no libatomic.a exists in the i686 sysroot. Make the lookup optional so
+the build falls back to the compiler-provided atomics instead of
+aborting during meson setup.
+---
+ meson.build | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -135,8 +135,11 @@
+ 
+   # Need to link against libatomic for 64-bit atomic emulation on x86
+-  # when using clang.
++  # when using GCC-style toolchains. The llvm-mingw compiler-rt builtins
++  # already provide the __atomic_*_8 symbols, so the lookup is optional.
+   if vkd3d_is_clang
+-    lib_atomic = vkd3d_compiler.find_library('atomic')
+-    vkd3d_extra_libs += lib_atomic
++    lib_atomic = vkd3d_compiler.find_library('atomic', required: false)
++    if lib_atomic.found()
++      vkd3d_extra_libs += lib_atomic
++    endif
+   endif
+ endif
+-- 
+2.34.1

@@ -1,0 +1,28 @@
+From: OHOS wine port
+Subject: [PATCH] vkd3d: fix incompatible pointer type in swapchain helper
+
+The device10 patch retyped d3d12_device::ID3D12Device_iface to
+ID3D12Device10, while d3d12_swapchain_device_iface() still declares an
+ID3D12Device9* result. GCC accepted the implicit COM-interface
+downcast with a warning; current clang treats
+-Wincompatible-pointer-types as an error in C and aborts the build.
+Add an explicit cast (the interface layouts are compatible, the
+underlying object is the same d3d12_device).
+---
+ libs/vkd3d/swapchain.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libs/vkd3d/swapchain.c b/libs/vkd3d/swapchain.c
+--- a/libs/vkd3d/swapchain.c
++++ b/libs/vkd3d/swapchain.c
+@@ -230,7 +230,7 @@ static inline const struct vkd3d_vk_device_procs* d3d12_swapchain_procs(struct d
+ 
+ static inline struct ID3D12Device9* d3d12_swapchain_device_iface(struct d3d12_swapchain* swapchain)
+ {
+-    return &swapchain->command_queue->device->ID3D12Device_iface;
++    return (struct ID3D12Device9*)&swapchain->command_queue->device->ID3D12Device_iface;
+ }
+ 
+ static inline struct d3d12_device* d3d12_swapchain_device(struct d3d12_swapchain* swapchain)
+-- 
+2.34.1

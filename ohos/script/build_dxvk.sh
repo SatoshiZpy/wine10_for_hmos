@@ -3,13 +3,14 @@
 # Build DXVK 2.6.2 for OHOS (cross-compile to Windows PE DLLs)
 #
 # 64-bit: ARM64X (0xA64E, hybrid ARM64 + arm64ec)。ARM64X 让 ARM64 进程
-#   (如 wine_d3d11_test.exe, 0xAA64) 能加载 d3d11.dll/dxgi.dll —
+#   (如 wine_d3d11_smoke.exe, 0xAA64) 能加载 d3d11.dll/dxgi.dll —
 #   ntdll/loader.c is_valid_binary 对 ARM64X 的 info->Machine=ARM64 放行,
 #   纯 ARM64EC (0xA641) 在 ARM64 进程被拒。机制: 编两套 obj (arm64ec +
 #   aarch64), lld-link -machine:arm64x 合并; libmingwex 提供
 #   __chpe_metadata + dispatch + _load_config_used (参考 Wine builtin,
 #   winebuild -marm64x)。工具链: 环境变量 LLVM_MINGW。
-# 32-bit: i386, 系统 mingw-w64 工具链 (wow64 下 32 位游戏走 xtajit)。
+# 32-bit: i386, llvm-mingw 自带 i686 工具链 (wow64 下 32 位游戏由鸿蒙
+#   内核 ubt 翻译器执行)。
 #
 # DXVK 2.6.2 与 1.10.3 的差异 (影响构建): meson.build 用
 # check_header('vulkan/vulkan.h') 而非 find_library('vulkan-1'), 且不再
@@ -21,6 +22,10 @@
 
 set -ex
 source "$(dirname "${BASH_SOURCE[0]}")/pe_common.sh"
+
+# DXVK 复用 wine 内置 BC 解码头：源码内写
+# #include "dlls/d3dx9_36/bcdec.h"（标明来源），wine 源码根
+# (OHOS_BUILD_ROOT) 经 crossfile 以 -I 注入，消除相对路径硬编码耦合。
 
 pe_find_glslang
 
@@ -44,10 +49,10 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
 
     pe_write_mingw_crossfile "${DXVK_BUILD_DIR}/build-arm64ec.txt" arm64ec "${EC_SYSROOT}" \
         "${DXVK_BUILD_DIR}/windres-ec" "${DXVK_BUILD_DIR}/ld.lld" \
-        "-D__OHOS__=1" "" "-include algorithm"
+        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" "-include algorithm"
     pe_write_mingw_crossfile "${DXVK_BUILD_DIR}/build-aarch64.txt" aarch64 "${AARCH64_SYSROOT}" \
         "${DXVK_BUILD_DIR}/windres-a64" "${DXVK_BUILD_DIR}/ld.lld-a64" \
-        "-D__OHOS__=1" "" "-include algorithm"
+        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" "-include algorithm"
 
     echo "--- Building DXVK arm64ec ---"
     pe_meson_build "${DXVK_BUILD_DIR}/buildec" "${DXVK_DIR}" \
@@ -103,16 +108,16 @@ else
 fi
 
 # ============================================================
-# 2. Build 32-bit DXVK (i386, 系统 mingw-w64 工具链)
+# 2. Build 32-bit DXVK (i386, llvm-mingw i686 工具链)
 # ============================================================
-pe_require_mingw_w64
+pe_require_i386_sysroot
 
-pe_write_i386_crossfile "${DXVK_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1"
+pe_write_i386_crossfile "${DXVK_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" "-include algorithm"
 
 echo "--- Building DXVK x86 ---"
 pe_meson_build "${DXVK_BUILD_DIR}/build32" "${DXVK_DIR}" \
     "${DXVK_BUILD_DIR}/build-ohos32.txt" "${DXVK_BUILD_DIR}/install32" \
-    "${GLSLANG_DIR}" 0
+    "${DXVK_BUILD_DIR}:${GLSLANG_DIR}" 0
 
 echo "--- Verifying DXVK x86 artifacts ---"
 for dll in d3d11.dll dxgi.dll; do

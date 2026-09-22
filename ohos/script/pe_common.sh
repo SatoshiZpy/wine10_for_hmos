@@ -50,16 +50,16 @@ pe_require_ec_sysroot() {
 }
 
 # ------------------------------------------------------------
-# i386 工具链校验 (32 位 DLL 用系统 mingw-w64)
+# i386 工具链校验 (32 位 DLL 用 llvm-mingw 自带的 i686 工具链)
 # ------------------------------------------------------------
-pe_require_mingw_w64() {
-    local hint="Install: sudo apt install gcc-mingw-w64 g++-mingw-w64"
-    if ! command -v x86_64-w64-mingw32-gcc &> /dev/null; then
-        echo "ERROR: mingw-w64 (x86_64) not found. ${hint}"
+pe_require_i386_sysroot() {
+    local hint="export LLVM_MINGW=/path/to/llvm-mingw-<tag>-ucrt-ubuntu-22.04-x86_64"
+    if [ -z "${LLVM_MINGW:-}" ] || [ ! -x "${LLVM_MINGW}/bin/clang" ]; then
+        echo "ERROR: llvm-mingw not found. ${hint}"
         return 1
     fi
-    if ! command -v i686-w64-mingw32-gcc &> /dev/null; then
-        echo "ERROR: mingw-w64 (i686) not found. ${hint}"
+    if [ ! -d "${LLVM_MINGW}/i686-w64-mingw32" ]; then
+        echo "ERROR: i686 sysroot missing: ${LLVM_MINGW}/i686-w64-mingw32. ${hint}"
         return 1
     fi
 }
@@ -181,36 +181,65 @@ pe_write_mingw_crossfile() {
 }
 
 # ------------------------------------------------------------
-# 生成 i386 cross-file (系统 mingw-w64 工具链)
-# 用法: pe_write_i386_crossfile <输出> <附加编译参数 (可空)>
+# 生成 i386 cross-file (llvm-mingw 工具链)
+# 使用 LLVM_MINGW 自带的 i686 sysroot/clang/lld, 不依赖系统 mingw-w64;
+# windres shim 与 ld.lld wrapper 生成在 cross-file 同目录下。
+# 参数分区铁律同 pe_write_mingw_crossfile (编译期参数进 *_args,
+# 链接期参数进 *_link_args)。
+# 用法: pe_write_i386_crossfile <输出> <公共编译参数> <c独有> <cpp独有>
+#   公共编译参数同时进 c_args 与 cpp_args (如 "-D__OHOS__=1");
+#   c独有/cpp独有 可为空串 (DXVK 2.6 配 libc++ 时 cpp 需 "-include algorithm")。
 # ------------------------------------------------------------
 pe_write_i386_crossfile() {
-    local out="$1" extra="$(__pe_meson_elems "$2")"
-    cat > "${out}" << EOF
-[binaries]
-c = 'i686-w64-mingw32-gcc'
-cpp = 'i686-w64-mingw32-g++'
-ar = 'i686-w64-mingw32-ar'
-strip = 'i686-w64-mingw32-strip'
-windres = 'i686-w64-mingw32-windres'
+    local out="$1" common="$2" c_only="$3" cpp_only="$4"
+    local sysroot="${LLVM_MINGW}/i686-w64-mingw32"
+    local dir="$(dirname "${out}")"
+    local windres="${dir}/windres-i386" lldw="${dir}/ld.lld-i386"
 
-[properties]
-needs_exe_wrapper = true
-c_args = [${extra#,}]
-cpp_args = [${extra#,}]
+    pe_make_windres_shim "${windres}" i686-w64-mingw32 "${sysroot}"
+    pe_make_lld_wrapper "${lldw}"
 
-[host_machine]
-system = 'windows'
-cpu_family = 'x86'
-cpu = 'x86'
-endian = 'little'
-EOF
+    common="$(__pe_meson_elems "${common}")"
+    c_only="$(__pe_meson_elems "${c_only}")"
+    cpp_only="$(__pe_meson_elems "${cpp_only}")"
+
+    {
+        echo "[binaries]"
+        echo "c = '${PE_CLANG}'"
+        echo "cpp = '${PE_CXX}'"
+        echo "ar = '${PE_AR}'"
+        echo "strip = '${PE_STRIP}'"
+        echo "windres = '${windres}'"
+        echo ""
+        echo "[properties]"
+        echo "needs_exe_wrapper = true"
+        echo "sys_root = '${sysroot}'"
+        echo "c_args = ['--target=i686-w64-mingw32', '--sysroot=${sysroot}',"
+        echo "          '-rtlib=compiler-rt'${common}${c_only}]"
+        echo "cpp_args = ['--target=i686-w64-mingw32', '--sysroot=${sysroot}',"
+        echo "            '-rtlib=compiler-rt', '-stdlib=libc++'${common}${cpp_only}]"
+        echo "c_link_args = ['--target=i686-w64-mingw32', '--sysroot=${sysroot}',"
+        echo "               '-rtlib=compiler-rt', '-fuse-ld=lld',"
+        echo "               '--ld-path=${lldw}', '-L${sysroot}/lib']"
+        echo "cpp_link_args = ['--target=i686-w64-mingw32', '--sysroot=${sysroot}',"
+        echo "                 '-rtlib=compiler-rt', '-stdlib=libc++', '-fuse-ld=lld',"
+        echo "                 '--ld-path=${lldw}', '-L${sysroot}/lib']"
+        echo ""
+        echo "[host_machine]"
+        echo "system = 'windows'"
+        echo "cpu_family = 'x86'"
+        echo "cpu = 'x86'"
+        echo "endian = 'little'"
+    } > "${out}"
 }
 
 # ------------------------------------------------------------
 # meson setup (一次性) + ninja install。
 # PATH 命令级注入 <path_prefix> (wrapper 目录/glslang 目录/widl 目录),
 # 零泄漏到外层 shell。 -j4 限制并行度避免 OOM。
+# meson setup 时会快照 cross-file 内容, 后续 ninja/regenerate 不会重读
+# 变更后的 cross-file — 故记录其 sha256, 变更即强制整目录重配重编,
+# 保证编译脚本改动的编译参数 (如 -I 注入路径) 必定生效。
 # 用法: pe_meson_build <build目录> <源码目录> <cross-file> <prefix> \
 #         <PATH前缀> <b_lundef: 0|1>
 # ------------------------------------------------------------
@@ -218,11 +247,17 @@ pe_meson_build() {
     local bdir="$1" src="$2" cross="$3" prefix="$4" ppath="$5" lundef="$6"
     local undef_flag=""
     [ "${lundef}" -eq 1 ] && undef_flag="-Db_lundef=false"
-    if [ ! -f "${bdir}/build.ninja" ]; then
+    local stamp="${bdir}/.ohos-cross.sha256"
+    local want_sha=""
+    [ -f "${cross}" ] && want_sha="$(sha256sum "${cross}" | cut -d' ' -f1)"
+    if [ ! -f "${bdir}/build.ninja" ] || [ ! -f "${stamp}" ] || \
+       [ "$(cat "${stamp}" 2>/dev/null)" != "${want_sha}" ]; then
+        rm -rf "${bdir}"
         PATH="${ppath}:${PATH}" meson setup "${bdir}" "${src}" \
             --cross-file "${cross}" \
             --prefix "${prefix}" \
             -Dbuildtype=release ${undef_flag}
+        printf '%s\n' "${want_sha}" > "${stamp}"
     fi
     PATH="${ppath}:${PATH}" ninja -C "${bdir}" -j4 install
 }

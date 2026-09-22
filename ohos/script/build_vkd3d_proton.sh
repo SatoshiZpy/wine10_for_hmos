@@ -4,7 +4,8 @@
 #
 # 64-bit: 纯 arm64ec (wow64 mode), 不做 ARM64X 合并 — d3d12.dll 仅由
 #   64 位 EC 进程加载, 无 ARM64 原生进程直载需求 (对比 build_dxvk.sh)。
-# 32-bit: i386, 系统 mingw-w64 工具链 (wow64 下 32 位游戏走 xtajit)。
+# 32-bit: i386, llvm-mingw 自带 i686 工具链 (wow64 下 32 位游戏由鸿蒙
+#   内核 ubt 翻译器执行)。
 #
 # vkd3d-proton meson.build 要点:
 #   - khronos/Vulkan-Headers + SPIRV-Headers (源码树内置 include)
@@ -83,16 +84,16 @@ else
 fi
 
 # ============================================================
-# 2. Build 32-bit vkd3d-proton (i386, 系统 mingw-w64 工具链)
+# 2. Build 32-bit vkd3d-proton (i386, llvm-mingw i686 工具链)
 # ============================================================
-pe_require_mingw_w64
+pe_require_i386_sysroot
 
-pe_write_i386_crossfile "${VKD3D_BUILD_DIR}/build-ohos32.txt" ""
+pe_write_i386_crossfile "${VKD3D_BUILD_DIR}/build-ohos32.txt" "" "" ""
 
 echo "--- Building vkd3d-proton x86 ---"
 pe_meson_build "${VKD3D_BUILD_DIR}/build32" "${VKD3D_PROTON_SRC}" \
     "${VKD3D_BUILD_DIR}/build-ohos32.txt" "${VKD3D_BUILD_DIR}/install32" \
-    "${GLSLANG_DIR}:${WIDL_DIR}" 0
+    "${VKD3D_BUILD_DIR}:${GLSLANG_DIR}:${WIDL_DIR}" 0
 
 echo "--- Verifying vkd3d-proton x86 artifacts ---"
 for dll in d3d12.dll; do

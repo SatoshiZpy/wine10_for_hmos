@@ -4,7 +4,8 @@
 #
 # 64-bit: ARM64X (0xA64E, hybrid ARM64 + arm64ec), 机制同 build_dxvk.sh
 #   (编两套 obj, lld-link -machine:arm64x 合并)。
-# 32-bit: i386, 系统 mingw-w64 工具链 (wow64 下 32 位游戏走 xtajit)。
+# 32-bit: i386, llvm-mingw 自带 i686 工具链 (wow64 下 32 位游戏由鸿蒙
+#   内核 ubt 翻译器执行)。
 #
 # DXVK 1.10.3 与 2.6.2 的差异 (影响构建): meson.build 对非 x86_64 架构
 # 固定从源码树 lib32 找 vulkan-1/d3dcompiler_43, 但 lib32 是 x86 库且与
@@ -19,6 +20,11 @@
 
 set -ex
 source "$(dirname "${BASH_SOURCE[0]}")/pe_common.sh"
+
+# DXVK 复用 wine 内置 BC 解码头：源码内写
+# #include "dlls/d3dx9_36/bcdec.h"（标明来源），wine 源码根
+# (OHOS_BUILD_ROOT) 经 crossfile 以 -I 注入，消除相对路径硬编码耦合。
+
 
 pe_find_glslang
 
@@ -74,11 +80,11 @@ EOF
 
     pe_write_mingw_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-arm64ec.txt" arm64ec "${EC_SYSROOT}" \
         "${DXVK_LEGACY_BUILD_DIR}/windres-ec" "${DXVK_LEGACY_BUILD_DIR}/ld.lld" \
-        "-D__OHOS__=1" "" ""
+        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" ""
     pe_write_mingw_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-aarch64.txt" aarch64 \
         "${AARCH64_SYSROOT}" \
         "${DXVK_LEGACY_BUILD_DIR}/windres-a64" "${DXVK_LEGACY_BUILD_DIR}/ld.lld-a64" \
-        "-D__OHOS__=1" "" ""
+        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" ""
 
     echo "--- Building DXVK legacy arm64ec ---"
     # arm64ec 构建用 EC 版导入库
@@ -151,16 +157,16 @@ else
 fi
 
 # ============================================================
-# 2. Build 32-bit DXVK legacy (i386, 系统 mingw-w64 工具链)
+# 2. Build 32-bit DXVK legacy (i386, llvm-mingw i686 工具链)
 # ============================================================
-pe_require_mingw_w64
+pe_require_i386_sysroot
 
-pe_write_i386_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1"
+pe_write_i386_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" ""
 
 echo "--- Building DXVK legacy x86 ---"
 pe_meson_build "${DXVK_LEGACY_BUILD_DIR}/build32" "${DXVK_LEGACY_DIR}" \
     "${DXVK_LEGACY_BUILD_DIR}/build-ohos32.txt" "${DXVK_LEGACY_BUILD_DIR}/install32" \
-    "${GLSLANG_DIR}" 0
+    "${DXVK_LEGACY_BUILD_DIR}:${GLSLANG_DIR}" 0
 
 echo "--- Verifying DXVK legacy x86 artifacts ---"
 for dll in d3d11.dll dxgi.dll; do
