@@ -96,8 +96,11 @@ static BOOL spirv_is_module_scope_instruction(uint32_t opcode, const uint32_t *i
         return TRUE;
     case SPIRV_OP_VARIABLE:
         /* word layout: [0]=opcode/wordcount [1]=result type
-         * [2]=storage class [3]=result id; Function storage class is 0 */
-        if (instr[2] != 0) return TRUE;
+         * [2]=result id [3]=storage class; Function storage class is 7.
+         * Only non-Function variables are module scope; hoisting a
+         * Function variable out of its body produces invalid SPIR-V
+         * (and crashes the Maleoon bisheng compiler). */
+        if (instr[3] != 7) return TRUE;
         return FALSE;
     default:
         return FALSE;
