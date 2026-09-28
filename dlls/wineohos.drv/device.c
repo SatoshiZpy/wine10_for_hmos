@@ -32,6 +32,11 @@ WINE_DEFAULT_DEBUG_CHANNEL(ohos);
 
 static HWND capture_window;
 
+/* window property holding MAKELONGLONG(widget_id, owner_pid) on every
+ * toplevel; readable from other wine processes through the wineserver */
+const WCHAR ohos_window_id_prop[] =
+    {'_','_','w','i','n','e','_','o','h','o','s','_','w','i','d','g','e','t',0};
+
 #define NB_CACHED_BUFFERS 4
 #define HAS_FLAGS(flags, required) (((flags) & (required)) == (required))
 
@@ -49,6 +54,16 @@ struct native_win_data
     int                     widget_id;
     int                     container;
     int                     win_type;
+    /* 跨进程 GDI 共享：像素存放在与页面 owner 进程共享的 ashmem 缓冲
+     * 中；此形态下不建 XComponent，也没有本地 producer */
+    void                   *shared_pixels;      /* mmap of the shared buffer, NULL when local */
+    int                     shared_stride;      /* bytes per row */
+    int                     shared_width;
+    int                     shared_height;
+    int                     shared_id;          /* id assigned by the owner process */
+    int                     shared_scale_num;   /* logical -> raw scale (num) */
+    int                     shared_scale_den;   /* logical -> raw scale (den) */
+    struct native_buffer    shared_buffer;      /* virtual buffer handed out by LOCK */
 };
 
 static struct native_win_data *data_map[65536];
@@ -65,6 +80,15 @@ static struct native_win_data *get_native_win_data( HWND hwnd )
     if (data && data->hwnd == hwnd) return data;
     WARN( "unknown win %p\n", hwnd );
     return NULL;
+}
+
+/* Resolve the native window to act on: shared cross-process windows have
+ * none (the owner composites their pixels); everything else uses its own
+ * XComponent window. */
+static ohos_native_window get_window_handle( struct native_win_data *data )
+{
+    if (data->shared_pixels) return NULL;
+    return GetNativeWindow( data->widget_id );
 }
 
 static int get_win_parent( HWND parent )
@@ -279,12 +303,54 @@ static struct native_buffer *get_registered_buffer( struct native_win_data *win,
     return win->buffers[id];
 }
 
+static int dequeueBuffer( HWND hwnd, struct native_buffer **buffer );
+static int dequeue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
+                                  struct native_buffer **buffer );
+static int queue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
+                                struct native_buffer *locked_buffer,
+                                const RECT *dirty_rect );
+static void blit_overlays_into( struct native_win_data *win, struct native_buffer *buf );
+static void gdi_lock(void);
+static void gdi_unlock(void);
+
 static int dequeueBuffer( HWND hwnd, struct native_buffer **buffer )
 {
     ohos_native_window win;
     struct native_win_data *win_data;
+    NTSTATUS status;
+
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
-    if (!(win = GetNativeWindow(win_data->widget_id))) return STATUS_DEVICE_NOT_READY;
+    gdi_lock();
+    status = dequeue_buffer_locked( hwnd, win_data, buffer );
+    gdi_unlock();
+    return status;
+}
+
+/* caller holds gdi_cs */
+static int dequeue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
+                                  struct native_buffer **buffer )
+{
+    ohos_native_window win;
+
+    /* shared cross-process window: the virtual buffer maps the ashmem
+     * pixels directly, no NativeWindow involved */
+    if (win_data->shared_pixels)
+    {
+        struct native_buffer *buf = &win_data->shared_buffer;
+        buf->width = win_data->shared_width;
+        buf->height = win_data->shared_height;
+        buf->stride = win_data->shared_stride / 4;
+        buf->mapped_addr = win_data->shared_pixels;
+        buf->mapped_fd = -1;
+        buf->mapped_size = 0; /* not owned by the buffer (detach unmaps) */
+        buf->buffer_id = -1;
+        buf->win_buffer = NULL;
+        buf->buffer_handle = NULL;
+        *buffer = buf;
+        return STATUS_SUCCESS;
+    }
+
+    if (!(win = get_window_handle( win_data ))) return STATUS_DEVICE_NOT_READY;
 
     ohos_window_buffer win_buffer;
     int fence = -1, ret;
@@ -295,11 +361,14 @@ static int dequeueBuffer( HWND hwnd, struct native_buffer **buffer )
     }
     TRACE( "request buffer %p fence %d\n", win_buffer, fence);
 
-    /* Wait for fence to ensure buffer is ready for writing */
+    /* Wait for fence to ensure buffer is ready for writing.  Short timeout:
+     * 窗口状态切换（最大化/还原动画）期间 compositor 可能长时间不归还
+     * buffer，fence 不触发——3 秒等待会把窗口线程卡死（两次即 6 秒，
+     * 表现为切换后内容迟迟不更新）；超时后照常写入（本就是降级路径） */
     if (fence >= 0)
     {
         struct pollfd pfd = { .fd = fence, .events = POLLIN };
-        int wait_ret = poll( &pfd, 1, 3000 ); /* 3 second timeout */
+        int wait_ret = poll( &pfd, 1, 100 );
         if (wait_ret <= 0)
             WARN( "fence wait %s for fd %d\n", wait_ret == 0 ? "timeout" : "failed", fence );
         close( fence );
@@ -376,13 +445,22 @@ int cancelBuffer( HWND hwnd, int buffer_id )
     int ret;
 
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
-    if (win_data->widget_id <= 0) return STATUS_DEVICE_NOT_READY;
 
-    if (!(buffer = get_registered_buffer( win_data, buffer_id ))) return STATUS_INVALID_HANDLE;
+    /* shared window: nothing queued, nothing to abort */
+    if (win_data->shared_pixels) return STATUS_SUCCESS;
 
-    if (!(win = GetNativeWindow(win_data->widget_id)))
+    gdi_lock();
+
+    if (!(buffer = get_registered_buffer( win_data, buffer_id )))
+    {
+        gdi_unlock();
+        return STATUS_INVALID_HANDLE;
+    }
+
+    if (!(win = get_window_handle( win_data )))
     {
         ERR("hwnd %p: failed to get native window for cancelBuffer\n", hwnd);
+        gdi_unlock();
         return STATUS_DEVICE_NOT_READY;
     }
 
@@ -404,24 +482,55 @@ int cancelBuffer( HWND hwnd, int buffer_id )
     if (win_data->locked_buffer == buffer)
         win_data->locked_buffer = NULL;
 
+    gdi_unlock();
     return STATUS_SUCCESS;
 }
 
 static int queueBuffer( HWND hwnd, struct native_buffer *locked_buffer, const RECT *dirty_rect )
 {
-    ohos_native_window win;
-    struct native_buffer *buffer;
     struct native_win_data *win_data;
     int ret;
 
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
-    if (!(win = GetNativeWindow(win_data->widget_id))) return STATUS_DEVICE_NOT_READY;
+    gdi_lock();
+    ret = queue_buffer_locked( hwnd, win_data, locked_buffer, dirty_rect );
+    gdi_unlock();
+    return ret;
+}
+
+/* caller holds gdi_cs */
+static int queue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
+                                struct native_buffer *locked_buffer,
+                                const RECT *dirty_rect )
+{
+    ohos_native_window win;
+    struct native_buffer *buffer;
+    int ret;
+
+    /* shared cross-process window: notify the owner that pixels changed;
+     * the RPC is synchronous, i.e. returns after the owner composited */
+    if (win_data->shared_pixels)
+    {
+        int x = 0, y = 0, w = win_data->shared_width, h = win_data->shared_height;
+        if (dirty_rect && !IsRectEmpty( dirty_rect ))
+        {
+            x = dirty_rect->left;
+            y = dirty_rect->top;
+            w = dirty_rect->right - dirty_rect->left;
+            h = dirty_rect->bottom - dirty_rect->top;
+        }
+        TRACE( "hwnd %p shared flush id %d rect (%d,%d)-(%d,%d)\n",
+               hwnd, win_data->shared_id, x, y, x + w, y + h );
+        return RemoteGdiFlush( win_data->shared_id, x, y, w, h );
+    }
+
+    if (!(win = get_window_handle( win_data ))) return STATUS_DEVICE_NOT_READY;
 
     if (!(buffer = get_registered_buffer( win_data, locked_buffer->buffer_id ))) return STATUS_INVALID_HANDLE;
     if (buffer != locked_buffer) return STATUS_INVALID_HANDLE;
 
     TRACE( "hwnd %p buffer %p fence %d buffer_id %d, size %d,%d\n",
-        hwnd, buffer, buffer->fence_id, buffer->buffer_id, buffer->width, buffer->height);
+           hwnd, buffer, buffer->fence_id, buffer->buffer_id, buffer->width, buffer->height);
     Region region;
     struct Rect rects[1];
     if (dirty_rect && !IsRectEmpty( dirty_rect ))
@@ -438,6 +547,10 @@ static int queueBuffer( HWND hwnd, struct native_buffer *locked_buffer, const RE
         region.rects = NULL;
         region.rectNumber = 0;
     }
+
+    /* 合成本页面上的 foreign 子窗口像素（页面 owner 进程即合成方），
+     * 随本帧一起提交 */
+    blit_overlays_into( win_data, buffer );
 
     ret = OH_NativeWindow_NativeWindowFlushBuffer(win, buffer->win_buffer, buffer->fence_id, region);
     if (ret != 0) {
@@ -484,13 +597,47 @@ int perform( HWND hwnd, int operation, ... )
     ohos_native_window win;
     struct native_win_data *win_data;
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
-    if (!(win = GetNativeWindow(win_data->widget_id))) return STATUS_DEVICE_NOT_READY;
 
     va_list args;
+    gdi_lock();
+
+    /* shared cross-process window: HandleOpt semantics are local; LOCK and
+     * UNLOCK_AND_POST fall through (dequeue/queue branch internally) */
+    if (win_data->shared_pixels &&
+        operation != NATIVE_WINDOW_LOCK &&
+        operation != NATIVE_WINDOW_UNLOCK_AND_POST)
+    {
+        RECT *bounds;
+        va_start( args, operation );
+        bounds = va_arg( args, RECT * );
+        va_end( args );
+        if (operation == GET_BUFFER_GEOMETRY && bounds)
+        {
+            bounds->left = 0;
+            bounds->top = 0;
+            bounds->right = win_data->shared_width;
+            bounds->bottom = win_data->shared_height;
+        }
+        gdi_unlock();
+        return STATUS_SUCCESS;
+    }
 
     int args_list[4];
     memset( args_list, 0, sizeof(args_list) );
     va_start( args, operation );
+
+    /* LOCK / UNLOCK_AND_POST 走下方 dequeue/queue 路径（内部自带 shared
+     * 跨进程分支，无本地 NativeWindow），不得在此被 get_window_handle
+     * 拦截；其余 op 需要本地窗口。 */
+    if (operation != NATIVE_WINDOW_LOCK &&
+        operation != NATIVE_WINDOW_UNLOCK_AND_POST &&
+        !(win = get_window_handle( win_data )))
+    {
+        va_end( args );
+        gdi_unlock();
+        return STATUS_DEVICE_NOT_READY;
+    }
+
     switch (operation)
     {
     case SET_FORMAT:
@@ -584,6 +731,7 @@ int perform( HWND hwnd, int operation, ... )
         break;
     }
     va_end( args );
+    gdi_unlock();
     return ret;
 }
 
@@ -597,7 +745,7 @@ int set_swap_interval( HWND hwnd, int interval )
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
     win_data->swap_interval = interval;
 
-    if (!(win = GetNativeWindow(win_data->widget_id))) return STATUS_SUCCESS;
+    if (!(win = get_window_handle( win_data ))) return STATUS_SUCCESS;
     int ret = OH_NativeWindow_NativeWindowHandleOpt(win, SET_SWAP_INTERVAL, interval);
     if (ret != 0) {
         ERR("setSwapInterval_ioctl error: %d\n", ret);
@@ -866,6 +1014,12 @@ static int create_window( HWND hwnd, int window_type, const struct window_bounds
     win_data->win_type = param.type;
     win_data->generation++;
 
+    /* publish the native identity so foreign-process children can find the
+     * host page for their client surfaces（以窗口属性携带 widget 与 pid） */
+    NtUserSetProp( win_data->hwnd, ohos_window_id_prop,
+                   (HANDLE)((ULONG_PTR)(UINT)win_data->widget_id |
+                            ((ULONG_PTR)(UINT)getpid() << 32)) );
+
     TRACE( "hwnd %p widget_id %d\n", win_data->hwnd, win_data->widget_id );
     return win_data->widget_id;
 
@@ -874,8 +1028,229 @@ failed:
     return -1;
 }
 
-void create_native_window( struct ohos_win_data *data )
+/* 跨进程 GDI 共享：嵌入 foreign toplevel 的窗口，其像素存放在本进程
+ * 映射并写入的 ashmem 缓冲中；页面 owner 进程把它们合成进自己的 GDI
+ * surface。两侧均不建 XComponent，也不涉及本地 producer。 */
+
+BOOL has_remote_gdi_producer( HWND hwnd )
 {
+    struct native_win_data *win_data = get_native_win_data( hwnd );
+    return win_data && win_data->shared_pixels && win_data->shared_id > 0;
+}
+
+int host_gdi_widget_id( HWND hwnd )
+{
+    struct native_win_data *win_data = get_native_win_data( hwnd );
+    if (!win_data || !win_data->shared_pixels) return 0;
+    return win_data->shared_id;
+}
+
+int attach_remote_gdi_producer( HWND hwnd, void *pixels, int width,
+                                int height, int stride, int shared_id,
+                                int scale_num, int scale_den )
+{
+    struct native_win_data *win_data = get_native_win_data( hwnd );
+
+    if (!win_data && !(win_data = create_native_win_data( hwnd ))) return -1;
+
+    if (win_data->shared_pixels)
+    {
+        ERR( "hwnd %p: shared GDI buffer already attached\n", hwnd );
+        return -1;
+    }
+    win_data->shared_pixels = pixels;
+    win_data->shared_width = width;
+    win_data->shared_height = height;
+    win_data->shared_stride = stride;
+    win_data->shared_id = shared_id;
+    /* logical(96) -> raw 像素换算比（宿主侧合成坐标系）；pos-only 变化
+     * 时更新 overlay 偏移要用同一比例 */
+    if (scale_num > 0 && scale_den > 0)
+    {
+        win_data->shared_scale_num = scale_num;
+        win_data->shared_scale_den = scale_den;
+    }
+    else
+    {
+        win_data->shared_scale_num = win_data->shared_scale_den = 1;
+    }
+    win_data->widget_id = 0;
+    memset( &win_data->shared_buffer, 0, sizeof(win_data->shared_buffer) );
+    TRACE( "hwnd %p attached shared GDI surface id %d %dx%d scale %d/%d\n",
+           hwnd, shared_id, width, height, win_data->shared_scale_num,
+           win_data->shared_scale_den );
+    return 0;
+}
+
+/* 位置-only 变化时取出共享面 id，供轻量 bounds 更新 RPC 使用 */
+int get_remote_gdi_info( HWND hwnd, int *shared_id, int *scale_num, int *scale_den )
+{
+    struct native_win_data *win_data = get_native_win_data( hwnd );
+
+    if (!win_data || !win_data->shared_pixels) return -1;
+    if (shared_id) *shared_id = win_data->shared_id;
+    if (scale_num) *scale_num = win_data->shared_scale_num;
+    if (scale_den) *scale_den = win_data->shared_scale_den;
+    return 0;
+}
+
+BOOL detach_remote_gdi_producer( HWND hwnd, int *shared_id )
+{
+    struct native_win_data *win_data = get_native_win_data( hwnd );
+
+    if (!win_data || !win_data->shared_pixels) return FALSE;
+    if (shared_id) *shared_id = win_data->shared_id;
+    /* pixels 映射与共享内存在创建方（本进程 adapter）管理：unmap 由
+     * DestroyRemoteGdiSharedSurface 路径负责，此处仅解除关联 */
+    win_data->shared_pixels = NULL;
+    win_data->shared_id = 0;
+    win_data->shared_width = win_data->shared_height = 0;
+    win_data->shared_stride = 0;
+    TRACE( "hwnd %p shared GDI surface detached\n", hwnd );
+    return TRUE;
+}
+
+/* ── owner 侧合成：foreign 子窗口的共享像素 blit 进本进程的 GDI
+ * surface（本进程充当被嵌入页面的合成方）。 */
+
+struct remote_gdi_overlay
+{
+    int                     id;
+    int                     parent_widget_id;
+    int                     off_x, off_y, w, h, stride;
+    const void             *pixels;
+    struct remote_gdi_overlay *next;
+};
+
+static struct remote_gdi_overlay *overlay_list;
+static pthread_mutex_t gdi_cs;   /* recursive：unix 侧无 Win32 CS */
+
+static void gdi_lock(void)
+{
+    pthread_mutex_lock( &gdi_cs );
+}
+
+static void gdi_unlock(void)
+{
+    pthread_mutex_unlock( &gdi_cs );
+}
+
+/* 把所有挂在本页面（widget_id）上的 foreign 像素叠加进 buffer */
+static void blit_overlays_into( struct native_win_data *win, struct native_buffer *buf )
+{
+    struct remote_gdi_overlay *ov;
+
+    if (!buf || !buf->mapped_addr || !win->widget_id) return;
+    for (ov = overlay_list; ov; ov = ov->next)
+    {
+        int x0, y0, x1, y1, y;
+        if (ov->parent_widget_id != win->widget_id) continue;
+        x0 = max( ov->off_x, 0 );
+        y0 = max( ov->off_y, 0 );
+        x1 = min( ov->off_x + ov->w, buf->width );
+        y1 = min( ov->off_y + ov->h, buf->height );
+        for (y = y0; y < y1; y++)
+        {
+            memcpy( (char *)buf->mapped_addr + (size_t)y * buf->stride * 4 + x0 * 4,
+                    (const char *)ov->pixels + (size_t)(y - ov->off_y) * ov->stride + (x0 - ov->off_x) * 4,
+                    (x1 - x0) * 4 );
+        }
+    }
+}
+
+/* adapter overlay 回调（ADD/BLIT/REMOVE），运行在 IPC 监听线程 */
+static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
+                                       int off_x, int off_y, int width,
+                                       int height, int stride,
+                                       const void *pixels )
+{
+    struct remote_gdi_overlay **link, *ov;
+    int wake_page = 0;
+
+    gdi_lock();
+    switch (op)
+    {
+    case 0: /* ADD */
+        ov = calloc( 1, sizeof(*ov) );
+        if (!ov) break;
+        ov->id = id;
+        ov->parent_widget_id = parent_widget_id;
+        ov->off_x = off_x;
+        ov->off_y = off_y;
+        ov->w = width;
+        ov->h = height;
+        ov->stride = stride;
+        ov->pixels = pixels;
+        ov->next = overlay_list;
+        overlay_list = ov;
+        TRACE( "overlay add id %d page %d %dx%d at (%d,%d)\n", id,
+               parent_widget_id, width, height, off_x, off_y );
+        break;
+    case 2: /* REMOVE */
+        for (link = &overlay_list; *link; link = &(*link)->next)
+        {
+            if ((*link)->id == id)
+            {
+                ov = *link;
+                *link = ov->next;
+                free( ov );
+                break;
+            }
+        }
+        TRACE( "overlay remove id %d\n", id );
+        break;
+    case 3: /* UPDATE：位置-only 变化，改 overlay 偏移（拖拽时高频） */
+        for (ov = overlay_list; ov; ov = ov->next)
+        {
+            if (ov->id != id) continue;
+            ov->off_x = off_x;
+            ov->off_y = off_y;
+            wake_page = parent_widget_id;
+            TRACE( "overlay update id %d off (%d,%d)\n", id, off_x, off_y );
+            break;
+        }
+        break;
+    default:
+        /* BLIT：子进程共享面有新帧。不做主动 dequeue 合成——producer 拿到的
+         * 是空闲脏 buffer，直接 queue 会覆盖宿主当前画面导致白屏；宿主的
+         * GDI flush（queue_buffer_locked）已统一叠加本页全部 overlays。
+         * 稳态下宿主不会自行重绘，这里唤醒它补刷一次把新帧叠进去。 */
+        wake_page = parent_widget_id;
+        TRACE( "overlay blit id %d page %d deferred to host flush\n", id, parent_widget_id );
+        break;
+    }
+    gdi_unlock();
+
+    /* 本回调运行在 IPC ListenLoop 线程（无 wine TEB），不能直接调用
+     * NtUserPostMessage 等 win32u 接口——经 send_event 转交桌面线程，
+     * 由 process_events 在合法 wine 线程上唤醒 owner 补刷合成 */
+    if (wake_page > 0)
+    {
+        union event_data event;
+        memset( &event, 0, sizeof(event) );
+        event.overlay_dirty.type = OVERLAY_DIRTY_EVENT;
+        event.overlay_dirty.parent_widget_id = wake_page;
+        send_event( &event );
+    }
+}
+
+/* dllmain 侧 init 调用（unix 侧 ohos_init）：注册 overlay 回调并初始化锁 */
+void wineohos_register_gdi_overlay(void)
+{
+    static BOOL done;
+    pthread_mutexattr_t attr;
+
+    if (done) return;
+    done = TRUE;
+    pthread_mutexattr_init( &attr );
+    pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_RECURSIVE );
+    pthread_mutex_init( &gdi_cs, &attr );
+    pthread_mutexattr_destroy( &attr );
+    RegisterRemoteGdiOverlayCallback( remote_gdi_overlay_notify );
+    TRACE( "remote GDI overlay handler registered\n" );
+}
+
+void create_native_window( struct ohos_win_data *data ){
     DWORD style, ex_style;
     WCHAR text[1024];
     int window_type = POPUP_WINDOW;
@@ -942,6 +1317,7 @@ void destroy_native_window( HWND hwnd )
 
     TRACE( "hwnd %p widget_id %d\n", hwnd, win_data->widget_id );
 
+    NtUserRemoveProp( hwnd, ohos_window_id_prop );
     CloseNativeWindow(win_data->widget_id);
 
     if (win_data) free_native_win_data( win_data );

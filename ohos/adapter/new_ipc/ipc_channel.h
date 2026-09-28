@@ -95,6 +95,9 @@ private:
     std::thread listen_thread_;
     std::atomic<bool> listening_{false};
     bool shm_exchanged_ = false;
+    /* 本端最近一次请求写完时的 shm 游标：应答从该位置追加，
+     * WaitForReply 成功后把读游标拨到这里 */
+    uint32_t sync_request_end_ = 0;
     std::mutex reply_std_mutex_;
     std::condition_variable reply_cv_;
     bool reply_ready_ = false;

@@ -24,7 +24,7 @@ DomainSocket::~DomainSocket()
 
 bool DomainSocket::Listen(const std::string& socket_path)
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(send_mutex_);
     int fd = common::UnixSocketUtils::CreateServerSocket(socket_path);
     if (fd < 0) return false;
 
@@ -38,7 +38,7 @@ bool DomainSocket::Listen(const std::string& socket_path)
 
 int DomainSocket::Accept()
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(send_mutex_);
     if (listen_fd_ < 0) {
         LOGE("DomainSocket::Accept not listening");
         return -1;
@@ -56,7 +56,7 @@ int DomainSocket::Accept()
 
 bool DomainSocket::AttachFd(int fd)
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(send_mutex_);
     if (fd < 0) {
         LOGE("DomainSocket::AttachFd invalid fd %{public}d", fd);
         return false;
@@ -77,7 +77,7 @@ bool DomainSocket::AttachFd(int fd)
 
 bool DomainSocket::Connect(const std::string& socket_path)
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(send_mutex_);
     int fd = common::UnixSocketUtils::CreateClientSocket(socket_path);
     if (fd < 0) return false;
 
@@ -92,7 +92,7 @@ bool DomainSocket::Connect(const std::string& socket_path)
 
 bool DomainSocket::SendMsg(const void* data, size_t length, const std::vector<int>& fds)
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(send_mutex_);
     if (fd_ < 0 || !connected_) {
         LOGE("DomainSocket::SendMsg not connected");
         return false;
@@ -112,7 +112,7 @@ bool DomainSocket::SendFds(const std::vector<int>& fds)
 
 int DomainSocket::RecvMsg(void* buffer, size_t length, std::vector<int>& fds)
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(recv_mutex_);
     if (fd_ < 0 || !connected_) {
         LOGE("DomainSocket::RecvMsg not connected");
         return -1;
@@ -141,7 +141,7 @@ bool DomainSocket::RecvFds(std::vector<int>& fds, size_t expected_count)
 
 bool DomainSocket::SendControlMessage(IpcMessageType type, const void* data, uint32_t length)
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(send_mutex_);
     if (fd_ < 0 || !connected_) return false;
 
     IpcMessageHeader header;
@@ -174,7 +174,7 @@ bool DomainSocket::SendControlMessage(IpcMessageType type, const void* data, uin
 
 bool DomainSocket::RecvControlMessage(IpcMessageType& type, void* data, uint32_t* length)
 {
-    MutexLock lock(mutex_);
+    MutexLock lock(recv_mutex_);
     if (fd_ < 0 || !connected_) return false;
 
     IpcMessageHeader header;
@@ -209,7 +209,8 @@ bool DomainSocket::RecvControlMessage(IpcMessageType& type, void* data, uint32_t
 
 void DomainSocket::Close()
 {
-    MutexLock lock(mutex_);
+    MutexLock send_lock(send_mutex_);
+    MutexLock lock(recv_mutex_);
     if (fd_ >= 0) {
         close(fd_);
         fd_ = -1;

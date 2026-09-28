@@ -68,7 +68,12 @@ private:
     bool connected_ = false;
     bool is_server_ = false;
     std::string socket_path_;
-    Mutex mutex_;
+    /* 发送与接收分锁：ListenLoop 的 recvmsg 会持锁阻塞等待对端数据，
+     * 若与 sendmsg 共用一把锁，任何同步 SendRequest 都会死锁
+     * （unix socket 全双工，两方向互不干扰）。锁获取顺序恒为
+     * send -> recv（仅 Close 同持两把）。 */
+    Mutex send_mutex_;
+    Mutex recv_mutex_;
 };
 
 }  // namespace ohos::adapter::new_ipc

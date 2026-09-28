@@ -46,29 +46,32 @@ private:
     IpcRequestHandler handler_;
 };
 
+/* 点对点 proxy：嵌入方进程向窗口 owner 进程发起的请求（client
+ * surface 三件套 + 诊断）。 */
 class ProcessManagerProxy {
 public:
     explicit ProcessManagerProxy(IpcChannel& channel);
     ~ProcessManagerProxy() = default;
 
-    int CreateProcess(const std::vector<std::string>& commands,
-                     const std::vector<std::pair<int, int>>& fds);
-    int KillProcess(int32_t pid);
-    int CreateWindow(const WindowParam& param);
-    int SetWindowBounds(int32_t widget_id, const WindowRect& rect);
-    int SetWindowVisible(int32_t widget_id, bool visible);
-    int UpdateWindow(int32_t widget_id, const WindowParam& param);
-    int CloseWindow(int32_t widget_id);
-    int GetDisplay(DisplayParam& param);
-    int OpenUrl(const std::string& url);
-    int SetWindowTitle(int32_t widget_id, const std::string& title);
-    int GetFdIdsRemap(std::vector<std::pair<int, int>>& fds);
+    int CreateClientSurface(ClientSurfaceParam& param, uint64_t& surface_id);
+    int SetClientSurfaceBounds(int32_t client_widget_id, int32_t off_x,
+                               int32_t off_y, int32_t width, int32_t height);
+    int DestroyClientSurface(int32_t client_widget_id);
     int GetPid(int32_t& pid);
+    /* GDI 共享：fd 随请求附带传给 owner 进程 */
+    int AttachRemoteGdi(RemoteGdiParam& param, int fd);
+    int RemoteGdiFlush(int32_t client_widget_id, int32_t x, int32_t y,
+                       int32_t w, int32_t h);
+    int DestroyRemoteGdi(int32_t client_widget_id);
+    int UpdateRemoteGdiBounds(int32_t client_widget_id, int32_t off_x,
+                              int32_t off_y);
 
 private:
     IpcChannel& channel_;
 };
 
+/* 每个 wine 进程通用 stub：在本进程页面里创建/调整/销毁 client
+ * surface（XComponent），回传 surface id。 */
 class ProcessManagerStub {
 public:
     ProcessManagerStub();
@@ -78,31 +81,6 @@ public:
                         const std::vector<int>& fds = {});
 
     static constexpr const char* INTERFACE_DESCRIPTOR = "wine.processmanager.new_ipc";
-};
-
-class ChildProcessProxy {
-public:
-    explicit ChildProcessProxy(IpcChannel& channel);
-    ~ChildProcessProxy() = default;
-
-    int SetProcessInfo(const std::vector<std::string>& commands,
-                      const std::vector<std::pair<int, int>>& fds);
-    int SetWindowInfo(int32_t widget_id, const WindowAttr& attr);
-    int SendInputEvent(const std::vector<int8_t>& event_data);
-
-private:
-    IpcChannel& channel_;
-};
-
-class ChildProcessStub {
-public:
-    ChildProcessStub();
-    ~ChildProcessStub() = default;
-
-    int OnRemoteRequest(uint32_t code, IpcParcel& data, IpcParcel& reply,
-                        const std::vector<int>& fds = {});
-
-    static constexpr const char* INTERFACE_DESCRIPTOR = "wine.childprocess.new_ipc";
 };
 
 }  // namespace ohos::adapter::new_ipc

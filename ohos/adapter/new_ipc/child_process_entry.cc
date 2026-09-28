@@ -6,35 +6,19 @@
 
 #include <unistd.h>
 
-#include "ohos/adapter/common/constants.h"
 #include "ohos/adapter/common/logging.h"
-#include "ohos/adapter/multiprocess/app_spawn_communication.h"
 #include "ohos/adapter/new_ipc/ipc_adapter.h"
-#include "ohos/adapter/web_entry/web_entry.h"
 
 using namespace ohos::adapter;
 
-int NewIpcChildProcessEntry(const char* ipc_socket_path)
+int StartIpcServerEntry(void)
 {
-    LOGI("NewIpcChildProcessEntry pid=%{public}d, socket=%{public}s",
-         getpid(), ipc_socket_path ? ipc_socket_path : "null");
+    LOGI("StartIpcServerEntry pid=%{public}d", static_cast<int>(getpid()));
 
-    if (!ipc_socket_path || ipc_socket_path[0] == '\0') {
-        LOGE("NewIpcChildProcessEntry: ipc_socket_path is empty");
+    if (!new_ipc::IpcServer::Instance().Start()) {
+        LOGE("StartIpcServerEntry: start server failed");
         return -1;
     }
-
-    if (!new_ipc::ChildProcess::Instance().ConnectToParent(ipc_socket_path)) {
-        LOGE("NewIpcChildProcessEntry: ConnectToParent failed");
-        return -1;
-    }
-
-    std::vector<std::pair<int, int>> ipc_fds;
-    new_ipc::ChildProcess::Instance().GetFdIdsRemap(ipc_fds);
-    multiprocess::AppSpawnCommunication::SetFdIdsRemap(ipc_fds);
-
-    LOGI("NewIpcChildProcessEntry IPC established, %{public}zu fd remap entries",
-         ipc_fds.size());
 
     return 0;
 }

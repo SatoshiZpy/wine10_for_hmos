@@ -77,6 +77,7 @@ public:
     bool HasDataToRead() const;
 
     void ResetReadWrite();
+    void SetReadOffset(uint32_t offset);
     void ResetAll();
 
     bool IsCreated() const { return created_; }

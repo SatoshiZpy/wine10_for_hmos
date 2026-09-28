@@ -63,6 +63,39 @@ ADAPTER_API void SetClientSurfaceBounds(int client_widget_id, int off_x, int off
                                         int width, int height);
 ADAPTER_API void DestroyClientSurface(int client_widget_id);
 
+/* cross-process client surface: when the caller is a wine child process
+ * the request is relayed to the host, which creates the XComponent inside
+ * its parent window page and returns the compositor surface id the child
+ * imports with OH_NativeWindow_FromSurfaceId(); in the host process these
+ * fall back to the local calls above */
+ADAPTER_API int CreateRemoteClientSurface(struct client_surface_param* param,
+                                          uint64_t* surface_id);
+ADAPTER_API void SetRemoteClientSurfaceBounds(int client_widget_id, int off_x,
+                                              int off_y, int width, int height);
+ADAPTER_API void DestroyRemoteClientSurface(int client_widget_id);
+
+/* cross-process GDI sharing: the embedder of a foreign
+ * toplevel gets a shared pixel buffer (allocated by the adapter, ashmem)
+ * which the page owner maps and composites into its own GDI surface;
+ * flush notifies the owner that a region changed (synchronous: returns
+ * after the owner composited). The owner-side wine driver registers the
+ * overlay callback to receive attach/blit/remove events. */
+ADAPTER_API int CreateRemoteGdiSharedSurface(struct remote_gdi_param* param,
+                                             void** pixels);
+ADAPTER_API int RemoteGdiFlush(int client_widget_id, int x, int y,
+                               int width, int height);
+ADAPTER_API void DestroyRemoteGdiSharedSurface(int client_widget_id);
+ADAPTER_API void UpdateRemoteGdiBounds(int client_widget_id, int off_x,
+                                       int off_y);
+
+/* op: 0=add, 1=blit(dirty rect in off/width/height), 2=remove,
+ *     3=update(off_x/off_y only) */
+typedef void (*remote_gdi_overlay_fn)(int op, int id, int parent_widget_id,
+                                      int off_x, int off_y, int width,
+                                      int height, int stride,
+                                      const void* pixels);
+ADAPTER_API void RegisterRemoteGdiOverlayCallback(remote_gdi_overlay_fn fn);
+
 /* process */
 ADAPTER_API int StartNativeProcess(int argc, char **argv, const struct launch_options *options);
 ADAPTER_API void KillNativeProcess(int exitcode);

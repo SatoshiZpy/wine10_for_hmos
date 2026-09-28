@@ -114,6 +114,32 @@ struct client_surface_param
   int off_y;
   int width;              /* client size in px */
   int height;
+  int src_hwnd;           /* requesting (embedding) window handle; the
+                             owner process registers it for input routing */
+  int src_pid;            /* requesting process pid (the embedder) */
+  int owner_pid;          /* pid of the process owning the foreign toplevel
+                             page; the request is routed to it point to
+                             point (0/-1 = local, same-process nesting) */
+};
+
+/* Cross-process GDI sharing: the child (embedder of a foreign
+ * toplevel) allocates a memfd holding its window pixels and shares it
+ * with the page owner, which composites the region into its own GDI
+ * surface. No XComponent is created on the owner page for this. */
+struct remote_gdi_param
+{
+  int parent_widget_id;   /* owner's toplevel page widget */
+  int client_widget_id;   /* out, shared-surface id assigned by the owner */
+  int off_x;              /* window offset within the toplevel page, px */
+  int off_y;
+  int width;              /* window size in px */
+  int height;
+  int src_hwnd;           /* requesting (embedding) window handle */
+  int src_pid;            /* requesting process pid */
+  int owner_pid;          /* page owner pid the request is routed to */
+  int stride;             /* bytes per row of the shared buffer */
+  int scale_num;          /* logical(96) -> raw px scale (numerator) */
+  int scale_den;          /* logical(96) -> raw px scale (denominator) */
 };
 
 struct launch_options

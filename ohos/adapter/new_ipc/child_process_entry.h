@@ -11,11 +11,11 @@
 extern "C" {
 #endif
 
-// Entry function for child process started by new_ipc createProcess.
-// ETS code calls this function with ipc_socket_path to establish IPC.
-// ipc_socket_path: UDS path for connecting to parent process
-// Returns process exit code.
-int ADAPTER_EXPORT_API NewIpcChildProcessEntry(const char* ipc_socket_path);
+// 每个 wine 进程（含主进程）启动时调用：以 pid 命名创建本进程的 IPC
+// 服务端 socket 并常驻监听，等待其他进程在嵌入本进程窗口时发起连接。
+// spawn 链路与此无关（仍走 ipc_lite）；连接按需建立。
+// Returns 0 on success.
+int ADAPTER_EXPORT_API StartIpcServerEntry(void);
 
 #ifdef __cplusplus
 }

@@ -183,7 +183,15 @@ static BOOL scaled_surface_flush( struct window_surface *window_surface, const R
     NtGdiSelectBitmap( hdc_dst, surface->target_surface->color_bitmap );
 
     /* FIXME: implement HALFTONE with alpha for layered surfaces */
+#ifdef __OHOS__
+    /* HALFTONE 走无 SIMD 的 halftone_888 软件路径（约 2Mpx/s）：DPI 缩放
+     * 层（96 -> raw）每帧全屏拉伸，最大化/还原/拖拽期间连续多次拉伸表现
+     * 为数秒黑屏卡顿。DELETESCANS（即 COLORONCOLOR）对整数倍放大等效
+     * 最近邻，瞬时完成，画质可接受。 */
+    if (!window_surface->alpha_mask) set_stretch_blt_mode( hdc_dst, STRETCH_DELETESCANS );
+#else
     if (!window_surface->alpha_mask) set_stretch_blt_mode( hdc_dst, STRETCH_HALFTONE );
+#endif
 
     NtGdiStretchBlt( hdc_dst, dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top,
                      hdc_src, src.left, src.top, src.right - src.left, src.bottom - src.top,
@@ -546,6 +554,13 @@ W32KAPI struct window_surface *window_surface_create( UINT size, const struct wi
     }
 
     pthread_mutex_init( &surface->mutex, NULL );
+
+#ifdef __OHOS__
+    /* 新建 surface 的位图未初始化（全 0 = 黑）：resize 重建后未被应用绘制
+     * 的区域（如被 child 窗口覆盖处）会以黑色上屏，表现为子窗口区域闪黑。
+     * 初始化为白色（与 COLOR_WINDOW 一致）以消除黑闪。 */
+    memset( window_surface_get_color( surface, info ), 0xff, info->bmiHeader.biSizeImage );
+#endif
 
     TRACE( "created surface %p for hwnd %p rect %s\n", surface, hwnd, wine_dbgstr_rect( &surface->rect ) );
     return surface;

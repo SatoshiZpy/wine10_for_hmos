@@ -126,6 +126,7 @@ bool IpcChannel::SendRequest()
         std::lock_guard<std::mutex> lg(reply_std_mutex_);
         reply_ready_ = false;
     }
+    if (shm_) sync_request_end_ = shm_->GetWriteOffset();
     if (!socket_.SendControlMessage(IpcMessageType::SYNC_REQUEST, nullptr, 0)) {
         LOGE("IpcChannel::SendRequest send notification failed");
         return false;
@@ -149,6 +150,7 @@ bool IpcChannel::SendRequestWithFds(const std::vector<int>& fds)
         std::lock_guard<std::mutex> lg(reply_std_mutex_);
         reply_ready_ = false;
     }
+    if (shm_) sync_request_end_ = shm_->GetWriteOffset();
     if (!socket_.SendControlMessage(
             IpcMessageType::SYNC_REQUEST_FDS, nullptr, 0)) {
         LOGE("IpcChannel::SendRequestWithFds send control failed");
@@ -172,6 +174,7 @@ bool IpcChannel::WaitForReply()
         return false;
     }
     reply_ready_ = false;
+    if (shm_) shm_->SetReadOffset(sync_request_end_);
     LOGI("IpcChannel::WaitForReply received");
     return true;
 }

@@ -2015,6 +2015,24 @@ static BOOL get_default_window_surface( HWND hwnd, const RECT *surface_rect, str
     return TRUE;
 }
 
+/* A child of a cross-process window needs its own surface: window surfaces
+ * are per-process (the surface pointer cannot be used by the parent's
+ * process), while the window tree itself is global in the wineserver.
+ * Judge by the DIRECT parent: a grandchild of a foreign-rooted window has a
+ * same-process parent and correctly shares its parent surface instead. */
+/* A child of a cross-process window needs its own surface: window surfaces
+ * are per-process (the surface pointer cannot be used by the parent's
+ * process), while the window tree itself is global in the wineserver.
+ * Judge by the DIRECT parent: a grandchild of a foreign-rooted window has a
+ * same-process parent and correctly shares its parent surface instead. */
+static BOOL is_foreign_rooted_child( HWND parent )
+{
+    DWORD pid = 0;
+
+    NtUserGetWindowThread( parent, &pid );
+    return pid != GetCurrentProcessId();
+}
+
 static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOOL create_layered,
                                                   struct window_rects *rects, RECT *surface_rect )
 {
@@ -2041,7 +2059,7 @@ static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOO
     else monitor_rects = map_window_rects_virt_to_raw( *rects, get_thread_dpi() );
 
     if (!user_driver->pWindowPosChanging( hwnd, swp_flags, shaped, &monitor_rects )) needs_surface = FALSE;
-    else if (is_child) needs_surface = FALSE;
+    else if (is_child && !is_foreign_rooted_child( parent )) needs_surface = FALSE;
     else if (swp_flags & SWP_HIDEWINDOW) needs_surface = FALSE;
     else if (swp_flags & SWP_SHOWWINDOW) needs_surface = TRUE;
     else needs_surface = !!(style & WS_VISIBLE);

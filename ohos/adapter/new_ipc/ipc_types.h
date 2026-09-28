@@ -185,6 +185,89 @@ struct WindowRect {
     }
 };
 
+struct ClientSurfaceParam {
+    int32_t parent_widget_id = -1;
+    int32_t off_x = 0;
+    int32_t off_y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t src_hwnd = 0;
+    int32_t src_pid = -1;
+    /* foreign toplevel 所属进程：请求按此路由到 owner 进程 */
+    int32_t owner_pid = -1;
+    int32_t client_widget_id = -1;
+
+    static ClientSurfaceParam FromParcel(IpcParcel& parcel) {
+        ClientSurfaceParam param;
+        parcel.ReadInt32(param.parent_widget_id);
+        parcel.ReadInt32(param.off_x);
+        parcel.ReadInt32(param.off_y);
+        parcel.ReadInt32(param.width);
+        parcel.ReadInt32(param.height);
+        parcel.ReadInt32(param.src_hwnd);
+        parcel.ReadInt32(param.src_pid);
+        parcel.ReadInt32(param.owner_pid);
+        return param;
+    }
+
+    bool ToParcel(IpcParcel& parcel) const {
+        parcel.WriteInt32(parent_widget_id);
+        parcel.WriteInt32(off_x);
+        parcel.WriteInt32(off_y);
+        parcel.WriteInt32(width);
+        parcel.WriteInt32(height);
+        parcel.WriteInt32(src_hwnd);
+        parcel.WriteInt32(src_pid);
+        parcel.WriteInt32(owner_pid);
+        return true;
+    }
+};
+
+/* 跨进程 GDI 共享面：像素在 memfd 里（C 侧分配 mmap 直写），A 侧
+ * mmap 后在自己的 GDI surface 上合成 blit（A 不为 C 建 XComponent，
+ * A 充当合成方）。fd 随请求附带传递。 */
+struct RemoteGdiParam {
+    int32_t parent_widget_id = -1;
+    int32_t off_x = 0;
+    int32_t off_y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t src_hwnd = 0;
+    int32_t src_pid = -1;
+    int32_t owner_pid = -1;
+    int32_t client_widget_id = -1;
+    int32_t stride = 0;
+
+    static RemoteGdiParam FromParcel(IpcParcel& parcel) {
+        RemoteGdiParam param;
+        parcel.ReadInt32(param.parent_widget_id);
+        parcel.ReadInt32(param.off_x);
+        parcel.ReadInt32(param.off_y);
+        parcel.ReadInt32(param.width);
+        parcel.ReadInt32(param.height);
+        parcel.ReadInt32(param.src_hwnd);
+        parcel.ReadInt32(param.src_pid);
+        parcel.ReadInt32(param.owner_pid);
+        parcel.ReadInt32(param.client_widget_id);
+        parcel.ReadInt32(param.stride);
+        return param;
+    }
+
+    bool ToParcel(IpcParcel& parcel) const {
+        parcel.WriteInt32(parent_widget_id);
+        parcel.WriteInt32(off_x);
+        parcel.WriteInt32(off_y);
+        parcel.WriteInt32(width);
+        parcel.WriteInt32(height);
+        parcel.WriteInt32(src_hwnd);
+        parcel.WriteInt32(src_pid);
+        parcel.WriteInt32(owner_pid);
+        parcel.WriteInt32(client_widget_id);
+        parcel.WriteInt32(stride);
+        return true;
+    }
+};
+
 struct ProcessInfo {
     std::vector<std::string> commands;
     std::vector<std::pair<int, int>> fds;
@@ -234,6 +317,15 @@ enum IProcessManagerIpcCode : uint32_t {
     COMMAND_SET_WINDOW_TITLE = 10,
     COMMAND_GET_FD_IDS_REMAP = 11,
     COMMAND_GET_PID          = 12,
+    COMMAND_CREATE_CLIENT_SURFACE = 13,
+    COMMAND_SET_CLIENT_SURFACE_BOUNDS = 14,
+    COMMAND_DESTROY_CLIENT_SURFACE = 15,
+    /* 跨进程 GDI 共享：C 侧以 memfd 共享像素，A 侧合成 blit */
+    COMMAND_CREATE_REMOTE_GDI = 16,
+    COMMAND_REMOTE_GDI_FLUSH  = 17,
+    COMMAND_DESTROY_REMOTE_GDI = 18,
+    /* 位置-only 变化：轻量更新 owner 侧 overlay 偏移（不重建共享面） */
+    COMMAND_UPDATE_REMOTE_GDI_BOUNDS = 19,
 };
 
 enum IChildProcessIpcCode : uint32_t {

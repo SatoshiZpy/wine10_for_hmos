@@ -347,6 +347,8 @@ static HRESULT ohos_init( void *arg )
     RegisterWindowEventCallBack(distribute_input_event_callback);
     RegisterIMEEventCallBack(send_ime_event);
     StartListeningForScreenlock(send_screenlock_event);
+    /* 跨进程 GDI overlay 合成回调（owner 侧：device.c） */
+    wineohos_register_gdi_overlay();
 
     return STATUS_SUCCESS;
 }

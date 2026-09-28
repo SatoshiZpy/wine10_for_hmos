@@ -17,7 +17,9 @@
 #include <linux/ashmem.h>
 #else
 #define ASHMEM_SET_SIZE     _IOW(0x77, 3, size_t)
-#define ASHMEM_GET_SIZE     _IOR(0x77, 4, size_t)
+/* 内核 ashmem 驱动的 GET_SIZE 不带参数：大小经 ioctl 返回值带出；
+ * 不能定义成 _IOR（编号不同会 ENOTTY） */
+#define ASHMEM_GET_SIZE     _IO(0x77, 4)
 #endif
 
 namespace ohos::adapter::new_ipc {
@@ -92,11 +94,12 @@ bool SharedMemory::Attach(int fd)
     }
 
 #ifdef __OHOS__
-    size_t size = 0;
-    if (ioctl(fd, ASHMEM_GET_SIZE, &size) < 0) {
+    long ioctl_ret = ioctl(fd, ASHMEM_GET_SIZE);
+    if (ioctl_ret < 0) {
         LOGE("SharedMemory::Attach ASHMEM_GET_SIZE failed, errno=%{public}d", errno);
         return false;
     }
+    size_t size = static_cast<size_t>(ioctl_ret);
     if (size == 0 || size > SHARED_MEMORY_MAX_SIZE) {
         LOGE("SharedMemory::Attach invalid size %{public}zu", size);
         return false;
@@ -372,6 +375,18 @@ void SharedMemory::ResetReadWrite()
     header->write_offset = SHARED_MEMORY_HEADER_SIZE;
     header->read_offset = SHARED_MEMORY_HEADER_SIZE;
     header->entry_count = 0;
+}
+
+void SharedMemory::SetReadOffset(uint32_t offset)
+{
+    MutexLock lock(mutex_);
+    if (!mapped_) return;
+    if (offset < SHARED_MEMORY_HEADER_SIZE || offset > mapped_size_) {
+        LOGE("SharedMemory::SetReadOffset invalid offset %{public}u",
+             offset);
+        return;
+    }
+    GetHeader()->read_offset = offset;
 }
 
 void SharedMemory::ResetAll()

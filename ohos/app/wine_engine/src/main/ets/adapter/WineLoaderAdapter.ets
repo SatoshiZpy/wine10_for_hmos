@@ -69,6 +69,7 @@ export class WineLoaderAdapter extends BaseAdapter {
     this.setEnv(environ, 'WINELOADER', loader);
     this.setEnv(environ, 'WINEDLLPATH', dllDir);
     this.setEnv(environ, 'WINEPREFIX', prefixDir);
+    this.setEnv(environ, 'WINE_IPC_DIR', dataDir);
     this.setEnv(environ, 'WINEDEBUGLOG', logPath);
 
     // Force Vulkan renderer for D3D11/D3D12 via WINE_D3D_CONFIG

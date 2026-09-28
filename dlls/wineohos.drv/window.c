@@ -33,6 +33,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(ohos);
 
 #define SWP_AGG_NOPOSCHANGE (SWP_NOSIZE | SWP_NOMOVE | SWP_NOCLIENTSIZE | SWP_NOCLIENTMOVE | SWP_NOZORDER)
 
+/* How long after the last window size change frames are held back during a
+ * live resize (see ohos_surface_flush). */
+#define RESIZE_HOLD_MS 120
+
 pthread_mutex_t win_data_mutex;
 
 static struct ohos_win_data *win_data_context[32768];
@@ -87,6 +91,7 @@ void free_win_data( struct ohos_win_data *data )
     win_data_context[context_idx( data->hwnd )] = NULL;
     pthread_mutex_unlock( &win_data_mutex );
     if (data->widget_id > 0) destroy_native_window( data->hwnd );
+    else ohos_destroy_remote_gdi_surface( data->hwnd );  /* cross-process child */
     data->widget_id = -1;
     data->on_screen = FALSE;
     free( data );
@@ -118,6 +123,59 @@ struct ohos_win_data *get_win_data( HWND hwnd )
 void release_win_data( struct ohos_win_data *data )
 {
     if (data) pthread_mutex_unlock( &win_data_mutex );
+}
+
+
+/***********************************************************************
+ *           ohos_find_toplevel_by_widget_id
+ *
+ * 按 OHOS widget id 反查本进程的 toplevel 窗口（overlay 通知只在
+ * IPC 线程拿到 parent_widget_id，需要换成 wine hwnd 才能投递消息）。
+ */
+HWND ohos_find_toplevel_by_widget_id( int widget_id )
+{
+    HWND hwnd = 0;
+    int i;
+
+    if (widget_id <= 0) return 0;
+    pthread_mutex_lock( &win_data_mutex );
+    for (i = 0; i < ARRAY_SIZE(win_data_context); i++)
+    {
+        struct ohos_win_data *data = win_data_context[i];
+        if (data && data->widget_id == widget_id)
+        {
+            hwnd = data->hwnd;
+            break;
+        }
+    }
+    pthread_mutex_unlock( &win_data_mutex );
+    return hwnd;
+}
+
+
+/***********************************************************************
+ *           ohos_wake_page_composite
+ *
+ * 子进程共享面有新内容（BLIT）或位置更新（UPDATE）时唤醒页面 owner：
+ * owner 的 overlay 合成只发生在其自身 GDI flush（queue_buffer_locked
+ * → blit_overlays_into）中，而宿主窗口在稳态下不会自行重绘，需要
+ * 投递 WM_OHOS_REFRESH 触发 expose 把最新 overlay 叠进帧里。
+ */
+void ohos_wake_page_composite( int parent_widget_id )
+{
+    HWND host = ohos_find_toplevel_by_widget_id( parent_widget_id );
+    struct ohos_win_data *data;
+
+    if (!host) return;
+    if ((data = get_win_data( host )))
+    {
+        if (!data->refresh_pending)
+        {
+            data->refresh_pending = TRUE;
+            NtUserPostMessage( host, WM_OHOS_REFRESH, 0, 0 );
+        }
+        release_win_data( data );
+    }
 }
 
 
@@ -255,10 +313,22 @@ static BOOL ohos_window_size_change_notify( HWND hwnd, const RECT *rect, int rea
      * to prevent Wine from adopting incorrect positions. */
     if (data->pending_configure && !EqualRect( rect, &data->pending_rect ))
     {
-        TRACE( "hwnd %p: ignoring stale OS rect %s while pending %s\n",
-               hwnd, wine_dbgstr_rect(rect), wine_dbgstr_rect(&data->pending_rect) );
-        release_win_data( data );
-        return FALSE;
+        DWORD age = NtGetTickCount() - data->pending_configure_time;
+        if (age < 500)
+        {
+            TRACE( "hwnd %p: ignoring stale OS rect %s while pending %s\n",
+                   hwnd, wine_dbgstr_rect(rect), wine_dbgstr_rect(&data->pending_rect) );
+            release_win_data( data );
+            return FALSE;
+        }
+        /* 超时仍未等到匹配确认（如 wine 发起的尺寸变化被 compositor 舍入
+         * 1px，确认事件永不相等）：接受该 OS 事件并清除 pending，否则
+         * 后续所有用户拖拽/缩放被永久丢弃，宿主 surface 与真实窗口错位
+         * 导致白屏。 */
+        TRACE( "hwnd %p: pending %s unmatched for %ums, accepting OS rect %s\n",
+               hwnd, wine_dbgstr_rect(&data->pending_rect), age, wine_dbgstr_rect(rect) );
+        data->pending_configure = FALSE;
+        data->pending_configure_time = 0;
     }
 
     data->os_pending_rect = *rect;
@@ -329,7 +399,17 @@ BOOL OHOS_GetWindowStateUpdates( HWND hwnd, UINT *state_cmd, UINT *config_cmd,
     *config_cmd = MAKELONG( SC_MOVE, flags );
 
     if (reason == 2) /* RECOVER */
-        *state_cmd = SC_RESTORE;
+    {
+        /* Only restore when Wine actually considers the window minimized.
+         * Unconditionally returning SC_RESTORE here breaks restore-from-taskbar
+         * of a maximized window: the win32u handler applies SC_RESTORE to a
+         * window the host still shows maximized (rendering/geometry desync,
+         * window event chaos).  State commands are derived from host/wine
+         * style diffs; a non-minimized window only needs geometry sync, which
+         * the config_cmd (SetWindowPos) below already carries. */
+        if (NtUserGetWindowLongW( hwnd, GWL_STYLE ) & WS_MINIMIZE)
+            *state_cmd = SC_RESTORE;
+    }
     else if (old_rect.left <= -32000 && old_rect.top <= -32000 &&
              rect->left > -32000 && rect->top > -32000)
         *state_cmd = SC_RESTORE;
@@ -563,6 +643,12 @@ static int process_events( DWORD mask )
             }
             break;
         }
+        case OVERLAY_DIRTY_EVENT:
+            /* 子进程共享面有新内容：唤醒页面 owner 补刷合成（此处为
+             * 桌面线程，调用 win32u 接口合法） */
+            TRACE("OVERLAY_DIRTY_EVENT page %d\n", event->data.overlay_dirty.parent_widget_id);
+            ohos_wake_page_composite( event->data.overlay_dirty.parent_widget_id );
+            break;
         default:
             FIXME("got event %u\n", event->data.type);
         }
@@ -664,6 +750,42 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
     struct native_buffer buffer;
     RECT rc;
 
+    /* Hold frames while a live resize is in progress (the window size changed
+     * very recently).  Each resize step reallocates the surface and the newly
+     * exposed area is erased by WM_ERASEBKGND before the application repaints
+     * it; posting such intermediate frames exposes white bands around the
+     * stale content.  Instead, keep the last posted frame on screen -- the
+     * XComponent renderFit RESIZE_FILL stretches it to the current window
+     * rect -- and flush the final, fully repainted frame once the resize
+     * settles (no size change for RESIZE_HOLD_MS). */
+    {
+        struct ohos_win_data *data = get_win_data( window_surface->hwnd );
+        if (data)
+        {
+            if (data->last_resize_time &&
+                NtGetTickCount() - data->last_resize_time < RESIZE_HOLD_MS)
+            {
+                /* 持帧期间挂一次补刷：拖拽结束后由 WM_OHOS_REFRESH 把
+                 * 最后一帧 DIB 重新提交（否则最后一帧被永久丢弃，宿主
+                 * 内容停在旧帧、子窗口共享面停留在全零缓冲——空白） */
+                if (!data->refresh_pending)
+                {
+                    data->refresh_pending = TRUE;
+                    NtUserPostMessage( window_surface->hwnd, WM_OHOS_REFRESH, 0, 0 );
+                }
+                TRACE("hwnd %p: resize in progress, hold last frame\n", window_surface->hwnd);
+                release_win_data( data );
+                return FALSE;
+            }
+            /* cross-process child: lazily (re)try to attach the host-side
+             * client surface; until the producer exists there is nothing to
+             * flush to and the last posted frame stays on screen */
+            if (data->widget_id <= 0 && !has_remote_gdi_producer( window_surface->hwnd ))
+                ohos_create_remote_gdi_surface( data, &window_surface->rect );
+            release_win_data( data );
+        }
+    }
+
     /* The whole window DIB is flushed, client area included.  GL/Vulkan
      * client content is rendered on a separate nested XComponent surface
      * stacked over the client area, so it can never be overwritten by a
@@ -682,7 +804,6 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         DWORD *src, *dst;
         int x, y, width;
         RECT locked;
-        BOOL needs_unmap;
 
         locked.left = rc.left;
         locked.top = rc.top;
@@ -693,47 +814,6 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         TRACE("hwnd %p, surface_rect %s, dirty %s, locked %s, surface %p\n", window_surface->hwnd,
               wine_dbgstr_rect(&rc), wine_dbgstr_rect(dirty), wine_dbgstr_rect(&locked), surface);
 
-        /* Check pending_configure BEFORE dequeuing a buffer.
-        * If a Wine-initiated resize is pending OS confirmation, skip the
-        * entire flush.  SET_BUFFER_GEOMETRY has changed the buffer size
-        * but SetWindowBounds (async) may not have updated the OHOS window
-        * display area yet.  Dequeueing and then returning the buffer
-        * (via cancelBuffer or FlushBuffer with empty region) is problematic:
-        * - FlushBuffer with empty region still moves the buffer into the
-        *   compositor's display queue, causing stretching
-        * - cancelBuffer returning the buffer improperly can cause buffer
-        *   leaks and yellow/uninitialized content
-        * By checking before dequeue, we avoid both problems entirely. */
-        {
-            struct ohos_win_data *win_data = get_win_data(window_surface->hwnd);
-            if (win_data)
-            {
-                if (win_data->pending_configure)
-                {
-                    /* If pending_configure has been set for too long without OS
-                     * confirmation, clear it to avoid permanent render skip.
-                     * This can happen when the OS does not send SURFACE_CHANGED
-                     * for unchanged bounds, or the callback is lost. */
-                    DWORD now = NtGetTickCount();
-                    if (now - win_data->pending_configure_time > 500)
-                    {
-                        TRACE("hwnd %p: pending_configure timeout, clearing\n", window_surface->hwnd);
-                        win_data->pending_configure = FALSE;
-                        win_data->pending_configure_time = 0;
-                    }
-                    else
-                    {
-                        TRACE("hwnd %p: resize pending, skip flush to avoid stretching\n",
-                              window_surface->hwnd);
-                        release_win_data(win_data);
-                        perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, NULL);
-                        return FALSE;
-                    }
-                }
-                release_win_data(win_data);
-            }
-        }
-
         if (IsRectEmpty(&locked))
         {
             /* no dirty area, skip copy and just submit empty buffer */
@@ -742,16 +822,18 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         }
 
         BufferHandle *buffer_handle = buffer.buffer_handle;
-        if (!buffer_handle) {
+        /* 跨进程共享面是虚拟 buffer：无 BufferHandle，但 pixels 已直映射
+         * （dequeueBuffer 的 shared 分支填好 mapped_addr），直接可用 */
+        if (!buffer_handle && !buffer.mapped_addr) {
             ERR("failed to get buffer handle\n");
             return FALSE;
         }
 
         /* Use persistent mapping from native_buffer if available,
          * otherwise fall back to per-flush mmap via map_native_buffer. */
-        needs_unmap = !buffer.mapped_addr;
+        BOOL needs_unmap = !buffer.mapped_addr;
 
-        if (map_native_buffer( &buffer ) != STATUS_SUCCESS)
+        if (needs_unmap && map_native_buffer( &buffer ) != STATUS_SUCCESS)
         {
             ERR("failed to mmap buffer handle\n");
             return FALSE;
@@ -1364,9 +1446,246 @@ static void hide_window(struct ohos_win_data *data)
     data->on_screen = FALSE;
 }
 
+/***********************************************************************
+ *           cross-process embedding helpers
+ */
+
+/* identity of the foreign (other-process) toplevel of hwnd; {0,0} when the
+ * toplevel is local.  GA_ROOT based on purpose: this locates the host page
+ * that must carry the client surface XComponents. */
+struct ohos_window_identity ohos_get_foreign_toplevel( HWND hwnd )
+{
+    struct ohos_window_identity id = { 0, 0 };
+    HWND root = NtUserGetAncestor( hwnd, GA_ROOT );
+    ULONG_PTR val;
+    DWORD pid = 0;
+
+    if (!root || root == NtUserGetDesktopWindow()) return id;
+    if (!NtUserGetWindowThread( root, &pid ) || pid == GetCurrentProcessId()) return id;
+    val = (ULONG_PTR)NtUserGetProp( root, ohos_window_id_prop );
+    if (!val) return id;
+    id.widget_id = (int)(DWORD)val;
+    id.owner_pid = (int)(DWORD)(val >> 32);
+    return id;
+}
+
+/* window (or client) rect of hwnd expressed in toplevel page pixels: the
+ * host page maps the toplevel window rect 1:1, top-left anchored */
+static BOOL get_remote_bounds( HWND hwnd, HWND toplevel, BOOL client, RECT *bounds )
+{
+    UINT dpi = NtUserGetDpiForWindow( toplevel );
+    struct ohos_win_data *data = get_win_data( hwnd );
+    RECT rect, toplevel_rect;
+
+    if (!data) return FALSE;
+    if (!NtUserGetWindowRect( hwnd, &rect, dpi ) ||
+        !NtUserGetWindowRect( toplevel, &toplevel_rect, dpi ))
+    {
+        release_win_data( data );
+        return FALSE;
+    }
+
+    if (client)
+    {
+        OffsetRect( &rect, data->rects.client.left - data->rects.window.left,
+                           data->rects.client.top - data->rects.window.top );
+        rect.right  = rect.left + data->rects.client.right - data->rects.client.left;
+        rect.bottom = rect.top + data->rects.client.bottom - data->rects.client.top;
+    }
+    release_win_data( data );
+
+    OffsetRect( &rect, -toplevel_rect.left, -toplevel_rect.top );
+    *bounds = rect;
+    return TRUE;
+}
+
+/* GDI layer of a cross-process child: the window pixels live in an
+ * ashmem buffer shared with the page owner process, which composites
+ * them into its own GDI surface（owner 页面不建 XComponent，owner 进程
+ * 即合成方）.  Idempotent.
+ *
+ * surface_rect 是 win32u 侧 driver surface 的矩形（monitor raw DPI 且
+ * 128 对齐）——共享面尺寸与偏移必须用同一坐标系：宿主侧合成发生在
+ * raw 像素的 native buffer 上，logical（96-DPI）尺寸会差一个 DPI 因子
+ * （内容被裁、盖住标题栏）。 */
+BOOL ohos_create_remote_gdi_surface( struct ohos_win_data *data, const RECT *surface_rect )
+{
+    struct ohos_window_identity id = ohos_get_foreign_toplevel( data->hwnd );
+    struct remote_gdi_param param = { 0 };
+    void *pixels = NULL;
+    RECT bounds;
+
+    if (id.widget_id <= 0) return FALSE;
+    if (has_remote_gdi_producer( data->hwnd )) return TRUE;
+    if (!get_remote_bounds( data->hwnd, NtUserGetAncestor( data->hwnd, GA_ROOT ), FALSE, &bounds ))
+        return FALSE;
+
+    param.parent_widget_id = id.widget_id;
+    if (surface_rect)
+    {
+        int lw = bounds.right - bounds.left;
+        int lh = bounds.bottom - bounds.top;
+        /* scale = raw / logical：surface_rect 是 win32u 的 monitor raw 尺寸
+         * （logical surface 先 128 对齐再乘 DPI），据此反推换算比 */
+        int align_w = (lw + 127) & ~127;
+        int align_h = (lh + 127) & ~127;
+        int surface_w = surface_rect->right - surface_rect->left;
+        int surface_h = surface_rect->bottom - surface_rect->top;
+        int scale_num = 1, scale_den = 1;
+
+        if (align_w > 0 && align_h > 0 && surface_w > 0 && surface_h > 0)
+        {
+            /* 取宽高两方向一致的近似比例（DPI 缩放两轴相同） */
+            scale_num = surface_w;
+            scale_den = align_w;
+        }
+        /* 实际可见区 raw 尺寸（不含 128 对齐 padding，白边即由此而来） */
+        param.width = lw * scale_num / scale_den;
+        param.height = lh * scale_num / scale_den;
+        param.off_x = bounds.left * scale_num / scale_den;
+        param.off_y = bounds.top * scale_num / scale_den;
+        param.scale_num = scale_num;
+        param.scale_den = scale_den;
+    }
+    else
+    {
+        param.off_x = bounds.left;
+        param.off_y = bounds.top;
+        param.width = bounds.right - bounds.left;
+        param.height = bounds.bottom - bounds.top;
+        param.scale_num = param.scale_den = 1;
+    }
+    param.src_hwnd = HandleToLong( data->hwnd );
+    param.src_pid = getpid();
+    param.owner_pid = id.owner_pid;
+
+    if (CreateRemoteGdiSharedSurface( &param, &pixels ) != 0 || !pixels)
+        return FALSE;
+
+    if (attach_remote_gdi_producer( data->hwnd, pixels, param.width,
+                                    param.height, param.stride,
+                                    param.client_widget_id,
+                                    param.scale_num, param.scale_den ) != 0)
+    {
+        DestroyRemoteGdiSharedSurface( param.client_widget_id );
+        return FALSE;
+    }
+    data->buffer_width = param.width;
+    data->buffer_height = param.height;
+    TRACE( "hwnd %p: shared GDI surface id %d, owner page %d, %dx%d\n",
+           data->hwnd, param.client_widget_id, id.widget_id,
+           param.width, param.height );
+    return TRUE;
+}
+
+void ohos_destroy_remote_gdi_surface( HWND hwnd )
+{
+    int shared_id = 0;
+
+    if (!detach_remote_gdi_producer( hwnd, &shared_id )) return;
+    if (shared_id > 0) DestroyRemoteGdiSharedSurface( shared_id );
+}
+
 static struct ohos_client_surface *impl_from_client_surface( struct client_surface *client )
 {
     return CONTAINING_RECORD( client, struct ohos_client_surface, client );
+}
+
+/* release the native side of a client surface: the imported producer and the
+ * host-side XComponent (remote), or the locally nested XComponent */
+static void ohos_client_surface_unbind( struct ohos_client_surface *surface )
+{
+    if (surface->widget_id <= 0) return;
+
+    if (surface->native_window)
+    {
+        OH_NativeWindow_DestroyNativeWindow( surface->native_window );
+        surface->native_window = NULL;
+    }
+    if (surface->is_remote)
+        DestroyRemoteClientSurface( surface->widget_id );
+    else
+        DestroyClientSurface( surface->widget_id );
+    surface->widget_id = 0;
+    surface->is_remote = FALSE;
+}
+
+/* (re)create the native side: a locally nested XComponent for own windows,
+ * or a relayed client surface with an imported producer for cross-process
+ * children (foreign toplevel page). */
+static BOOL ohos_client_surface_bind( struct ohos_client_surface *surface )
+{
+    struct ohos_win_data *data = get_win_data( surface->hwnd );
+    struct client_surface_param param = { 0 };
+    uint64_t surface_id = 0;
+    BOOL remote = FALSE;
+
+    if (!data) return FALSE;
+
+    if (data->widget_id > 0)
+    {
+        /* local: nested into our own window page, client rect in window pixels */
+        param.parent_widget_id = data->widget_id;
+        param.off_x = data->rects.client.left - data->rects.visible.left;
+        param.off_y = data->rects.client.top - data->rects.visible.top;
+        param.width = data->rects.client.right - data->rects.client.left;
+        param.height = data->rects.client.bottom - data->rects.client.top;
+    }
+    else
+    {
+        struct ohos_window_identity id = ohos_get_foreign_toplevel( surface->hwnd );
+        RECT bounds;
+
+        if (id.widget_id <= 0)
+        {
+            release_win_data( data );
+            return FALSE;
+        }
+        if (!get_remote_bounds( surface->hwnd, NtUserGetAncestor( surface->hwnd, GA_ROOT ), TRUE, &bounds ))
+        {
+            release_win_data( data );
+            return FALSE;
+        }
+        remote = TRUE;
+        param.parent_widget_id = id.widget_id;
+        param.off_x = bounds.left;
+        param.off_y = bounds.top;
+        param.width = bounds.right - bounds.left;
+        param.height = bounds.bottom - bounds.top;
+        param.src_hwnd = HandleToLong( surface->hwnd );
+        param.src_pid = getpid();
+        param.owner_pid = id.owner_pid;
+    }
+    release_win_data( data );
+
+    if (param.parent_widget_id <= 0) return FALSE;
+
+    if (CreateRemoteClientSurface( &param, &surface_id ) != 0 || param.client_widget_id <= 0)
+        return FALSE;
+
+    surface->widget_id = param.client_widget_id;
+    surface->is_remote = remote;
+
+    if (remote)
+    {
+        ohos_native_window producer = NULL;
+        if (OH_NativeWindow_CreateNativeWindowFromSurfaceId( surface_id, &producer ) != 0 || !producer)
+        {
+            ERR( "hwnd %p: surface id import failed\n", surface->hwnd );
+            surface->widget_id = 0;
+            surface->is_remote = FALSE;
+            DestroyRemoteClientSurface( param.client_widget_id );
+            return FALSE;
+        }
+        surface->native_window = producer;
+    }
+
+    if ((data = get_win_data( surface->hwnd )))
+    {
+        data->client_widget_id = surface->widget_id;
+        release_win_data( data );
+    }
+    return TRUE;
 }
 
 static void ohos_client_surface_destroy( struct client_surface *client )
@@ -1383,7 +1702,7 @@ static void ohos_client_surface_destroy( struct client_surface *client )
             if (data->client_widget_id == surface->widget_id) data->client_widget_id = 0;
             release_win_data( data );
         }
-        DestroyClientSurface( surface->widget_id );
+        ohos_client_surface_unbind( surface );
     }
 }
 
@@ -1392,9 +1711,27 @@ static void ohos_client_surface_detach( struct client_surface *client )
     TRACE( "%s\n", debugstr_client_surface( client ) );
 }
 
+/* toplevel switched between local and foreign (SetParent across the process
+ * boundary): the nested XComponent / imported producer belongs to the old
+ * host page, move it to the new one */
 static void ohos_client_surface_update( struct client_surface *client )
 {
+    struct ohos_client_surface *surface = impl_from_client_surface(client);
+    struct ohos_win_data *data = get_win_data( surface->hwnd );
+    BOOL want_remote;
+
     TRACE( "%s\n", debugstr_client_surface( client ) );
+
+    if (!data) return;  /* window data gone, nothing to rebind */
+
+    want_remote = data->widget_id <= 0 &&
+                  ohos_get_foreign_toplevel( surface->hwnd ).widget_id > 0;
+    release_win_data( data );
+
+    if (want_remote == surface->is_remote) return;
+
+    ohos_client_surface_unbind( surface );
+    ohos_client_surface_bind( surface );
 }
 
 static void ohos_client_surface_present( struct client_surface *client, HDC hdc )
@@ -1419,42 +1756,20 @@ struct ohos_client_surface *ohos_client_surface_create( HWND hwnd, BOOL force )
     NtUserGetClientRect( hwnd, &surface->rect, NtUserGetDpiForWindow( hwnd ) );
     if (!force) return surface;
 
-    /* Nest the client surface into the parent window page: an XComponent is
-     * stacked over the GDI one. The GDI buffer maps window pixels 1:1 onto
-     * the page (top-left anchored), so position and size are given in window
-     * pixels to stay aligned with the GDI content; whatever extends beyond
-     * the page is clipped, just like the GDI content. */
-    {
-        struct ohos_win_data *data = get_win_data( hwnd );
-        struct client_surface_param param = { 0 };
+    /* Nest the client surface over the window content: an XComponent stacked
+     * over the GDI one. The GDI buffer maps window pixels 1:1 onto the page
+     * (top-left anchored), so position and size are given in window pixels to
+     * stay aligned with the GDI content; whatever extends beyond the page is
+     * clipped, just like the GDI content.  For a cross-process child the
+     * same geometry is expressed in the foreign toplevel's page and the
+     * producer is imported from the host. */
+    ohos_client_surface_bind( surface );
 
-        if (data)
-        {
-            param.parent_widget_id = data->widget_id;
-            param.off_x = data->rects.client.left - data->rects.visible.left;
-            param.off_y = data->rects.client.top - data->rects.visible.top;
-            param.width = data->rects.client.right - data->rects.client.left;
-            param.height = data->rects.client.bottom - data->rects.client.top;
-            release_win_data( data );
-        }
-
-        if (param.parent_widget_id > 0)
-            surface->widget_id = CreateClientSurface( &param );
-    }
     if (surface->widget_id <= 0)
     {
         ERR("Failed to create client surface\n");
         client_surface_release(&surface->client);
         return NULL;
-    }
-
-    {
-        struct ohos_win_data *data = get_win_data( hwnd );
-        if (data)
-        {
-            data->client_widget_id = surface->widget_id;
-            release_win_data( data );
-        }
     }
 
     return surface;
@@ -1484,6 +1799,15 @@ BOOL OHOS_WindowPosChanging( HWND hwnd, UINT swp_flags, BOOL shaped, const struc
     }
 
     ret = data->widget_id > 0;
+    if (!ret && data->parent)
+    {
+        /* child of a cross-process window: it renders through its own
+         * surface (imported from the host page), so the needs_surface chain
+         * must continue past the driver veto */
+        DWORD pid = 0;
+        if (NtUserGetWindowThread( data->parent, &pid ) && pid != GetCurrentProcessId())
+            ret = TRUE;
+    }
     release_win_data(data);
 
     TRACE( "hwnd %p, ret %d\n", hwnd, ret );
@@ -1509,6 +1833,11 @@ BOOL OHOS_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_rect
 
     TRACE( "hwnd %p, surface %p ok\n", hwnd, *surface );
 
+    /* cross-process child: the DIB flushes into an ashmem buffer shared
+     * with the page owner (no XComponent there); retry happens lazily on
+     * flush while the shared surface is missing */
+    if (data->widget_id <= 0) ohos_create_remote_gdi_surface( data, surface_rect );
+
     release_win_data( data );
     return TRUE;
 }
@@ -1532,7 +1861,70 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
     TRACE("win %p/%d new_rects %s style %08x flags %08x surface %p\n", hwnd, data->widget_id,
           debugstr_window_rects(new_rects), new_style, swp_flags, surface);
 
-    if (data->widget_id <= 0) goto done;
+    if (data->widget_id <= 0)
+    {
+        /* cross-process child: no local native window.  Keep the shared
+         * GDI surface in sync (bypassing the has_shown gate: that gate
+         * guards surface requests on the local XComponent, which does not
+         * exist here): a size or position change recreates the shared
+         * buffer, since the owner-side overlay is position/size-keyed.
+         * The GL client surface bounds are relayed separately below. */
+        if (has_remote_gdi_producer( hwnd ))
+        {
+            int old_width = old_rects.visible.right - old_rects.visible.left;
+            int old_height = old_rects.visible.bottom - old_rects.visible.top;
+            int new_width = new_rects->visible.right - new_rects->visible.left;
+            int new_height = new_rects->visible.bottom - new_rects->visible.top;
+            if (old_width != new_width || old_height != new_height)
+            {
+                /* 尺寸变化：推迟到 resize settle 后重建共享面。连续拖拽
+                 * 中逐步 destroy/create 会产生全零新缓冲，而持帧把绘制
+                 * 内容全部丢弃 → 子区域空白；保留旧共享面（owner 持续
+                 * 合成拖拽前内容），settle 时重建一次并补刷。 */
+                data->remote_gdi_recreate_pending = TRUE;
+                if (surface) data->remote_gdi_pending_rect = surface->rect;
+                else SetRect( &data->remote_gdi_pending_rect, 0, 0, 0, 0 );
+                data->buffer_width = new_width;
+                data->buffer_height = new_height;
+                data->last_resize_time = NtGetTickCount();
+                if (!data->refresh_pending)
+                {
+                    data->refresh_pending = TRUE;
+                    NtUserPostMessage( hwnd, WM_OHOS_REFRESH, 0, 0 );
+                }
+            }
+            else if (!EqualRect( &old_rects.window, &new_rects->window ))
+            {
+                /* 位置-only 变化：轻量 bounds 更新，不重建共享面（拖拽时
+                 * 每步一次小 RPC，destroy/recreate 会卡顿且闪烁） */
+                int shared_id = 0, num = 1, den = 1;
+                RECT bounds;
+                if (get_remote_gdi_info( hwnd, &shared_id, &num, &den ) == 0 &&
+                    shared_id > 0 &&
+                    get_remote_bounds( hwnd, NtUserGetAncestor( hwnd, GA_ROOT ),
+                                       FALSE, &bounds ))
+                {
+                    int off_x = bounds.left * num / den;
+                    int off_y = bounds.top * num / den;
+                    UpdateRemoteGdiBounds( shared_id, off_x, off_y );
+                    TRACE( "hwnd %p pos-only update id %d off (%d,%d)\n",
+                           hwnd, shared_id, off_x, off_y );
+                }
+            }
+        }
+
+        /* client layer (GL/Vulkan) of a cross-process child */
+        if (data->client_widget_id > 0 && !EqualRect( &old_rects.client, &new_rects->client ))
+        {
+            RECT bounds;
+            if (get_remote_bounds( hwnd, NtUserGetAncestor( hwnd, GA_ROOT ), TRUE, &bounds ))
+                SetRemoteClientSurfaceBounds( data->client_widget_id,
+                                              bounds.left, bounds.top,
+                                              bounds.right - bounds.left,
+                                              bounds.bottom - bounds.top );
+        }
+        goto done;
+    }
 
     if (data->on_screen)
     {
@@ -1550,7 +1942,33 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
     }
     else if (swp_flags & SWP_NOSENDCHANGING)
     {
-        TRACE("hwnd %p: OS-initiated change via GetWindowStateUpdates, skip window_pos_changed\n", hwnd);
+        /* OS-initiated change (GetWindowStateUpdates): the OHOS window has
+         * already moved/resized itself, so no SetWindowBounds write-back.
+         * The producer buffer geometry must still follow the new size:
+         * otherwise NATIVE_WINDOW_LOCK keeps dequeuing old-size buffers and
+         * the XComponent (renderFit RESIZE_FILL) stretches the stale frame
+         * instead of presenting correctly sized content. */
+        int old_width = old_rects.visible.right - old_rects.visible.left;
+        int old_height = old_rects.visible.bottom - old_rects.visible.top;
+        int new_width = new_rects->visible.right - new_rects->visible.left;
+        int new_height = new_rects->visible.bottom - new_rects->visible.top;
+        if (old_width != new_width || old_height != new_height)
+        {
+            TRACE("hwnd %p: OS-initiated size change %d-%d --> %d-%d\n",
+                  hwnd, old_width, old_height, new_width, new_height);
+            if (data->has_shown)
+                perform(hwnd, SET_BUFFER_GEOMETRY, new_width, new_height);
+            data->buffer_width = new_width;
+            data->buffer_height = new_height;
+            data->last_resize_time = NtGetTickCount();
+            /* settle 后补刷最终帧（非客户区在拖拽中绘入 DIB 但被持帧
+             * 丢弃；宿主应用稳态不重绘，需主动补一次） */
+            if (!data->refresh_pending)
+            {
+                data->refresh_pending = TRUE;
+                NtUserPostMessage( hwnd, WM_OHOS_REFRESH, 0, 0 );
+            }
+        }
     }
     else
     {
@@ -1568,6 +1986,7 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             }
             data->buffer_width = new_width;
             data->buffer_height = new_height;
+            data->last_resize_time = NtGetTickCount();
 
             data->pending_configure = TRUE;
             data->pending_configure_time = NtGetTickCount();
@@ -1580,11 +1999,11 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
      * run for both Wine-initiated and OS-initiated changes */
     if (data->client_widget_id > 0 && !EqualRect( &old_rects.client, &new_rects->client ))
     {
-        SetClientSurfaceBounds( data->client_widget_id,
-                                new_rects->client.left - new_rects->visible.left,
-                                new_rects->client.top - new_rects->visible.top,
-                                new_rects->client.right - new_rects->client.left,
-                                new_rects->client.bottom - new_rects->client.top );
+        SetRemoteClientSurfaceBounds( data->client_widget_id,
+                                      new_rects->client.left - new_rects->visible.left,
+                                      new_rects->client.top - new_rects->visible.top,
+                                      new_rects->client.right - new_rects->client.left,
+                                      new_rects->client.bottom - new_rects->client.top );
     }
 
     if (new_style & WS_VISIBLE)
@@ -1757,6 +2176,11 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
     }
     else  /* new top level window */
     {
+        /* leaving a foreign host: release the relayed GDI layer and its
+         * producer; the flush target switches back to the local widget via
+         * the get_window_handle helper.  The GL client surface rebinds
+         * through its .update callback. */
+        ohos_destroy_remote_gdi_surface( data->hwnd );
         create_native_window(data);
     }
 
@@ -1847,8 +2271,35 @@ LRESULT OHOS_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     switch (msg)
     {
     case WM_OHOS_REFRESH:
+    {
+        struct ohos_win_data *data = get_win_data( hwnd );
+        if (data)
+        {
+            if (data->last_resize_time &&
+                NtGetTickCount() - data->last_resize_time < RESIZE_HOLD_MS)
+            {
+                /* 连续 resize 进行中：自循环等待 settle（每条消息仅一个
+                 * 在途，不会堆积） */
+                release_win_data( data );
+                NtUserPostMessage( hwnd, WM_OHOS_REFRESH, 0, 0 );
+                return 0;
+            }
+            /* settle：先完成被推迟的共享面重建（跨进程子窗口），再补刷 */
+            if (data->remote_gdi_recreate_pending)
+            {
+                data->remote_gdi_recreate_pending = FALSE;
+                ohos_destroy_remote_gdi_surface( hwnd );
+                if (!IsRectEmpty( &data->remote_gdi_pending_rect ))
+                    ohos_create_remote_gdi_surface( data, &data->remote_gdi_pending_rect );
+                else
+                    ohos_create_remote_gdi_surface( data, NULL );
+            }
+            data->refresh_pending = FALSE;
+            release_win_data( data );
+        }
         NtUserExposeWindowSurface( hwnd, 0, NULL, 0 );
         return 0;
+    }
     default:
         FIXME( "got window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, (long)wp, lp );
         return 0;

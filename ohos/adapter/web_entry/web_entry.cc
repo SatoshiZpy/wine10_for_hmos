@@ -20,6 +20,7 @@
 #include "ohos/adapter/multiprocess/app_spawn_communication.h"
 #include "ohos/adapter/multiprocess/command_line/command_line.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
+#include "ohos/adapter/new_ipc/child_process_entry.h"
 #include "ohos/adapter/web_entry/web_loader.h"
 
 using namespace std::chrono_literals;
@@ -172,8 +173,15 @@ void RunWine(int process_type,
   if (!g_initialized) {
     multiprocess::CommandLineHelper::SetCommandLine(process_type, args, env);
     std::thread mainthread([args, env, process_type]() {
-      /* set the environment variables */
+      /* set the environment variables first: the IPC server derives its
+       * socket directory from WINE_IPC_DIR */
       SetEnv(env);
+
+      /* 每个进程（主进程与被 spawn 的子进程）都持有 IPC server：
+       * 以 pid 命名常驻监听，等待其他进程在嵌入本进程窗口时按需连接 */
+      if (StartIpcServerEntry() != 0) {
+        LOGW("RunWine: ipc server start failed (continue)");
+      }
 
       auto loader = BasicLoader::Create(USE_LOADER_TARGET, process_type);
       if (loader->StartMainProcess(process_type, args) != 0) {
@@ -202,6 +210,7 @@ int RunWineProcess(const std::vector<std::string>& env_args,
         return -1;
     }
 
+    /* spawn 链路：ipc_lite 一次性握手取 argv 与 fd remap（与宿主一致） */
     int fd = common::UnixSocketUtils::CreateClientSocket(ipc_socket_path);
     if (fd < 0) {
         LOGE("RunWineProcess: connect failed");

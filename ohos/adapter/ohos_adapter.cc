@@ -4,11 +4,21 @@
 
 #include "ohos_adapter.h"
 
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <linux/ashmem.h>
+
 #include <stdint.h>
+#include <cinttypes>
 #include <cstring>
 #include <new>
 #include <unistd.h>
 #include <napi/native_api.h>
+
+#ifndef ASHMEM_SET_SIZE
+#define ASHMEM_SET_SIZE     _IOW(0x77, 3, size_t)
+#endif
 
 #include <chrono>
 #include <functional>
@@ -32,6 +42,7 @@
 #include "ohos/adapter/multiprocess/app_spawn_communication.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/ipc_lite/ipc_lite_adapter.h"
+#include "ohos/adapter/new_ipc/ipc_adapter.h"
 #include "ohos/adapter/print/ohos_print_adapter.h"
 #include "ohos/adapter/screen/screen_adapter.h"
 #include "ohos/adapter/screenlock_monitor/screenlock_monitor_adapter.h"
@@ -446,7 +457,6 @@ int CreateClientSurface(struct client_surface_param* param)
         LOGE("CreateClientSurface: invalid param");
         return -1;
     }
-
     param->client_widget_id = WindowAdapter::GetInstance().NextWindowWidgetId();
 
     auto promise = std::make_shared<std::promise<bool>>();
@@ -507,6 +517,207 @@ void DestroyClientSurface(int client_widget_id)
         return;
     }
     jsFunc->Invoke<void>(client_widget_id);
+}
+
+static int create_client_surface_and_get_surface_id(
+    struct client_surface_param* param, uint64_t* surface_id)
+{
+    int client_widget_id = CreateClientSurface(param);
+    if (client_widget_id <= 0) return -1;
+
+    ohos_native_window window = GetNativeWindow(client_widget_id);
+    if (!window || OH_NativeWindow_GetSurfaceId(window, surface_id) != 0) {
+        LOGE("get surface id failed, client widget %{public}d",
+             client_widget_id);
+        DestroyClientSurface(client_widget_id);
+        return -1;
+    }
+    param->client_widget_id = client_widget_id;
+    return 0;
+}
+
+int CreateRemoteClientSurface(struct client_surface_param* param,
+                              uint64_t* surface_id)
+{
+    if (!param || !surface_id || param->parent_widget_id <= 0) {
+        LOGE("CreateRemoteClientSurface: invalid param");
+        return -1;
+    }
+
+    /* 进程与窗口的嵌入关系是任意的（与 spawn 链路无关）：foreign
+     * toplevel 属于哪个进程，就点对点连到那个进程请求建面 */
+    if (param->owner_pid > 0 && param->owner_pid != getpid()) {
+        new_ipc::ClientSurfaceParam p;
+        p.parent_widget_id = param->parent_widget_id;
+        p.off_x = param->off_x;
+        p.off_y = param->off_y;
+        p.width = param->width;
+        p.height = param->height;
+        p.src_hwnd = param->src_hwnd;
+        p.src_pid = param->src_pid;
+        p.owner_pid = param->owner_pid;
+        if (new_ipc::PeerManager::Instance().CreateClientSurface(
+                p, *surface_id) != 0) {
+            LOGE("CreateRemoteClientSurface: peer relay failed, "
+                 "owner_pid=%{public}d", param->owner_pid);
+            return -1;
+        }
+        param->client_widget_id = p.client_widget_id;
+        LOGI("CreateRemoteClientSurface: client=%{public}d, "
+             "surface_id=%{public}" PRIu64 ", owner_pid=%{public}d",
+             param->client_widget_id, *surface_id, param->owner_pid);
+        return 0;
+    }
+
+    return create_client_surface_and_get_surface_id(param, surface_id);
+}
+
+void SetRemoteClientSurfaceBounds(int client_widget_id, int off_x, int off_y,
+                                  int width, int height)
+{
+    int32_t owner_pid = 0;
+    if (new_ipc::PeerManager::Instance().GetSurfaceOwner(client_widget_id,
+                                                         owner_pid)) {
+        new_ipc::PeerManager::Instance().SetClientSurfaceBounds(
+            client_widget_id, off_x, off_y, width, height);
+        return;
+    }
+    SetClientSurfaceBounds(client_widget_id, off_x, off_y, width, height);
+}
+
+void DestroyRemoteClientSurface(int client_widget_id)
+{
+    int32_t owner_pid = 0;
+    if (new_ipc::PeerManager::Instance().GetSurfaceOwner(client_widget_id,
+                                                         owner_pid)) {
+        new_ipc::PeerManager::Instance().DestroyClientSurface(
+            client_widget_id);
+        return;
+    }
+    DestroyClientSurface(client_widget_id);
+}
+
+/* C 侧共享像素映射登记表：Destroy 时释放 */
+static std::unordered_map<int, std::pair<void*, size_t>> g_gdi_maps;
+static std::mutex g_gdi_maps_mutex;
+
+int CreateRemoteGdiSharedSurface(struct remote_gdi_param* param, void** pixels)
+{
+    if (!param || !pixels || param->parent_widget_id <= 0 ||
+        param->owner_pid <= 0 || param->width <= 0 || param->height <= 0 ||
+        param->owner_pid == getpid()) {
+        LOGE("CreateRemoteGdiSharedSurface: invalid param");
+        return -1;
+    }
+    param->stride = param->width * 4;
+    *pixels = nullptr;
+
+    size_t size = (size_t)param->stride * param->height;
+    int fd = open("/dev/ashmem", O_RDWR);
+    if (fd < 0) {
+        LOGE("CreateRemoteGdiSharedSurface: open ashmem failed, errno=%{public}d", errno);
+        return -1;
+    }
+    if (ioctl(fd, ASHMEM_SET_SIZE, size) < 0) {
+        LOGE("CreateRemoteGdiSharedSurface: set size failed, errno=%{public}d", errno);
+        close(fd);
+        return -1;
+    }
+    void* map = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (map == MAP_FAILED) {
+        LOGE("CreateRemoteGdiSharedSurface: mmap failed, errno=%{public}d", errno);
+        close(fd);
+        return -1;
+    }
+    /* 刷成中性灰，避免首帧合成出现垃圾像素 */
+    memset(map, 0xc0, size);
+
+    new_ipc::RemoteGdiParam p;
+    p.parent_widget_id = param->parent_widget_id;
+    p.off_x = param->off_x;
+    p.off_y = param->off_y;
+    p.width = param->width;
+    p.height = param->height;
+    p.src_hwnd = param->src_hwnd;
+    p.src_pid = param->src_pid;
+    p.owner_pid = param->owner_pid;
+    p.stride = param->stride;
+    p.client_widget_id = -1; /* assigned by the owner */
+
+    if (new_ipc::PeerManager::Instance().AttachRemoteGdi(p, fd) != 0) {
+        /* 发送失败：fd 由内核复制，本地仍持有，需清理 */
+        munmap(map, size);
+        close(fd);
+        LOGE("CreateRemoteGdiSharedSurface: relay failed, owner_pid=%{public}d",
+             param->owner_pid);
+        return -1;
+    }
+    close(fd); /* mmap 保活，fd 即可关闭 */
+    param->client_widget_id = p.client_widget_id;
+    *pixels = map;
+    {
+        std::lock_guard<std::mutex> lock(g_gdi_maps_mutex);
+        g_gdi_maps[param->client_widget_id] = {map, size};
+    }
+    LOGI("CreateRemoteGdiSharedSurface: id=%{public}d, owner_pid=%{public}d, "
+         "%{public}dx%{public}d", param->client_widget_id, param->owner_pid,
+         param->width, param->height);
+    return 0;
+}
+
+int RemoteGdiFlush(int client_widget_id, int x, int y, int width, int height)
+{
+    return new_ipc::PeerManager::Instance().RemoteGdiFlush(
+        client_widget_id, x, y, width, height);
+}
+
+void DestroyRemoteGdiSharedSurface(int client_widget_id)
+{
+    void* map = nullptr;
+    size_t size = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_gdi_maps_mutex);
+        auto it = g_gdi_maps.find(client_widget_id);
+        if (it == g_gdi_maps.end()) return;
+        map = it->second.first;
+        size = it->second.second;
+        g_gdi_maps.erase(it);
+    }
+    new_ipc::PeerManager::Instance().DestroyRemoteGdi(client_widget_id);
+    if (map) munmap(map, size);
+}
+
+void UpdateRemoteGdiBounds(int client_widget_id, int off_x, int off_y)
+{
+    new_ipc::PeerManager::Instance().UpdateRemoteGdiBounds(client_widget_id,
+                                                           off_x, off_y);
+}
+
+/* C 回调桥接到 new_ipc 内部的 overlay 通知 */
+static remote_gdi_overlay_fn g_remote_gdi_fn = nullptr;
+
+static void remote_gdi_overlay_bridge(new_ipc::RemoteGdiOp op, int32_t id,
+                                      const new_ipc::RemoteGdiParam* param,
+                                      const void* pixels)
+{
+    if (!g_remote_gdi_fn) return;
+    int parent_id = 0, off_x = 0, off_y = 0, w = 0, h = 0, stride = 0;
+    if (param) {
+        parent_id = param->parent_widget_id;
+        off_x = param->off_x;
+        off_y = param->off_y;
+        w = param->width;
+        h = param->height;
+        stride = param->stride;
+    }
+    g_remote_gdi_fn(static_cast<int>(op), id, parent_id, off_x, off_y, w, h,
+                    stride, pixels);
+}
+
+void RegisterRemoteGdiOverlayCallback(remote_gdi_overlay_fn fn)
+{
+    g_remote_gdi_fn = fn;
+    new_ipc::SetRemoteGdiOverlayCallback(remote_gdi_overlay_bridge);
 }
 
 int GetFocusWindow()

@@ -37,10 +37,31 @@ struct ohos_win_data
     int                 buffer_width;       /* current buffer width */
     int                 buffer_height;      /* current buffer height */
     RECT                os_pending_rect;    /* OS callback pending rect */
-    int                 os_pending_reason;  /* OS callback RectChangeReason */
+    int                 os_pending_reason;  /* OS callback RectChange reason */
     BOOL                os_rect_pending;    /* whether OS rect change is pending */
     unsigned int        has_shown;          /* is window has already called show(), Only shown windows can request surface */
+    DWORD               last_resize_time;   /* tick of last window size change, used to hold frames during live resize */
+    unsigned int        refresh_pending;    /* 持帧期间已挂起 WM_OHOS_REFRESH 补刷 */
+    unsigned int        remote_gdi_recreate_pending; /* 连续 resize 期间推迟的共享面重建 */
+    RECT                remote_gdi_pending_rect;     /* settle 重建共享面所用的 surface 矩形 */
 };
+
+/* identity of a native (OHOS) window stored as a window property on the
+ * toplevel: pure values only, readable from every wine process through the
+ * wineserver (the X11 whole_window_prop pattern).  The property packs
+ * MAKELONGLONG( widget_id, owner_pid ). */
+extern const WCHAR ohos_window_id_prop[];
+struct ohos_window_identity { int owner_pid; int widget_id; };
+
+/* 按 widget id 找本进程的宿主 toplevel 窗口（overlay 通知侧使用） */
+extern HWND ohos_find_toplevel_by_widget_id( int widget_id );
+/* 唤醒页面 owner 合成：owner 的合成只发生在其自身 GDI flush 中，
+ * 子进程共享面有新内容（BLIT/UPDATE）时宿主往往不会自行重绘，
+ * 需向其投递 WM_OHOS_REFRESH 触发 expose 重刷。仅可在 wine 线程
+ * （桌面/窗口线程）调用——NtUserPostMessage 需要合法 TEB；IPC 线程
+ * 须经 send_event(OVERLAY_DIRTY_EVENT) 转交桌面线程。内部含
+ * refresh_pending 去重。 */
+extern void ohos_wake_page_composite( int parent_widget_id );
 
 struct ohos_client_surface
 {
@@ -48,6 +69,8 @@ struct ohos_client_surface
     HWND                  hwnd;
     int                   widget_id;
     RECT                  rect;
+    ohos_native_window    native_window; /* imported producer (cross-process), NULL when local */
+    BOOL                  is_remote;     /* widget_id belongs to the host process */
 };
 
 extern struct ohos_win_data *alloc_win_data( HWND hwnd );
@@ -55,6 +78,23 @@ extern void free_win_data( struct ohos_win_data *data );
 extern struct ohos_win_data *get_win_data( HWND hwnd );
 extern void release_win_data( struct ohos_win_data *data );
 extern struct ohos_client_surface *ohos_client_surface_create( HWND hwnd, BOOL force );
+
+/* cross-process embedding (SetParent across wine processes) */
+extern struct ohos_window_identity ohos_get_foreign_toplevel( HWND hwnd );
+extern BOOL ohos_create_remote_gdi_surface( struct ohos_win_data *data, const RECT *surface_rect );
+extern void ohos_destroy_remote_gdi_surface( HWND hwnd );
+
+/* remote GDI shared-surface management (device.c): pixels live in an
+ * ashmem buffer shared with the page owner, which composites them */
+extern BOOL has_remote_gdi_producer( HWND hwnd );
+extern int host_gdi_widget_id( HWND hwnd );
+extern int attach_remote_gdi_producer( HWND hwnd, void *pixels, int width,
+                                       int height, int stride, int shared_id,
+                                       int scale_num, int scale_den );
+extern int get_remote_gdi_info( HWND hwnd, int *shared_id,
+                                int *scale_num, int *scale_den );
+extern BOOL detach_remote_gdi_producer( HWND hwnd, int *shared_id );
+extern void wineohos_register_gdi_overlay(void);
 
 extern void create_native_window( struct ohos_win_data *data );
 extern void destroy_native_window( HWND hwnd );
@@ -137,6 +177,7 @@ enum event_type
     IME_EVENT,
     SCREENLOCK_EVENT,
     WINDOW_FOCUS_EVENT,
+    OVERLAY_DIRTY_EVENT,   /* 子进程共享面新内容，唤醒 owner 合成（驱动内部产生） */
 };
 
 struct ime_data
@@ -215,6 +256,11 @@ union event_data
         HWND            hwnd;
         BOOL            gained;
     } focus;
+    struct
+    {
+        enum event_type type;
+        int             parent_widget_id;
+    } overlay_dirty;
 };
 
 int send_event( const union event_data *data );

@@ -6,324 +6,357 @@
 
 #include <unistd.h>
 
-#include <chrono>
+#include <sys/mman.h>
 
-#include "ohos/adapter/common/constants.h"
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <cinttypes>
+#include <cstdlib>
+#include <thread>
+#include <utility>
+#include <vector>
+
 #include "ohos/adapter/common/logging.h"
-#include "ohos/adapter/common/mutex.h"
 #include "ohos/adapter/external_protocol/external_protocol_adapter.h"
-#include "ohos/adapter/ipc/window_param.h"
-#include "ohos/adapter/multiprocess/child_process_starter.h"
-#include "ohos/adapter/new_ipc/ipc_proxy_stub.h"
 #include "ohos/adapter/screen/screen_adapter.h"
-#include "ohos/adapter/window/wine_window.h"
-#include "ohos/adapter/window/wine_window_manager.h"
+#include "ohos_adapter.h"
 
 namespace ohos::adapter::new_ipc {
 
-static Mutex g_process_mutex;
-
-static const std::string kIpcSocketPathPrefix =
-    "/data/storage/el2/base/files/wine_ipc_";
-
-static window::WindowParam ConvertWindowParam(const WindowParam& param)
+/* 每个 wine 进程共享的 socket 目录（hap 级 files，WINEPREFIX 同级）：
+ * 隔离子进程的 app 级 el2 视图与主进程不同，不能硬编码 app 目录，
+ * 由 WineLoaderAdapter 经 WINE_IPC_DIR 传入，所有进程据此 + pid 推导
+ * 任意对端的 socket path */
+static const char* ipc_socket_dir(void)
 {
-    window::WindowParam win_param;
-    win_param.ability_type = param.ability_type;
-    win_param.window_type = param.window_type;
-    win_param.left = param.left;
-    win_param.top = param.top;
-    win_param.width = param.width;
-    win_param.height = param.height;
-    win_param.parent_id = param.parent_id;
-    win_param.hwnd = param.hwnd;
-    win_param.owner_pid = param.owner_pid;
-    win_param.features = param.features;
-    win_param.window_state = param.window_state;
-    return win_param;
+    static const char* dir = nullptr;
+    if (!dir)
+    {
+        dir = getenv("WINE_IPC_DIR");
+        if (!dir || !dir[0]) dir = "/data/storage/el2/base/haps/entry/files";
+    }
+    return dir;
 }
 
-static std::string GetProcessName(const std::string& image_file)
+std::string IpcServer::SocketPathForPid(int32_t pid)
 {
-    std::string process_name = image_file;
-    size_t last_slash = process_name.rfind('\\');
-    if (last_slash != std::string::npos) {
-        process_name = process_name.substr(last_slash + 1);
-    }
-    size_t last_dot = process_name.rfind('.');
-    if (last_dot != std::string::npos) {
-        return process_name.substr(0, last_dot);
-    }
-    return process_name;
+    return std::string(ipc_socket_dir()) + "/wine_ipc_" +
+           std::to_string(pid) + ".sock";
 }
 
-ChildProcess& ChildProcess::Instance()
+IpcServer& IpcServer::Instance()
 {
-    static ChildProcess instance;
+    static IpcServer instance;
     return instance;
 }
 
-ChildProcess::ChildProcess() = default;
+IpcServer::IpcServer() = default;
 
-ChildProcess::~ChildProcess()
+IpcServer::~IpcServer()
 {
-    if (channel_) channel_->Close();
+    Stop();
 }
 
-bool ChildProcess::ConnectToParent(const std::string& socket_path)
+bool IpcServer::Start()
 {
-    if (connected_) {
-        LOGW("ChildProcess already connected");
-        return true;
-    }
+    if (server_started_) return true;
 
-    channel_ = std::make_unique<IpcChannel>();
-    if (!channel_->ConnectToServer(socket_path)) {
-        LOGE("ChildProcess ConnectToParent failed, path=%{public}s",
-             socket_path.c_str());
-        channel_.reset();
+    std::string path = SocketPathForPid(static_cast<int32_t>(getpid()));
+    if (!server_socket_.Listen(path)) {
+        LOGE("IpcServer::Start listen failed, path=%{public}s", path.c_str());
         return false;
     }
 
-    if (!channel_->ExchangeShmFd()) {
-        LOGE("ChildProcess ExchangeShmFd failed");
-        channel_->Close();
-        channel_.reset();
-        return false;
+    server_started_ = true;
+    accepting_ = true;
+    accept_thread_ = std::thread(&IpcServer::AcceptLoop, this);
+    LOGI("IpcServer::Start pid=%{public}d, path=%{public}s",
+         static_cast<int>(getpid()), path.c_str());
+    return true;
+}
+
+void IpcServer::Stop()
+{
+    if (!server_started_) return;
+    accepting_ = false;
+    server_socket_.Close();
+    if (accept_thread_.joinable()) accept_thread_.join();
+    {
+        MutexLock lock(mutex_);
+        for (auto& [id, channel] : channels_) {
+            channel->StopListening();
+            channel->Close();
+        }
+        channels_.clear();
+    }
+    unlink(SocketPathForPid(static_cast<int32_t>(getpid())).c_str());
+    server_started_ = false;
+    LOGI("IpcServer::Stop");
+}
+
+void IpcServer::AcceptLoop()
+{
+    LOGI("IpcServer::AcceptLoop enter");
+    while (accepting_) {
+        int client_fd = server_socket_.Accept();
+        if (client_fd < 0) {
+            if (!accepting_) break;
+            LOGE("IpcServer::AcceptLoop accept failed, errno=%{public}d",
+                 errno);
+            continue;
+        }
+
+        /* 通道创建与 shm 交换在锁外：accept 只会由本线程串行触发，
+         * 通道表仅 insert 时短暂持锁 */
+        auto channel = std::make_unique<IpcChannel>();
+        if (!channel->ConnectWithFd(client_fd)) {
+            LOGE("IpcServer::AcceptLoop ConnectWithFd failed");
+            close(client_fd);
+            continue;
+        }
+        if (!channel->ExchangeShmFd()) {
+            LOGE("IpcServer::AcceptLoop ExchangeShmFd failed");
+            channel->Close();
+            continue;
+        }
+
+        ProcessManagerStub* stub = &stub_;
+        IpcChannel* ch_ptr = channel.get();
+        channel->SetRequestHandler([ch_ptr, stub](const IpcMessage& msg) {
+            if (msg.type != IpcMessageType::SYNC_REQUEST || !msg.shm) return;
+            /* 请求方 proxy 写请求前已归位游标，此处直接读；重置会作废
+             * 请求（read==write 时读到 code=0） */
+            IpcParcel data(*msg.shm);
+            int32_t code = 0;
+            data.ReadInt32(code);
+            IpcParcel reply(*msg.shm);
+            stub->OnRemoteRequest(static_cast<uint32_t>(code), data, reply,
+                                  msg.fds);
+            ch_ptr->SendReply();
+        });
+        channel->StartListening();
+
+        {
+            MutexLock lock(mutex_);
+            channels_[next_channel_id_++] = std::move(channel);
+        }
+        LOGI("IpcServer::AcceptLoop peer connected, channel=%{public}d, "
+             "fd=%{public}d", next_channel_id_ - 1, client_fd);
+    }
+    LOGI("IpcServer::AcceptLoop exit");
+}
+
+PeerManager& PeerManager::Instance()
+{
+    static PeerManager instance;
+    return instance;
+}
+
+IpcChannel* PeerManager::GetPeerChannel(int32_t pid)
+{
+    MutexLock lock(mutex_);
+    auto it = peers_.find(pid);
+    if (it != peers_.end()) return it->second.get();
+
+    auto channel = std::make_unique<IpcChannel>();
+    if (!channel->ConnectToServer(IpcServer::SocketPathForPid(pid))) {
+        LOGE("PeerManager::GetPeerChannel connect failed, pid=%{public}d",
+             pid);
+        return nullptr;
+    }
+    /* client 侧：先收 owner 发来的 shm fd，再开监听（顺序不可反，
+     * 否则 listen 线程会抢走 SHM_FD 消息） */
+    if (!channel->ExchangeShmFd()) {
+        LOGE("PeerManager::GetPeerChannel ExchangeShmFd failed, "
+             "pid=%{public}d", pid);
+        channel->Close();
+        return nullptr;
     }
 
-    channel_->SetRequestHandler([this](const IpcMessage& msg) {
+    ProcessManagerStub* stub = &stub_;
+    IpcChannel* ch_ptr = channel.get();
+    channel->SetRequestHandler([ch_ptr, stub](const IpcMessage& msg) {
         if (msg.type != IpcMessageType::SYNC_REQUEST || !msg.shm) return;
-        msg.shm->ResetReadWrite();
         IpcParcel data(*msg.shm);
         int32_t code = 0;
         data.ReadInt32(code);
         IpcParcel reply(*msg.shm);
-        stub_.OnRemoteRequest(static_cast<uint32_t>(code), data, reply,
+        stub->OnRemoteRequest(static_cast<uint32_t>(code), data, reply,
                               msg.fds);
-        channel_->SendReply();
+        ch_ptr->SendReply();
     });
+    channel->StartListening();
 
-    channel_->StartListening();
+    IpcChannel* raw = channel.get();
+    peers_[pid] = std::move(channel);
+    LOGI("PeerManager::GetPeerChannel connected, pid=%{public}d", pid);
+    return raw;
+}
 
-    proxy_ = std::make_unique<ProcessManagerProxy>(*channel_);
-    connected_ = true;
-    LOGI("ChildProcess connected to parent via %{public}s",
-         socket_path.c_str());
+void PeerManager::DropPeer(int32_t pid)
+{
+    MutexLock lock(mutex_);
+    auto it = peers_.find(pid);
+    if (it == peers_.end()) return;
+    it->second->StopListening();
+    it->second->Close();
+    peers_.erase(it);
+    LOGI("PeerManager::DropPeer pid=%{public}d", pid);
+}
 
-    std::vector<std::pair<int, int>> fds;
-    if (proxy_->GetFdIdsRemap(fds) == 0) {
-        fd_ids_remap_ = fds;
-        LOGI("ChildProcess got %{public}zu fd remap entries",
-             fds.size());
-    } else {
-        LOGW("ChildProcess GetFdIdsRemap failed");
-    }
+bool PeerManager::GetSurfaceOwner(int32_t client_widget_id,
+                                  int32_t& owner_pid)
+{
+    MutexLock lock(mutex_);
+    auto it = surface_routes_.find(client_widget_id);
+    if (it == surface_routes_.end()) return false;
+    owner_pid = it->second;
     return true;
 }
 
-int ChildProcess::GetDisplay(DisplayParam& display)
+int PeerManager::CreateClientSurface(ClientSurfaceParam& param,
+                                     uint64_t& surface_id)
 {
-    if (!connected_ || !proxy_) return -1;
-    return proxy_->GetDisplay(display);
-}
-
-int ChildProcess::CreateProcess(
-    const std::vector<std::string>& commands,
-    const std::vector<std::pair<int, int>>& fds)
-{
-    if (!connected_ || !proxy_) return -1;
-    return proxy_->CreateProcess(commands, fds);
-}
-
-int ChildProcess::KillProcess(int32_t pid)
-{
-    if (!connected_ || !proxy_) return -1;
-    return proxy_->KillProcess(pid);
-}
-
-int ChildProcess::OpenUrl(const std::string& url)
-{
-    if (!connected_ || !proxy_) return -1;
-    return proxy_->OpenUrl(url);
-}
-
-int ChildProcess::GetFdIdsRemap(std::vector<std::pair<int, int>>& fds)
-{
-    fds = fd_ids_remap_;
-    return 0;
-}
-
-void ChildProcess::SetFdIdsRemap(const std::vector<std::pair<int, int>>& fds)
-{
-    fd_ids_remap_ = fds;
-}
-
-int IpcHelper::CreateProcess(
-    const std::vector<std::string>& commands,
-    const std::vector<std::pair<int, int>>& fds)
-{
-    MutexLock lock(g_process_mutex);
-
-    if (commands.empty()) {
-        LOGE("IpcHelper::CreateProcess empty commands");
+    int32_t owner_pid = param.owner_pid;
+    if (owner_pid <= 0 || owner_pid == static_cast<int32_t>(getpid())) {
+        LOGE("PeerManager::CreateClientSurface invalid owner_pid=%{public}d",
+             owner_pid);
         return -1;
     }
 
-    std::string process_loader = commands[0];
-    std::string image_file = process_loader == "wineserver"
-        ? process_loader : commands[1];
-    std::string processKey = GetProcessName(image_file);
-
-    std::string socket_path = kIpcSocketPathPrefix
-        + std::to_string(std::chrono::steady_clock::now()
-              .time_since_epoch().count())
-        + ".sock";
-
-    if (!ChildProcessHost::Instance().StartServer(socket_path)) {
-        LOGE("IpcHelper CreateProcess: StartServer failed");
-        return -1;
-    }
-
-    if (!multiprocess::ChildProcessStarter::GetInstance()
-             .CreateProcess(processKey, socket_path)) {
-        LOGE("IpcHelper CreateProcess: CreateProcess failed");
-        return -1;
-    }
-
-    LOGI("IpcHelper CreateProcess: sock=%{public}s", socket_path.c_str());
-
-    int32_t channel_id = ChildProcessHost::Instance().AcceptNewChild();
-    if (channel_id < 0) {
-        LOGE("AcceptNewChild failed, channel_id=%{public}d", channel_id);
-        return -1;
-    }
-
-    if (!ChildProcessHost::Instance().SetProcessInfo(
-            channel_id, commands, fds)) {
-        LOGE("SetProcessInfo failed for channel %{public}d", channel_id);
-    }
-
-    IpcChannel* channel = ChildProcessHost::Instance()
-        .GetManager()->GetChannel(channel_id);
-    if (!channel) {
-        LOGE("GetChannel failed for channel %{public}d", channel_id);
-        return -1;
-    }
+    IpcChannel* channel = GetPeerChannel(owner_pid);
+    if (!channel) return -1;
 
     ProcessManagerProxy proxy(*channel);
-    int32_t pid = -1;
-    if (proxy.GetPid(pid) != 0 || pid <= 0) {
-        LOGE("GetPid via IPC failed");
+    int ret = proxy.CreateClientSurface(param, surface_id);
+    if (ret != 0) {
+        DropPeer(owner_pid);
+        return ret;
+    }
+
+    {
+        MutexLock lock(mutex_);
+        surface_routes_[param.client_widget_id] = owner_pid;
+    }
+    LOGI("PeerManager::CreateClientSurface owner_pid=%{public}d, "
+         "client=%{public}d, surface_id=%{public}" PRIu64,
+         owner_pid, param.client_widget_id, surface_id);
+    return 0;
+}
+
+int PeerManager::SetClientSurfaceBounds(int32_t client_widget_id,
+                                        int32_t off_x, int32_t off_y,
+                                        int32_t width, int32_t height)
+{
+    int32_t owner_pid = 0;
+    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
+
+    IpcChannel* channel = GetPeerChannel(owner_pid);
+    if (!channel) return -1;
+
+    ProcessManagerProxy proxy(*channel);
+    int ret = proxy.SetClientSurfaceBounds(client_widget_id, off_x, off_y,
+                                           width, height);
+    if (ret != 0) DropPeer(owner_pid);
+    return ret;
+}
+
+int PeerManager::DestroyClientSurface(int32_t client_widget_id)
+{
+    int32_t owner_pid = 0;
+    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
+
+    {
+        MutexLock lock(mutex_);
+        surface_routes_.erase(client_widget_id);
+    }
+
+    IpcChannel* channel = GetPeerChannel(owner_pid);
+    if (!channel) return 0;
+
+    ProcessManagerProxy proxy(*channel);
+    int ret = proxy.DestroyClientSurface(client_widget_id);
+    if (ret != 0) DropPeer(owner_pid);
+    return ret;
+}
+
+int PeerManager::AttachRemoteGdi(RemoteGdiParam& param, int fd)
+{
+    int32_t owner_pid = param.owner_pid;
+    if (owner_pid <= 0 || owner_pid == static_cast<int32_t>(getpid())) {
+        LOGE("PeerManager::AttachRemoteGdi invalid owner_pid=%{public}d",
+             owner_pid);
         return -1;
     }
 
-    LOGI("IpcHelper CreateProcess done: pid=%{public}d, "
-         "channel=%{public}d", pid, channel_id);
-    return pid;
-}
+    IpcChannel* channel = GetPeerChannel(owner_pid);
+    if (!channel) return -1;
 
-int IpcHelper::KillProcess(int32_t pid)
-{
-    LOGI("IpcHelper::KillProcess pid=%{public}d (pending impl)",
-         pid);
-    return -1;
-}
+    ProcessManagerProxy proxy(*channel);
+    int ret = proxy.AttachRemoteGdi(param, fd);
+    if (ret != 0) {
+        DropPeer(owner_pid);
+        return ret;
+    }
 
-int IpcHelper::CreateWindow(const WindowParam& param)
-{
-    LOGI("CreateWindow type: %{public}d, rect: "
-         "(%{public}d,%{public}d,%{public}d,%{public}d)",
-         param.window_type, param.left, param.top,
+    {
+        MutexLock lock(mutex_);
+        surface_routes_[param.client_widget_id] = owner_pid;
+    }
+    LOGI("PeerManager::AttachRemoteGdi owner_pid=%{public}d, id=%{public}d, "
+         "%{public}dx%{public}d", owner_pid, param.client_widget_id,
          param.width, param.height);
-
-    int widget_id = -1;
-    auto window = window::WineWindow::Create(
-        ConvertWindowParam(param), &widget_id);
-    if (!window) {
-        LOGE("CreateWindow error");
-        return -1;
-    }
-    LOGI("CreateWindow widgetId %{public}d", widget_id);
-    return widget_id;
-}
-
-int IpcHelper::UpdateWindow(int32_t widget_id,
-                                      const WindowParam& param)
-{
-    auto window = window::WineWindowManager::GetInstance()
-        .GetWindow(widget_id);
-    if (!window) {
-        LOGE("UpdateWindow: window not exists, widgetId %{public}d",
-             widget_id);
-        return -1;
-    }
-    LOGI("UpdateWindow widgetId %{public}d", widget_id);
     return 0;
 }
 
-int IpcHelper::SetWindowBounds(int32_t widget_id,
-                                         const WindowRect& rect)
+int PeerManager::RemoteGdiFlush(int32_t client_widget_id, int32_t x,
+                                int32_t y, int32_t w, int32_t h)
 {
-    auto window = window::WineWindowManager::GetInstance()
-        .GetWindow(widget_id);
-    if (!window) {
-        LOGE("SetWindowBounds: window not exists, widgetId %{public}d",
-             widget_id);
-        return -1;
-    }
-    LOGI("SetWindowBounds widgetId %{public}d", widget_id);
-    ::WindowRect common_rect;
-    common_rect.left = rect.left;
-    common_rect.top = rect.top;
-    common_rect.width = rect.width;
-    common_rect.height = rect.height;
-    window->SetBounds(common_rect);
-    return 0;
+    int32_t owner_pid = 0;
+    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
+
+    IpcChannel* channel = GetPeerChannel(owner_pid);
+    if (!channel) return -1;
+
+    ProcessManagerProxy proxy(*channel);
+    int ret = proxy.RemoteGdiFlush(client_widget_id, x, y, w, h);
+    if (ret != 0) DropPeer(owner_pid);
+    return ret;
 }
 
-int IpcHelper::SetWindowVisible(int32_t widget_id, bool visible)
+int PeerManager::DestroyRemoteGdi(int32_t client_widget_id)
 {
-    auto window = window::WineWindowManager::GetInstance()
-        .GetWindow(widget_id);
-    if (!window) {
-        LOGE("SetWindowVisible: window not exists, widgetId %{public}d",
-             widget_id);
-        return -1;
+    int32_t owner_pid = 0;
+    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
+
+    {
+        MutexLock lock(mutex_);
+        surface_routes_.erase(client_widget_id);
     }
-    LOGI("SetWindowVisible widgetId %{public}d, visible %{public}d",
-         widget_id, static_cast<int>(visible));
-    visible ? window->Show() : window->Hide();
-    return 0;
+
+    IpcChannel* channel = GetPeerChannel(owner_pid);
+    if (!channel) return 0;
+
+    ProcessManagerProxy proxy(*channel);
+    int ret = proxy.DestroyRemoteGdi(client_widget_id);
+    if (ret != 0) DropPeer(owner_pid);
+    return ret;
 }
 
-int IpcHelper::CloseWindow(int32_t widget_id)
+int PeerManager::UpdateRemoteGdiBounds(int32_t client_widget_id,
+                                       int32_t off_x, int32_t off_y)
 {
-    auto window = window::WineWindowManager::GetInstance()
-        .GetWindow(widget_id);
-    if (!window) {
-        LOGE("CloseWindow: window not exists, widgetId %{public}d",
-             widget_id);
-        return -1;
-    }
-    LOGI("CloseWindow widgetId %{public}d", widget_id);
-    window->Close();
-    return 0;
-}
+    int32_t owner_pid = 0;
+    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
 
-int IpcHelper::SetWindowTitle(int32_t widget_id,
-                                        const std::string& title)
-{
-    auto window = window::WineWindowManager::GetInstance()
-        .GetWindow(widget_id);
-    if (!window) {
-        LOGE("SetWindowTitle: window not exists, widgetId %{public}d",
-             widget_id);
-        return -1;
-    }
-    LOGI("SetWindowTitle widgetId %{public}d", widget_id);
-    window->SetTitle(title);
-    return 0;
+    IpcChannel* channel = GetPeerChannel(owner_pid);
+    if (!channel) return -1;
+
+    ProcessManagerProxy proxy(*channel);
+    int ret = proxy.UpdateRemoteGdiBounds(client_widget_id, off_x, off_y);
+    if (ret != 0) DropPeer(owner_pid);
+    return ret;
 }
 
 int IpcHelper::GetDisplay(DisplayParam& param)
@@ -351,105 +384,271 @@ int IpcHelper::OpenUrl(const std::string& url)
     return 0;
 }
 
-ChildProcessHost& ChildProcessHost::Instance()
+int IpcHelper::CreateClientSurface(ClientSurfaceParam& param,
+                                   uint64_t& surface_id)
 {
-    static ChildProcessHost instance;
-    return instance;
-}
+    struct client_surface_param p = {};
+    p.parent_widget_id = param.parent_widget_id;
+    p.off_x = param.off_x;
+    p.off_y = param.off_y;
+    p.width = param.width;
+    p.height = param.height;
+    p.src_hwnd = param.src_hwnd;
+    p.src_pid = param.src_pid;
 
-ChildProcessHost::ChildProcessHost()
-{
-    manager_ = std::make_unique<IpcChannelManager>();
-}
+    int client_widget_id = ::CreateClientSurface(&p);
+    if (client_widget_id <= 0) return -1;
 
-ChildProcessHost::~ChildProcessHost()
-{
-    CloseAll();
-}
-
-bool ChildProcessHost::StartServer(const std::string& socket_path)
-{
-    if (server_started_) {
-        LOGW("ChildProcessHost server already started at %{public}s",
-             server_socket_path_.c_str());
-        return true;
-    }
-    bool ret = manager_->StartServer(socket_path);
-    if (ret) {
-        server_started_ = true;
-        server_socket_path_ = socket_path;
-    }
-    return ret;
-}
-
-int32_t ChildProcessHost::AcceptNewChild()
-{
-    int32_t channel_id = manager_->AcceptNewChannel();
-    if (channel_id < 0) return channel_id;
-
-    IpcChannel* channel = manager_->GetChannel(channel_id);
-    if (!channel) return -1;
-
-    if (!channel->ExchangeShmFd()) {
-        LOGE("ChildProcessHost AcceptNewChild ExchangeShmFd failed");
-        manager_->RemoveChannel(channel_id);
+    ohos_native_window window = ::GetNativeWindow(client_widget_id);
+    if (!window || OH_NativeWindow_GetSurfaceId(window, &surface_id) != 0) {
+        LOGE("IpcHelper::CreateClientSurface: get surface id failed, "
+             "widget=%{public}d", client_widget_id);
+        ::DestroyClientSurface(client_widget_id);
         return -1;
     }
 
-    ProcessManagerStub& stub = stub_;
-    IpcChannel* ch_ptr = channel;
-    channel->SetRequestHandler([ch_ptr, &stub](const IpcMessage& msg) {
-        if (msg.type != IpcMessageType::SYNC_REQUEST || !msg.shm) return;
-        msg.shm->ResetReadWrite();
-        IpcParcel data(*msg.shm);
-        int32_t code = 0;
-        data.ReadInt32(code);
-        IpcParcel reply(*msg.shm);
-        stub.OnRemoteRequest(static_cast<uint32_t>(code), data, reply,
-                             msg.fds);
-        ch_ptr->SendReply();
-    });
-
-    channel->StartListening();
-
-    LOGI("ChildProcessHost AcceptNewChild channel_id=%{public}d, "
-         "shm exchanged, listening started", channel_id);
-    return channel_id;
+    param.client_widget_id = client_widget_id;
+    LOGI("IpcHelper::CreateClientSurface: client=%{public}d, "
+         "parent=%{public}d, surface_id=%{public}" PRIu64,
+         client_widget_id, param.parent_widget_id, surface_id);
+    return 0;
 }
 
-bool ChildProcessHost::SetProcessInfo(
-    int32_t channel_id,
-    const std::vector<std::string>& commands,
-    const std::vector<std::pair<int, int>>& fds)
+int IpcHelper::SetClientSurfaceBounds(int32_t client_widget_id, int32_t off_x,
+                                      int32_t off_y, int32_t width,
+                                      int32_t height)
 {
-    auto* channel = manager_->GetChannel(channel_id);
-    if (!channel) return false;
-    ChildProcessProxy proxy(*channel);
-    return proxy.SetProcessInfo(commands, fds) == 0;
+    ::SetClientSurfaceBounds(client_widget_id, off_x, off_y, width, height);
+    return 0;
 }
 
-bool ChildProcessHost::SetWindowInfo(int32_t channel_id,
-                                      int32_t widget_id,
-                                      const WindowAttr& attr)
+int IpcHelper::DestroyClientSurface(int32_t client_widget_id)
 {
-    auto* channel = manager_->GetChannel(channel_id);
-    if (!channel) return false;
-    ChildProcessProxy proxy(*channel);
-    return proxy.SetWindowInfo(widget_id, attr) == 0;
+    ::DestroyClientSurface(client_widget_id);
+    return 0;
 }
 
-bool ChildProcessHost::SendInputEvent(int32_t channel_id,
-                                       const std::vector<int8_t>& event_data)
+/* ── owner 侧 GDI 共享 ─────────────────────────────────────────────── */
+
+static RemoteGdiOverlayCallback g_overlay_callback = nullptr;
+
+void SetRemoteGdiOverlayCallback(RemoteGdiOverlayCallback fn)
 {
-    auto* channel = manager_->GetChannel(channel_id);
-    if (!channel) return false;
-    ChildProcessProxy proxy(*channel);
-    return proxy.SendInputEvent(event_data) == 0;
+    g_overlay_callback = fn;
 }
 
-void ChildProcessHost::CloseAll()
+/* overlay 注册表：id -> {param, mmap}。adapter 持有映射生命周期，
+ * 合成 blit 经回调进 wine（wine 侧自己的线程与锁模型） */
+struct RemoteGdiOverlay {
+    RemoteGdiParam param;
+    void* pixels = nullptr;
+    size_t map_size = 0;
+};
+/* 跨进程窗口重建共享面时的过渡 overlay（僵尸态）：销毁请求不立即
+ * REMOVE/unmap，保留至多 ZOMBIE_GRACE_MS 等待替换 attach——
+ * 1) 规避销毁→重建间隙（~30ms）内宿主合成丢 overlay 的白闪；
+ * 2) 新 attach 到达时直接从僵尸映射把末帧拉伸预填进新 buffer，
+ *    消除重建到子进程首帧之间的空白。窗口真实关闭时表现为末帧
+ *    短暂残留（类关闭动画），到期由清扫线程回收 */
+struct RemoteGdiZombie {
+    RemoteGdiParam param;
+    void* pixels = nullptr;
+    size_t map_size = 0;
+    std::chrono::steady_clock::time_point born;
+    std::chrono::steady_clock::time_point deadline;
+};
+static constexpr auto ZOMBIE_GRACE_MS = std::chrono::milliseconds(100);
+static Mutex g_overlay_mutex;
+static std::unordered_map<int32_t, RemoteGdiOverlay> g_overlays;
+static std::unordered_map<int32_t, RemoteGdiZombie> g_overlay_zombies;
+
+/* 最近邻拉伸预填（32bpp 行对齐缓冲；尺寸一致时退化为原样拷贝） */
+static void PrefillRemoteGdi(const RemoteGdiParam& src_param,
+                             const void* src_bits,
+                             const RemoteGdiParam& dst_param, void* dst_bits)
 {
-    manager_->CloseAll();
+    int src_w = src_param.width, src_h = src_param.height;
+    int dst_w = dst_param.width, dst_h = dst_param.height;
+    if (src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
+    if (src_param.stride % 4 || dst_param.stride % 4) return;
+    const uint32_t* src = static_cast<const uint32_t*>(src_bits);
+    uint32_t* dst = static_cast<uint32_t*>(dst_bits);
+    for (int y = 0; y < dst_h; y++) {
+        const uint32_t* srow =
+            src + (static_cast<size_t>(y) * src_h / dst_h) *
+                      (src_param.stride / 4);
+        uint32_t* drow =
+            dst + static_cast<size_t>(y) * (dst_param.stride / 4);
+        for (int x = 0; x < dst_w; x++) {
+            drow[x] = srow[static_cast<size_t>(x) * src_w / dst_w];
+        }
+    }
+}
+
+/* 僵尸到期回收：先 REMOVE（wine 侧表项失效）再 unmap，顺序不可颠倒 */
+static void SweepOverlayZombies()
+{
+    std::this_thread::sleep_for(ZOMBIE_GRACE_MS);
+    std::vector<std::pair<int32_t, std::pair<void*, size_t>>> expired;
+    {
+        MutexLock lock(g_overlay_mutex);
+        auto now = std::chrono::steady_clock::now();
+        for (auto it = g_overlay_zombies.begin();
+             it != g_overlay_zombies.end();) {
+            if (now >= it->second.deadline) {
+                expired.emplace_back(it->first, std::make_pair(
+                                                    it->second.pixels,
+                                                    it->second.map_size));
+                it = g_overlay_zombies.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    for (auto& e : expired) {
+        if (g_overlay_callback) {
+            g_overlay_callback(RemoteGdiOp::REMOVE, e.first, nullptr,
+                               nullptr);
+        }
+        if (e.second.first) munmap(e.second.first, e.second.second);
+        LOGI("SweepOverlayZombies expired id=%{public}d", e.first);
+    }
+}
+
+int IpcHelper::AttachRemoteGdi(RemoteGdiParam& param, int fd)
+{
+    if (fd < 0 || param.width <= 0 || param.height <= 0 || param.stride <= 0) {
+        LOGE("IpcHelper::AttachRemoteGdi invalid param or fd");
+        return -1;
+    }
+    size_t size = static_cast<size_t>(param.stride) * param.height;
+    /* PROT_WRITE 仅为预填旧帧；子进程 attach 返回后才开始绘制，无竞争 */
+    void* pixels = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (pixels == MAP_FAILED) {
+        LOGE("IpcHelper::AttachRemoteGdi mmap failed, errno=%{public}d",
+             errno);
+        return -1;
+    }
+    close(fd);
+
+    /* 共享面 id 由 owner 分配（跨进程唯一：发起方各自带 pid，但 overlay
+     * 表在本进程键控，自增即可） */
+    static std::atomic<int32_t> next_overlay_id{1};
+    if (param.client_widget_id <= 0) {
+        param.client_widget_id = next_overlay_id++;
+    }
+
+    /* 同 parent 下最新僵尸的末帧预填 + 替换回收（多子窗口同 parent 时
+     * 取最新，误配最多一帧，子进程首帧即覆盖） */
+    RemoteGdiZombie zombie{};
+    bool replace = false;
+    {
+        MutexLock lock(g_overlay_mutex);
+        g_overlays[param.client_widget_id] = {param, pixels, size};
+        auto zit = g_overlay_zombies.begin();
+        auto best = g_overlay_zombies.end();
+        while (zit != g_overlay_zombies.end()) {
+            if (zit->second.param.parent_widget_id ==
+                    param.parent_widget_id &&
+                zit->first != param.client_widget_id &&
+                (best == g_overlay_zombies.end() ||
+                 zit->second.born > best->second.born)) {
+                best = zit;
+            }
+            ++zit;
+        }
+        if (best != g_overlay_zombies.end()) {
+            PrefillRemoteGdi(best->second.param, best->second.pixels, param,
+                             pixels);
+            zombie = best->second;
+            g_overlay_zombies.erase(best);
+            replace = true;
+        }
+    }
+    if (g_overlay_callback) {
+        g_overlay_callback(RemoteGdiOp::ADD, param.client_widget_id, &param,
+                           pixels);
+    }
+    if (replace) {
+        /* ADD 之后 REMOVE：wine 侧表项无缝替换 */
+        if (g_overlay_callback) {
+            g_overlay_callback(RemoteGdiOp::REMOVE, zombie.param.client_widget_id,
+                               nullptr, nullptr);
+        }
+        if (zombie.pixels) munmap(zombie.pixels, zombie.map_size);
+        LOGI("IpcHelper::AttachRemoteGdi replaced zombie id=%{public}d",
+             zombie.param.client_widget_id);
+    }
+    LOGI("IpcHelper::AttachRemoteGdi id=%{public}d, parent=%{public}d, "
+         "%{public}dx%{public}d", param.client_widget_id,
+         param.parent_widget_id, param.width, param.height);
+    return 0;
+}
+
+int IpcHelper::RemoteGdiFlush(int32_t client_widget_id, int32_t x, int32_t y,
+                              int32_t w, int32_t h)
+{
+    RemoteGdiParam param;
+    void* pixels = nullptr;
+    {
+        MutexLock lock(g_overlay_mutex);
+        auto it = g_overlays.find(client_widget_id);
+        if (it == g_overlays.end()) return -1;
+        param = it->second.param;
+        pixels = it->second.pixels;
+    }
+
+    if (g_overlay_callback) {
+        /* dirty rect 经 param 的几何字段传递 */
+        param.off_x = x;
+        param.off_y = y;
+        param.width = w;
+        param.height = h;
+        g_overlay_callback(RemoteGdiOp::BLIT, client_widget_id, &param,
+                           pixels);
+    }
+    return 0;
+}
+
+int IpcHelper::DestroyRemoteGdi(int32_t client_widget_id)
+{
+    {
+        MutexLock lock(g_overlay_mutex);
+        auto it = g_overlays.find(client_widget_id);
+        if (it == g_overlays.end()) return 0;
+        auto now = std::chrono::steady_clock::now();
+        g_overlay_zombies[client_widget_id] = {it->second.param,
+                                               it->second.pixels,
+                                               it->second.map_size, now,
+                                               now + ZOMBIE_GRACE_MS};
+        g_overlays.erase(it);
+    }
+    /* 不立即 REMOVE/unmap：等待替换 attach 预填回收，或到期清扫 */
+    std::thread(SweepOverlayZombies).detach();
+    LOGI("IpcHelper::DestroyRemoteGdi id=%{public}d (zombie)", client_widget_id);
+    return 0;
+}
+
+int IpcHelper::UpdateRemoteGdiBounds(int32_t client_widget_id,
+                                     int32_t off_x, int32_t off_y)
+{
+    RemoteGdiParam param;
+    {
+        MutexLock lock(g_overlay_mutex);
+        auto it = g_overlays.find(client_widget_id);
+        if (it == g_overlays.end()) return -1;
+        it->second.param.off_x = off_x;
+        it->second.param.off_y = off_y;
+        param = it->second.param;
+    }
+    /* 同步 wineohos 侧 overlay 表（op=UPDATE，仅 off 生效） */
+    if (g_overlay_callback) {
+        g_overlay_callback(RemoteGdiOp::UPDATE, client_widget_id, &param,
+                           nullptr);
+    }
+    LOGI("IpcHelper::UpdateRemoteGdiBounds id=%{public}d off=(%{public}d,"
+         "%{public}d)", client_widget_id, off_x, off_y);
+    return 0;
 }
 
 }  // namespace ohos::adapter::new_ipc

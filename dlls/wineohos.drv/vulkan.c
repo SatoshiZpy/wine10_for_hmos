@@ -86,11 +86,10 @@ static VkResult ohos_vulkan_surface_create(HWND hwnd, const struct vulkan_instan
     if (!(surface = ohos_client_surface_create(hwnd, TRUE)))
         return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-    /* Get OHNativeWindow
-     * Note: GetNativeWindow is provided through ohos_adapter.h
-     * Need to get native window from widget_id
-     */
-    native_window = GetNativeWindow(surface->widget_id);
+    /* Get OHNativeWindow: the imported producer for a cross-process child,
+     * the local XComponent window otherwise */
+    native_window = surface->native_window ? surface->native_window
+                                           : GetNativeWindow(surface->widget_id);
     if (!native_window)
     {
         ERR("Failed to get native window for widget_id %d\n", surface->widget_id);
