@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <cinttypes>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <unistd.h>
@@ -46,6 +47,7 @@
 #include "ohos/adapter/print/ohos_print_adapter.h"
 #include "ohos/adapter/screen/screen_adapter.h"
 #include "ohos/adapter/screenlock_monitor/screenlock_monitor_adapter.h"
+#include "ohos/adapter/screenshot/screenshot_adapter.h"
 #include "ohos/adapter/window/window_common.h"
 #include "ohos/adapter/window/wine_window_manager.h"
 #include "ohos/adapter/xcomponent/adapter/window_adapter.h"
@@ -748,6 +750,76 @@ int GetSystemDpi()
 float GetDensityPixels()
 {
     return ScreenAdapter::GetInstance().GetDensityPixels();
+}
+
+int CaptureScreen(struct screenshot_frame *frame)
+{
+    if (!frame) return -1;
+    frame->width = 0;
+    frame->height = 0;
+    frame->stride = 0;
+    frame->size = 0;
+    frame->data = nullptr;
+
+    auto desktop = ScreenshotAdapter::GetInstance().StartCapture();
+    if (!desktop || !desktop->data() ||
+        desktop->size().width() <= 0 || desktop->size().height() <= 0) {
+        LOGE("CaptureScreen: no frame captured");
+        return -1;
+    }
+
+    int32_t width = desktop->size().width();
+    int32_t height = desktop->size().height();
+    int32_t src_stride = desktop->stride();
+    int32_t dst_stride = width * 4;
+    int64_t size = static_cast<int64_t>(dst_stride) * height;
+
+    uint8_t *dst = static_cast<uint8_t*>(malloc(static_cast<size_t>(size)));
+    if (!dst) {
+        LOGE("CaptureScreen: out of memory");
+        return -1;
+    }
+
+    /* Normalize to BGRA_8888, which is what a 32bpp BI_RGB DIB expects.
+     * image.PixelMapFormat: RGBA_8888 = 3, BGRA_8888 = 4. */
+    const int32_t format = desktop->format();
+    if (format != 3 /* RGBA_8888 */ && format != 4 /* BGRA_8888 */) {
+        LOGE("CaptureScreen: unsupported pixel format %d", format);
+        free(dst);
+        return -1;
+    }
+    const bool src_bgra = (format == 4 /* BGRA_8888 */);
+    const uint8_t *src = desktop->data();
+    for (int32_t y = 0; y < height; ++y) {
+        const uint8_t *s = src + static_cast<size_t>(y) * src_stride;
+        uint8_t *d = dst + static_cast<size_t>(y) * dst_stride;
+        if (src_bgra) {
+            memcpy(d, s, static_cast<size_t>(width) * 4);
+            for (int32_t x = 0; x < width; ++x) d[x * 4 + 3] = 0xff;
+        } else {
+            for (int32_t x = 0; x < width; ++x, s += 4, d += 4) {
+                d[0] = s[2];  /* B */
+                d[1] = s[1];  /* G */
+                d[2] = s[0];  /* R */
+                d[3] = 0xff;  /* A */
+            }
+        }
+    }
+
+    frame->width = width;
+    frame->height = height;
+    frame->stride = dst_stride;
+    frame->size = size;
+    frame->data = dst;
+    return 0;
+}
+
+void ReleaseScreenFrame(struct screenshot_frame *frame)
+{
+    if (!frame) return;
+    free(frame->data);
+    frame->data = nullptr;
+    frame->size = 0;
 }
 
 int GetGlobalDescriptor(int key)

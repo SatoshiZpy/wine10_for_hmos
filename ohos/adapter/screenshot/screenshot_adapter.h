@@ -21,13 +21,21 @@ struct DesktopSize {
 };
 
 struct DesktopFrame {
+  DesktopFrame() = default;
+  ~DesktopFrame();
+
+  DesktopFrame(const DesktopFrame&) = delete;
+  DesktopFrame& operator=(const DesktopFrame&) = delete;
+
   DesktopSize size() const { return size_; }
   int stride() const { return stride_; }
+  int format() const { return format_; }  /* image.PixelMapFormat of the pixels */
   uint8_t* data() const { return data_; }
 
   DesktopSize size_;
-  int stride_;
-  uint8_t* data_;
+  int stride_ = 0;
+  int format_ = 0;
+  uint8_t* data_ = nullptr;
 };
 
 class ADAPTER_EXPORT_API ScreenshotAdapter {

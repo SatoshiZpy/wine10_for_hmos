@@ -135,6 +135,24 @@ ADAPTER_API struct window_bounds GetDisplayAvailArea(void);
 ADAPTER_API int GetSystemDpi(void);
 ADAPTER_API float GetDensityPixels(void);
 
+/* screenshot
+ *
+ * CaptureScreen() fills *frame with a full-screen image normalized to
+ * BGRA_8888, top-down, tightly packed (stride == width * 4).  The returned
+ * buffer is owned by the caller and must be released with
+ * ReleaseScreenFrame().  Returns 0 on success, negative on failure.
+ */
+struct screenshot_frame {
+    int32_t width;
+    int32_t height;
+    int32_t stride;     /* bytes per row */
+    int64_t size;       /* total bytes in data */
+    void   *data;
+};
+
+ADAPTER_API int CaptureScreen(struct screenshot_frame *frame);
+ADAPTER_API void ReleaseScreenFrame(struct screenshot_frame *frame);
+
 /* event */
 ADAPTER_API void RegisterInputEventCallBack(input_event_callback callback);
 ADAPTER_API void RegisterWindowEventCallBack(input_event_callback callback);

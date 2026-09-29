@@ -36,6 +36,7 @@ static int device_init_done;
 typedef struct
 {
     struct gdi_physdev dev;
+    RECT               dc_rect;   /* device rect in virtual screen coords */
 } OHOS_PDEVICE;
 
 static inline OHOS_PDEVICE *get_ohosdrv_dev(PHYSDEV dev)
@@ -193,6 +194,7 @@ static OHOS_PDEVICE *create_ohos_physdev(void)
     if (!device_init_done) device_init();
 
     if (!(physdev = calloc( 1, sizeof(*physdev) ))) return NULL;
+    physdev->dc_rect = virtual_screen_rect;
     return physdev;
 }
 
@@ -239,6 +241,113 @@ static BOOL OHOS_DeleteDC( PHYSDEV dev )
 
     free( physDev );
     return TRUE;
+}
+
+/**********************************************************************
+ *           free_screen_bits
+ */
+static void free_screen_bits( struct gdi_image_bits *bits )
+{
+    free( bits->ptr );
+}
+
+/**********************************************************************
+ *           OHOS_GetImage
+ *
+ * Read pixels back from a device.  Only the screen (display) DC covers the
+ * whole virtual screen, so its pixels come from a full-screen capture
+ * performed by the OHOS ScreenshotAdapter.  This is what makes GDI screen
+ * capture work for Windows applications such as the WeChat/QQ screenshot
+ * tool (BitBlt from the screen DC, PrintWindow, ...).
+ *
+ * Window and memory DCs have a real DIB/surface instead and are read back
+ * through the DIB engine: delegating them here is required, otherwise e.g.
+ * a screenshot tool cropping its own captured bitmap would get a fresh
+ * screen capture instead of the captured pixels.
+ */
+static DWORD OHOS_GetImage( PHYSDEV dev, BITMAPINFO *info, struct gdi_image_bits *bits,
+                            struct bitblt_coords *src )
+{
+    OHOS_PDEVICE *physdev = get_ohosdrv_dev( dev );
+    struct screenshot_frame frame;
+    int x, y, width, height, stride, row;
+    unsigned char *dst;
+
+    /* The screen DC is the desktop window's DC (GetDC(NULL)). */
+    if (NtUserWindowFromDC( physdev->dev.hdc ) != NtUserGetDesktopWindow())
+    {
+        dev = GET_NEXT_PHYSDEV( dev, pGetImage );
+        return dev->funcs->pGetImage( dev, info, bits, src );
+    }
+
+    /* We always hand out a 32bpp top-down BI_RGB (BGRA) DIB. */
+    info->bmiHeader.biSize          = sizeof(info->bmiHeader);
+    info->bmiHeader.biWidth         = 0;
+    info->bmiHeader.biHeight        = 0;
+    info->bmiHeader.biPlanes        = 1;
+    info->bmiHeader.biBitCount      = 32;
+    info->bmiHeader.biCompression   = BI_RGB;
+    info->bmiHeader.biSizeImage     = 0;
+    info->bmiHeader.biXPelsPerMeter = 0;
+    info->bmiHeader.biYPelsPerMeter = 0;
+    info->bmiHeader.biClrUsed       = 0;
+    info->bmiHeader.biClrImportant  = 0;
+
+    if (!bits) return ERROR_SUCCESS;  /* only querying the format */
+
+    x      = src->visrect.left   - physdev->dc_rect.left;
+    y      = src->visrect.top    - physdev->dc_rect.top;
+    width  = src->visrect.right  - src->visrect.left;
+    height = src->visrect.bottom - src->visrect.top;
+    if (width <= 0 || height <= 0) return ERROR_INVALID_PARAMETER;
+
+    if (CaptureScreen( &frame ) != 0 || !frame.data)
+    {
+        WARN( "screen capture failed\n" );
+        return ERROR_NOT_SUPPORTED;
+    }
+
+    /* clip the requested rectangle to the captured screen */
+    if (x < 0) { width += x; x = 0; }
+    if (y < 0) { height += y; y = 0; }
+    if (x + width  > frame.width)  width  = frame.width  - x;
+    if (y + height > frame.height) height = frame.height - y;
+    if (width <= 0 || height <= 0)
+    {
+        ReleaseScreenFrame( &frame );
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    stride = width * 4;
+    if (!(dst = malloc( (size_t)stride * height )))
+    {
+        ReleaseScreenFrame( &frame );
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    for (row = 0; row < height; row++)
+        memcpy( dst + (size_t)row * stride,
+                (unsigned char *)frame.data + (size_t)(y + row) * frame.stride + (size_t)x * 4,
+                stride );
+
+    ReleaseScreenFrame( &frame );
+
+    info->bmiHeader.biWidth     = width;
+    info->bmiHeader.biHeight    = -height;  /* top-down */
+    info->bmiHeader.biSizeImage = stride * height;
+
+    src->x = 0;
+    src->y = 0;
+    src->visrect.left   = 0;
+    src->visrect.top    = 0;
+    src->visrect.right  = width;
+    src->visrect.bottom = height;
+
+    bits->ptr     = dst;
+    bits->is_copy = TRUE;
+    bits->free    = free_screen_bits;
+    bits->param   = NULL;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -292,6 +401,7 @@ static const struct user_driver_funcs ohos_drv_funcs =
     .dc_funcs.pCreateCompatibleDC = OHOS_CreateCompatibleDC,
     .dc_funcs.pCreateDC = OHOS_CreateDC,
     .dc_funcs.pDeleteDC = OHOS_DeleteDC,
+    .dc_funcs.pGetImage = OHOS_GetImage,
     .dc_funcs.priority = GDI_PRIORITY_GRAPHICS_DRV,
 
     .pSetCursor = OHOS_SetCursor,
