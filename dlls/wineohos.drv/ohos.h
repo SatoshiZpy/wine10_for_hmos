@@ -32,7 +32,7 @@ struct ohos_win_data
     unsigned int        pending_change;
     unsigned int        pending_configure;  /* Wine-initiated size change, awaiting OS confirmation */
     DWORD               pending_configure_time; /* tick when pending_configure was set */
-    unsigned int        vulkan_active;  /* is Vulkan surface attached? Skip GDI flush if true */
+    unsigned int        vulkan_active;  /* is a Vulkan client surface attached? (informational; GDI flush stays unclipped) */
     RECT                pending_rect;       /* Wine-initiated target rect */
     int                 buffer_width;       /* current buffer width */
     int                 buffer_height;      /* current buffer height */
@@ -41,9 +41,10 @@ struct ohos_win_data
     BOOL                os_rect_pending;    /* whether OS rect change is pending */
     unsigned int        has_shown;          /* is window has already called show(), Only shown windows can request surface */
     DWORD               last_resize_time;   /* tick of last window size change, used to hold frames during live resize */
-    unsigned int        refresh_pending;    /* 持帧期间已挂起 WM_OHOS_REFRESH 补刷 */
-    unsigned int        remote_gdi_recreate_pending; /* 连续 resize 期间推迟的共享面重建 */
-    RECT                remote_gdi_pending_rect;     /* settle 重建共享面所用的 surface 矩形 */
+    unsigned int        refresh_pending;    /* WM_OHOS_REFRESH reflush armed during a resize hold */
+    unsigned int        remote_gdi_recreate_pending; /* shared-surface rebuild deferred across a resize burst */
+    RECT                remote_gdi_pending_rect;     /* surface rect to rebuild the shared surface with on settle */
+    BOOL                remote_gdi_visible;          /* current overlay visibility (tab switching etc.) */
 };
 
 /* identity of a native (OHOS) window stored as a window property on the
@@ -53,14 +54,15 @@ struct ohos_win_data
 extern const WCHAR ohos_window_id_prop[];
 struct ohos_window_identity { int owner_pid; int widget_id; };
 
-/* 按 widget id 找本进程的宿主 toplevel 窗口（overlay 通知侧使用） */
+/* Find this process's host toplevel window by widget id (overlay notification side). */
 extern HWND ohos_find_toplevel_by_widget_id( int widget_id );
-/* 唤醒页面 owner 合成：owner 的合成只发生在其自身 GDI flush 中，
- * 子进程共享面有新内容（BLIT/UPDATE）时宿主往往不会自行重绘，
- * 需向其投递 WM_OHOS_REFRESH 触发 expose 重刷。仅可在 wine 线程
- * （桌面/窗口线程）调用——NtUserPostMessage 需要合法 TEB；IPC 线程
- * 须经 send_event(OVERLAY_DIRTY_EVENT) 转交桌面线程。内部含
- * refresh_pending 去重。 */
+/* Wake the page owner for compositing: the owner only composites inside its
+ * own GDI flush, and when a child's shared surface gets new content
+ * (BLIT/UPDATE) the host usually does not repaint on its own, so post it a
+ * WM_OHOS_REFRESH to trigger an expose and a refresh.  Call only from a wine
+ * thread (desktop/window thread) -- NtUserPostMessage needs a valid TEB; the
+ * IPC thread must hand over via send_event(OVERLAY_DIRTY_EVENT) to the
+ * desktop thread.  Deduplicates through refresh_pending. */
 extern void ohos_wake_page_composite( int parent_widget_id );
 
 struct ohos_client_surface
@@ -86,6 +88,18 @@ extern void ohos_destroy_remote_gdi_surface( HWND hwnd );
 
 /* remote GDI shared-surface management (device.c): pixels live in an
  * ashmem buffer shared with the page owner, which composites them */
+
+/* op codes of the overlay notify callback (mirrors the producer side in
+ * wine-adapter new_ipc) */
+enum remote_gdi_op
+{
+    REMOTE_GDI_OP_ADD     = 0,  /* overlay registered */
+    REMOTE_GDI_OP_BLIT    = 1,  /* new frame in the shared buffer */
+    REMOTE_GDI_OP_REMOVE  = 2,  /* overlay unregistered */
+    REMOTE_GDI_OP_UPDATE  = 3,  /* position-only change */
+    REMOTE_GDI_OP_VISIBLE = 4,  /* visibility change (off_x carries 0/1) */
+};
+
 extern BOOL has_remote_gdi_producer( HWND hwnd );
 extern int host_gdi_widget_id( HWND hwnd );
 extern int attach_remote_gdi_producer( HWND hwnd, void *pixels, int width,
@@ -93,6 +107,10 @@ extern int attach_remote_gdi_producer( HWND hwnd, void *pixels, int width,
                                        int scale_num, int scale_den );
 extern int get_remote_gdi_info( HWND hwnd, int *shared_id,
                                 int *scale_num, int *scale_den );
+/* Fetch the logical->raw scale; the shared surface need not be attached (the
+ * last attach's value survives detach: a deferred rebuild of a hidden window
+ * has no raw surface rect to work from). */
+extern int get_remote_gdi_scale( HWND hwnd, int *scale_num, int *scale_den );
 extern BOOL detach_remote_gdi_producer( HWND hwnd, int *shared_id );
 extern void wineohos_register_gdi_overlay(void);
 
@@ -177,7 +195,7 @@ enum event_type
     IME_EVENT,
     SCREENLOCK_EVENT,
     WINDOW_FOCUS_EVENT,
-    OVERLAY_DIRTY_EVENT,   /* 子进程共享面新内容，唤醒 owner 合成（驱动内部产生） */
+    OVERLAY_DIRTY_EVENT,   /* new content on a child's shared surface: wake the owner to composite (driver-internal) */
 };
 
 struct ime_data

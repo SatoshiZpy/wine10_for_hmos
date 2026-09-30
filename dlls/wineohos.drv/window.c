@@ -129,8 +129,9 @@ void release_win_data( struct ohos_win_data *data )
 /***********************************************************************
  *           ohos_find_toplevel_by_widget_id
  *
- * 按 OHOS widget id 反查本进程的 toplevel 窗口（overlay 通知只在
- * IPC 线程拿到 parent_widget_id，需要换成 wine hwnd 才能投递消息）。
+ * Reverse-lookup this process's toplevel window by OHOS widget id (overlay
+ * notifications only carry the parent_widget_id on the IPC thread; it must be
+ * turned into a wine hwnd before a message can be posted).
  */
 HWND ohos_find_toplevel_by_widget_id( int widget_id )
 {
@@ -156,10 +157,11 @@ HWND ohos_find_toplevel_by_widget_id( int widget_id )
 /***********************************************************************
  *           ohos_wake_page_composite
  *
- * 子进程共享面有新内容（BLIT）或位置更新（UPDATE）时唤醒页面 owner：
- * owner 的 overlay 合成只发生在其自身 GDI flush（queue_buffer_locked
- * → blit_overlays_into）中，而宿主窗口在稳态下不会自行重绘，需要
- * 投递 WM_OHOS_REFRESH 触发 expose 把最新 overlay 叠进帧里。
+ * Wake the page owner when a child's shared surface has new content (BLIT)
+ * or a position update (UPDATE): the owner's overlay compositing only happens
+ * inside its own GDI flush (queue_buffer_locked -> blit_overlays_into), and in
+ * the steady state the host window does not repaint on its own, so post
+ * WM_OHOS_REFRESH to trigger an expose and blend the latest overlays in.
  */
 void ohos_wake_page_composite( int parent_widget_id )
 {
@@ -321,10 +323,11 @@ static BOOL ohos_window_size_change_notify( HWND hwnd, const RECT *rect, int rea
             release_win_data( data );
             return FALSE;
         }
-        /* 超时仍未等到匹配确认（如 wine 发起的尺寸变化被 compositor 舍入
-         * 1px，确认事件永不相等）：接受该 OS 事件并清除 pending，否则
-         * 后续所有用户拖拽/缩放被永久丢弃，宿主 surface 与真实窗口错位
-         * 导致白屏。 */
+        /* The match never arrives (e.g. a wine-initiated size change rounded
+         * by the compositor by 1px makes every confirmation differ): accept
+         * the OS event and clear the pending, or every later user drag/resize
+         * would be dropped forever and the host surface would end up misaligned
+         * with the real window (white screen). */
         TRACE( "hwnd %p: pending %s unmatched for %ums, accepting OS rect %s\n",
                hwnd, wine_dbgstr_rect(&data->pending_rect), age, wine_dbgstr_rect(rect) );
         data->pending_configure = FALSE;
@@ -629,8 +632,26 @@ static int process_events( DWORD mask )
             GUITHREADINFO info;
             info.cbSize = sizeof(info);
             HWND focused_hwnd = NtUserGetGUIThreadInfo(GetCurrentThreadId(), &info) ? info.hwndFocus : 0;
+            struct ohos_win_data *focus_data = get_win_data( hwnd );
+            BOOL embedded = focus_data && focus_data->widget_id <= 0;
 
             TRACE("WINDOW_FOCUS_EVENT: hwnd=%p, gained=%d, current_focus=%p\n", hwnd, gained, focused_hwnd);
+
+            /* Release the lock before SetFocus: the activation path can
+             * synchronously enter OHOS_WindowPosChanged and take win_data
+             * again (the mutex is not recursive). */
+            if (focus_data) release_win_data( focus_data );
+
+            if (embedded)
+            {
+                /* An embedded cross-process child (no local OHOS window of its
+                 * own) must not grab focus/activation: focus belongs to the
+                 * host page (input is routed by position).  Activating the
+                 * child through SetFocus would pull OHOS focus away from the
+                 * host and grey its title bar for good. */
+                TRACE("focus event for embedded child %p ignored\n", hwnd);
+                break;
+            }
 
             if (gained) {
                 HWND root = NtUserGetAncestor(hwnd, GA_ROOT);
@@ -644,8 +665,9 @@ static int process_events( DWORD mask )
             break;
         }
         case OVERLAY_DIRTY_EVENT:
-            /* 子进程共享面有新内容：唤醒页面 owner 补刷合成（此处为
-             * 桌面线程，调用 win32u 接口合法） */
+            /* A child's shared surface has new content: wake the page owner
+             * for a composite refresh (we are on the desktop thread here, so
+             * calling win32u entry points is legal). */
             TRACE("OVERLAY_DIRTY_EVENT page %d\n", event->data.overlay_dirty.parent_widget_id);
             ohos_wake_page_composite( event->data.overlay_dirty.parent_widget_id );
             break;
@@ -765,9 +787,11 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
             if (data->last_resize_time &&
                 NtGetTickCount() - data->last_resize_time < RESIZE_HOLD_MS)
             {
-                /* 持帧期间挂一次补刷：拖拽结束后由 WM_OHOS_REFRESH 把
-                 * 最后一帧 DIB 重新提交（否则最后一帧被永久丢弃，宿主
-                 * 内容停在旧帧、子窗口共享面停留在全零缓冲——空白） */
+                /* Arm a single reflush during the hold: after the drag ends,
+                 * WM_OHOS_REFRESH resubmits the last frame DIB (otherwise the
+                 * last frame is dropped for good -- the host content sticks to
+                 * the previous frame and the child shared surface stays at an
+                 * all-zero buffer, i.e. blank). */
                 if (!data->refresh_pending)
                 {
                     data->refresh_pending = TRUE;
@@ -822,8 +846,9 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         }
 
         BufferHandle *buffer_handle = buffer.buffer_handle;
-        /* 跨进程共享面是虚拟 buffer：无 BufferHandle，但 pixels 已直映射
-         * （dequeueBuffer 的 shared 分支填好 mapped_addr），直接可用 */
+        /* A cross-process shared surface is a virtual buffer: no BufferHandle,
+         * but the pixels are directly mapped (the shared branch of
+         * dequeueBuffer fills in mapped_addr), so it is usable as is. */
         if (!buffer_handle && !buffer.mapped_addr) {
             ERR("failed to get buffer handle\n");
             return FALSE;
@@ -1501,13 +1526,14 @@ static BOOL get_remote_bounds( HWND hwnd, HWND toplevel, BOOL client, RECT *boun
 
 /* GDI layer of a cross-process child: the window pixels live in an
  * ashmem buffer shared with the page owner process, which composites
- * them into its own GDI surface（owner 页面不建 XComponent，owner 进程
- * 即合成方）.  Idempotent.
+ * them into its own GDI surface (the owner page creates no XComponent;
+ * the owner process is the compositor).  Idempotent.
  *
- * surface_rect 是 win32u 侧 driver surface 的矩形（monitor raw DPI 且
- * 128 对齐）——共享面尺寸与偏移必须用同一坐标系：宿主侧合成发生在
- * raw 像素的 native buffer 上，logical（96-DPI）尺寸会差一个 DPI 因子
- * （内容被裁、盖住标题栏）。 */
+ * surface_rect is the driver surface rect on the win32u side (monitor raw
+ * DPI, 128-aligned) -- the shared surface size and offset must use the same
+ * coordinate system: host-side compositing happens on the raw-pixel native
+ * buffer, and logical (96-DPI) dimensions would be off by the DPI factor
+ * (content clipped, covering the caption). */
 BOOL ohos_create_remote_gdi_surface( struct ohos_win_data *data, const RECT *surface_rect )
 {
     struct ohos_window_identity id = ohos_get_foreign_toplevel( data->hwnd );
@@ -1525,8 +1551,9 @@ BOOL ohos_create_remote_gdi_surface( struct ohos_win_data *data, const RECT *sur
     {
         int lw = bounds.right - bounds.left;
         int lh = bounds.bottom - bounds.top;
-        /* scale = raw / logical：surface_rect 是 win32u 的 monitor raw 尺寸
-         * （logical surface 先 128 对齐再乘 DPI），据此反推换算比 */
+        /* scale = raw / logical: surface_rect is win32u's raw monitor size
+         * (the logical surface is 128-aligned, then multiplied by DPI); derive
+         * the ratio from it. */
         int align_w = (lw + 127) & ~127;
         int align_h = (lh + 127) & ~127;
         int surface_w = surface_rect->right - surface_rect->left;
@@ -1535,11 +1562,17 @@ BOOL ohos_create_remote_gdi_surface( struct ohos_win_data *data, const RECT *sur
 
         if (align_w > 0 && align_h > 0 && surface_w > 0 && surface_h > 0)
         {
-            /* 取宽高两方向一致的近似比例（DPI 缩放两轴相同） */
+            /* Approximate the ratio with a single value consistent across
+             * both axes (DPI scaling is isotropic). */
             scale_num = surface_w;
             scale_den = align_w;
         }
-        /* 实际可见区 raw 尺寸（不含 128 对齐 padding，白边即由此而来） */
+        else if (get_remote_gdi_scale( data->hwnd, &scale_num, &scale_den ) != 0)
+        {
+            scale_num = scale_den = 1;
+        }
+        /* Raw size of the actually visible area (128-alignment padding
+         * excluded; that padding is where the white border came from). */
         param.width = lw * scale_num / scale_den;
         param.height = lh * scale_num / scale_den;
         param.off_x = bounds.left * scale_num / scale_den;
@@ -1549,11 +1582,22 @@ BOOL ohos_create_remote_gdi_surface( struct ohos_win_data *data, const RECT *sur
     }
     else
     {
-        param.off_x = bounds.left;
-        param.off_y = bounds.top;
-        param.width = bounds.right - bounds.left;
-        param.height = bounds.bottom - bounds.top;
-        param.scale_num = param.scale_den = 1;
+        int scale_num = 1, scale_den = 1;
+        if (get_remote_gdi_scale( data->hwnd, &scale_num, &scale_den ) != 0)
+        {
+            /* No surface_rect: a deferred rebuild of a hidden window (the
+             * surface is NULL in WindowPosChanged and pending_rect is empty)
+             * cannot derive the raw rect -- fall back to the scale of the
+             * last attach (it survives detach) instead of degrading to 1:1,
+             * which would produce a half-size overlay. */
+            scale_num = scale_den = 1;
+        }
+        param.off_x = bounds.left * scale_num / scale_den;
+        param.off_y = bounds.top * scale_num / scale_den;
+        param.width = (bounds.right - bounds.left) * scale_num / scale_den;
+        param.height = (bounds.bottom - bounds.top) * scale_num / scale_den;
+        param.scale_num = scale_num;
+        param.scale_den = scale_den;
     }
     param.src_hwnd = HandleToLong( data->hwnd );
     param.src_pid = getpid();
@@ -1572,9 +1616,15 @@ BOOL ohos_create_remote_gdi_surface( struct ohos_win_data *data, const RECT *sur
     }
     data->buffer_width = param.width;
     data->buffer_height = param.height;
-    TRACE( "hwnd %p: shared GDI surface id %d, owner page %d, %dx%d\n",
+    /* After a (re)build the owner-side overlay defaults to visible; align it
+     * with the window's current state (rebuilt-while-hidden cases:
+     * resize-while-hidden / inactive tab). */
+    data->remote_gdi_visible = (NtUserGetWindowLongW( data->hwnd, GWL_STYLE ) & WS_VISIBLE) != 0;
+    if (!data->remote_gdi_visible)
+        SetRemoteGdiSharedSurfaceVisible( param.client_widget_id, 0 );
+    TRACE( "hwnd %p: shared GDI surface id %d, owner page %d, %dx%d visible=%d\n",
            data->hwnd, param.client_widget_id, id.widget_id,
-           param.width, param.height );
+           param.width, param.height, data->remote_gdi_visible );
     return TRUE;
 }
 
@@ -1877,10 +1927,12 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             int new_height = new_rects->visible.bottom - new_rects->visible.top;
             if (old_width != new_width || old_height != new_height)
             {
-                /* 尺寸变化：推迟到 resize settle 后重建共享面。连续拖拽
-                 * 中逐步 destroy/create 会产生全零新缓冲，而持帧把绘制
-                 * 内容全部丢弃 → 子区域空白；保留旧共享面（owner 持续
-                 * 合成拖拽前内容），settle 时重建一次并补刷。 */
+                /* Size change: defer the shared-surface rebuild to the resize
+                 * settle.  A step-by-step destroy/create during a continuous
+                 * drag yields all-zero fresh buffers while the frame hold
+                 * discards every repaint -> blank child area.  Keep the old
+                 * shared surface (the owner keeps compositing the pre-drag
+                 * content), rebuild once on settle and reflush. */
                 data->remote_gdi_recreate_pending = TRUE;
                 if (surface) data->remote_gdi_pending_rect = surface->rect;
                 else SetRect( &data->remote_gdi_pending_rect, 0, 0, 0, 0 );
@@ -1895,8 +1947,9 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             }
             else if (!EqualRect( &old_rects.window, &new_rects->window ))
             {
-                /* 位置-only 变化：轻量 bounds 更新，不重建共享面（拖拽时
-                 * 每步一次小 RPC，destroy/recreate 会卡顿且闪烁） */
+                /* Position-only change: lightweight bounds update, no shared
+                 * surface rebuild (one small RPC per drag step; a
+                 * destroy/recreate would stutter and flash). */
                 int shared_id = 0, num = 1, den = 1;
                 RECT bounds;
                 if (get_remote_gdi_info( hwnd, &shared_id, &num, &den ) == 0 &&
@@ -1922,6 +1975,26 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
                                               bounds.left, bounds.top,
                                               bounds.right - bounds.left,
                                               bounds.bottom - bounds.top );
+        }
+
+        /* Visibility change (tab switching etc.): keep the shared surface and
+         * let the owner skip/restore it while compositing; this avoids the
+         * white flash and first-frame latency of a destroy/rebuild cycle.
+         * The initial value on the rebuild path is set in
+         * ohos_create_remote_gdi_surface. */
+        if (has_remote_gdi_producer( hwnd ))
+        {
+            BOOL now_visible = (new_style & WS_VISIBLE) != 0;
+            if (now_visible != data->remote_gdi_visible)
+            {
+                int shared_id = 0, num = 1, den = 1;
+                data->remote_gdi_visible = now_visible;
+                if (get_remote_gdi_info( hwnd, &shared_id, &num, &den ) == 0 &&
+                    shared_id > 0)
+                    SetRemoteGdiSharedSurfaceVisible( shared_id, now_visible );
+                TRACE( "hwnd %p remote gdi visible -> %d (id %d)\n",
+                       hwnd, now_visible, shared_id );
+            }
         }
         goto done;
     }
@@ -1961,8 +2034,10 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             data->buffer_width = new_width;
             data->buffer_height = new_height;
             data->last_resize_time = NtGetTickCount();
-            /* settle 后补刷最终帧（非客户区在拖拽中绘入 DIB 但被持帧
-             * 丢弃；宿主应用稳态不重绘，需主动补一次） */
+            /* Reflush the final frame after settle (the non-client area was
+             * painted into the DIB during the drag but discarded by the hold;
+             * the host app does not repaint in the steady state, so push one
+             * frame explicitly). */
             if (!data->refresh_pending)
             {
                 data->refresh_pending = TRUE;
@@ -2162,7 +2237,11 @@ void OHOS_SetParent( HWND hwnd, HWND parent, HWND old_parent )
     {
         if (old_parent == NtUserGetDesktopWindow())
         {
-            /* destroy the current window's old OHOS peer */
+            /* foreign or local host: destroy the current OHOS peer either
+             * way.  A cross-process child composites into the host page
+             * through the shared GDI surface (ashmem) and imports the host
+             * page producer for its GL client surface, so no local widget
+             * of its own must survive the embed. */
             destroy_native_window(data->hwnd);
             /* Paired cleanup: destroy_native_window() only closes the native
              * widget and frees native_win_data; it does not touch ohos_win_data.
@@ -2278,13 +2357,14 @@ LRESULT OHOS_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
             if (data->last_resize_time &&
                 NtGetTickCount() - data->last_resize_time < RESIZE_HOLD_MS)
             {
-                /* 连续 resize 进行中：自循环等待 settle（每条消息仅一个
-                 * 在途，不会堆积） */
+                /* Resize burst still in progress: re-post and wait for the
+                 * settle (only one message is in flight at a time, no pile-up). */
                 release_win_data( data );
                 NtUserPostMessage( hwnd, WM_OHOS_REFRESH, 0, 0 );
                 return 0;
             }
-            /* settle：先完成被推迟的共享面重建（跨进程子窗口），再补刷 */
+            /* Settled: first finish the deferred shared-surface rebuild
+             * (cross-process child window), then reflush. */
             if (data->remote_gdi_recreate_pending)
             {
                 data->remote_gdi_recreate_pending = FALSE;

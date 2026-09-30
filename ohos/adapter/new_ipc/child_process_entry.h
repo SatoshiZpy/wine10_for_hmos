@@ -11,9 +11,11 @@
 extern "C" {
 #endif
 
-// 每个 wine 进程（含主进程）启动时调用：以 pid 命名创建本进程的 IPC
-// 服务端 socket 并常驻监听，等待其他进程在嵌入本进程窗口时发起连接。
-// spawn 链路与此无关（仍走 ipc_lite）；连接按需建立。
+// Called at startup of every wine process (the main process included):
+// creates this process's IPC server socket, named after the pid, and keeps
+// listening for other processes to connect when they embed a window of this
+// process.  Independent of the spawn chain (which still goes through
+// ipc_lite); connections are established on demand.
 // Returns 0 on success.
 int ADAPTER_EXPORT_API StartIpcServerEntry(void);
 

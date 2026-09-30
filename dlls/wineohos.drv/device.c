@@ -54,8 +54,9 @@ struct native_win_data
     int                     widget_id;
     int                     container;
     int                     win_type;
-    /* 跨进程 GDI 共享：像素存放在与页面 owner 进程共享的 ashmem 缓冲
-     * 中；此形态下不建 XComponent，也没有本地 producer */
+    /* Cross-process GDI sharing: the pixels live in an ashmem buffer shared
+     * with the page owner process; in this mode no XComponent is created
+     * and there is no local producer. */
     void                   *shared_pixels;      /* mmap of the shared buffer, NULL when local */
     int                     shared_stride;      /* bytes per row */
     int                     shared_width;
@@ -362,9 +363,11 @@ static int dequeue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
     TRACE( "request buffer %p fence %d\n", win_buffer, fence);
 
     /* Wait for fence to ensure buffer is ready for writing.  Short timeout:
-     * 窗口状态切换（最大化/还原动画）期间 compositor 可能长时间不归还
-     * buffer，fence 不触发——3 秒等待会把窗口线程卡死（两次即 6 秒，
-     * 表现为切换后内容迟迟不更新）；超时后照常写入（本就是降级路径） */
+     * during window state transitions (maximize/restore animations) the
+     * compositor may not return the buffer for a long time and the fence
+     * never fires -- a 3s wait would wedge the window thread (two waits is
+     * already 6s, visible as content lagging behind the transition); after
+     * the timeout write anyway (this is a degraded path to begin with). */
     if (fence >= 0)
     {
         struct pollfd pfd = { .fd = fence, .events = POLLIN };
@@ -548,8 +551,8 @@ static int queue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
         region.rectNumber = 0;
     }
 
-    /* 合成本页面上的 foreign 子窗口像素（页面 owner 进程即合成方），
-     * 随本帧一起提交 */
+    /* Blend the pixels of the foreign child windows on this page (the page
+     * owner process is the compositor) and submit them with this frame. */
     blit_overlays_into( win_data, buffer );
 
     ret = OH_NativeWindow_NativeWindowFlushBuffer(win, buffer->win_buffer, buffer->fence_id, region);
@@ -626,9 +629,10 @@ int perform( HWND hwnd, int operation, ... )
     memset( args_list, 0, sizeof(args_list) );
     va_start( args, operation );
 
-    /* LOCK / UNLOCK_AND_POST 走下方 dequeue/queue 路径（内部自带 shared
-     * 跨进程分支，无本地 NativeWindow），不得在此被 get_window_handle
-     * 拦截；其余 op 需要本地窗口。 */
+    /* LOCK / UNLOCK_AND_POST fall through to the dequeue/queue paths below
+     * (which carry the shared cross-process branch internally, with no local
+     * NativeWindow) and must not be intercepted by get_window_handle here;
+     * the other ops require a local window. */
     if (operation != NATIVE_WINDOW_LOCK &&
         operation != NATIVE_WINDOW_UNLOCK_AND_POST &&
         !(win = get_window_handle( win_data )))
@@ -1015,7 +1019,8 @@ static int create_window( HWND hwnd, int window_type, const struct window_bounds
     win_data->generation++;
 
     /* publish the native identity so foreign-process children can find the
-     * host page for their client surfaces（以窗口属性携带 widget 与 pid） */
+     * host page for their client surfaces (widget and pid carried as a
+     * window property) */
     NtUserSetProp( win_data->hwnd, ohos_window_id_prop,
                    (HANDLE)((ULONG_PTR)(UINT)win_data->widget_id |
                             ((ULONG_PTR)(UINT)getpid() << 32)) );
@@ -1028,9 +1033,10 @@ failed:
     return -1;
 }
 
-/* 跨进程 GDI 共享：嵌入 foreign toplevel 的窗口，其像素存放在本进程
- * 映射并写入的 ashmem 缓冲中；页面 owner 进程把它们合成进自己的 GDI
- * surface。两侧均不建 XComponent，也不涉及本地 producer。 */
+/* Cross-process GDI sharing: a window embedded into a foreign toplevel keeps
+ * its pixels in an ashmem buffer mapped and written by this process; the
+ * page owner process composites them into its own GDI surface.  Neither side
+ * creates an XComponent, and no local producer is involved. */
 
 BOOL has_remote_gdi_producer( HWND hwnd )
 {
@@ -1063,8 +1069,9 @@ int attach_remote_gdi_producer( HWND hwnd, void *pixels, int width,
     win_data->shared_height = height;
     win_data->shared_stride = stride;
     win_data->shared_id = shared_id;
-    /* logical(96) -> raw 像素换算比（宿主侧合成坐标系）；pos-only 变化
-     * 时更新 overlay 偏移要用同一比例 */
+    /* logical(96) -> raw pixel scale (the host-side compositing coordinate
+     * system); position-only changes must use the same ratio when updating
+     * the overlay offset */
     if (scale_num > 0 && scale_den > 0)
     {
         win_data->shared_scale_num = scale_num;
@@ -1082,7 +1089,8 @@ int attach_remote_gdi_producer( HWND hwnd, void *pixels, int width,
     return 0;
 }
 
-/* 位置-only 变化时取出共享面 id，供轻量 bounds 更新 RPC 使用 */
+/* Fetch the shared surface id for lightweight bounds-update RPCs on
+ * position-only changes. */
 int get_remote_gdi_info( HWND hwnd, int *shared_id, int *scale_num, int *scale_den )
 {
     struct native_win_data *win_data = get_native_win_data( hwnd );
@@ -1094,14 +1102,30 @@ int get_remote_gdi_info( HWND hwnd, int *shared_id, int *scale_num, int *scale_d
     return 0;
 }
 
+/* Scale-only query: the shared surface need not be attached (shared_scale_*
+ * survives detach, so a deferred rebuild of a hidden window can avoid
+ * degrading the scale to 1:1). */
+int get_remote_gdi_scale( HWND hwnd, int *scale_num, int *scale_den )
+{
+    struct native_win_data *win_data = get_native_win_data( hwnd );
+
+    if (!win_data) return -1;
+    if (win_data->shared_scale_num <= 0 || win_data->shared_scale_den <= 0)
+        return -1;
+    if (scale_num) *scale_num = win_data->shared_scale_num;
+    if (scale_den) *scale_den = win_data->shared_scale_den;
+    return 0;
+}
+
 BOOL detach_remote_gdi_producer( HWND hwnd, int *shared_id )
 {
     struct native_win_data *win_data = get_native_win_data( hwnd );
 
     if (!win_data || !win_data->shared_pixels) return FALSE;
     if (shared_id) *shared_id = win_data->shared_id;
-    /* pixels 映射与共享内存在创建方（本进程 adapter）管理：unmap 由
-     * DestroyRemoteGdiSharedSurface 路径负责，此处仅解除关联 */
+    /* The pixels mapping and the shared memory are owned by the creating side
+     * (this process's adapter): the unmap happens on the
+     * DestroyRemoteGdiSharedSurface path; here we only disassociate. */
     win_data->shared_pixels = NULL;
     win_data->shared_id = 0;
     win_data->shared_width = win_data->shared_height = 0;
@@ -1110,20 +1134,22 @@ BOOL detach_remote_gdi_producer( HWND hwnd, int *shared_id )
     return TRUE;
 }
 
-/* ── owner 侧合成：foreign 子窗口的共享像素 blit 进本进程的 GDI
- * surface（本进程充当被嵌入页面的合成方）。 */
+/* Owner-side compositing: blit the shared pixels of foreign child windows
+ * into this process's GDI surface (this process acts as the compositor of
+ * the page being embedded into). */
 
 struct remote_gdi_overlay
 {
     int                     id;
     int                     parent_widget_id;
     int                     off_x, off_y, w, h, stride;
+    int                     visible;
     const void             *pixels;
     struct remote_gdi_overlay *next;
 };
 
 static struct remote_gdi_overlay *overlay_list;
-static pthread_mutex_t gdi_cs;   /* recursive：unix 侧无 Win32 CS */
+static pthread_mutex_t gdi_cs;   /* recursive: no Win32 CS on the unix side */
 
 static void gdi_lock(void)
 {
@@ -1135,7 +1161,7 @@ static void gdi_unlock(void)
     pthread_mutex_unlock( &gdi_cs );
 }
 
-/* 把所有挂在本页面（widget_id）上的 foreign 像素叠加进 buffer */
+/* Blend every foreign pixel plane attached to this page (widget_id) into the buffer. */
 static void blit_overlays_into( struct native_win_data *win, struct native_buffer *buf )
 {
     struct remote_gdi_overlay *ov;
@@ -1145,6 +1171,7 @@ static void blit_overlays_into( struct native_win_data *win, struct native_buffe
     {
         int x0, y0, x1, y1, y;
         if (ov->parent_widget_id != win->widget_id) continue;
+        if (!ov->visible) continue;  /* hidden child (tab switch): skip in compositing */
         x0 = max( ov->off_x, 0 );
         y0 = max( ov->off_y, 0 );
         x1 = min( ov->off_x + ov->w, buf->width );
@@ -1158,7 +1185,7 @@ static void blit_overlays_into( struct native_win_data *win, struct native_buffe
     }
 }
 
-/* adapter overlay 回调（ADD/BLIT/REMOVE），运行在 IPC 监听线程 */
+/* adapter overlay callback (ADD/BLIT/REMOVE/UPDATE/VISIBLE), runs on the IPC listener thread */
 static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
                                        int off_x, int off_y, int width,
                                        int height, int stride,
@@ -1170,7 +1197,7 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
     gdi_lock();
     switch (op)
     {
-    case 0: /* ADD */
+    case REMOTE_GDI_OP_ADD:
         ov = calloc( 1, sizeof(*ov) );
         if (!ov) break;
         ov->id = id;
@@ -1180,13 +1207,20 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
         ov->w = width;
         ov->h = height;
         ov->stride = stride;
+        ov->visible = 1;
         ov->pixels = pixels;
         ov->next = overlay_list;
         overlay_list = ov;
-        TRACE( "overlay add id %d page %d %dx%d at (%d,%d)\n", id,
-               parent_widget_id, width, height, off_x, off_y );
+        /* This function runs on the adapter's IPC ListenLoop thread, which has
+         * no wine TEB.  Wine's TRACE/WARN logging fetches the thread context
+         * through NtCurrentTeb; on a non-wine thread that dereferences a
+         * garbage pointer and SIGSEGVs (this once crashed the main process,
+         * killed the host, and made cross-process embedding look like a hang).
+         * Only fprintf is safe here. */
+        fprintf( stderr, "ohos: overlay add id %d page %d %dx%d at (%d,%d)\n", id,
+                 parent_widget_id, width, height, off_x, off_y );
         break;
-    case 2: /* REMOVE */
+    case REMOTE_GDI_OP_REMOVE:
         for (link = &overlay_list; *link; link = &(*link)->next)
         {
             if ((*link)->id == id)
@@ -1197,33 +1231,50 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
                 break;
             }
         }
-        TRACE( "overlay remove id %d\n", id );
+        fprintf( stderr, "ohos: overlay remove id %d\n", id );
         break;
-    case 3: /* UPDATE：位置-only 变化，改 overlay 偏移（拖拽时高频） */
+    case REMOTE_GDI_OP_UPDATE: /* position-only change, move the overlay offset (hot while dragging) */
         for (ov = overlay_list; ov; ov = ov->next)
         {
             if (ov->id != id) continue;
             ov->off_x = off_x;
             ov->off_y = off_y;
             wake_page = parent_widget_id;
-            TRACE( "overlay update id %d off (%d,%d)\n", id, off_x, off_y );
             break;
         }
         break;
-    default:
-        /* BLIT：子进程共享面有新帧。不做主动 dequeue 合成——producer 拿到的
-         * 是空闲脏 buffer，直接 queue 会覆盖宿主当前画面导致白屏；宿主的
-         * GDI flush（queue_buffer_locked）已统一叠加本页全部 overlays。
-         * 稳态下宿主不会自行重绘，这里唤醒它补刷一次把新帧叠进去。 */
+    case REMOTE_GDI_OP_VISIBLE: /* tab switching etc.  off_x carries 0/1.  The shared surface
+              * is kept; a hidden child is skipped in compositing, and the child's
+              * first BLIT once shown wakes the host again. */
+        for (ov = overlay_list; ov; ov = ov->next)
+        {
+            if (ov->id != id) continue;
+            ov->visible = off_x != 0;
+            /* When hiding, the host area is refreshed by wine's own repaint flow
+             * (parent invalidation -> the flush simply stops blending this
+             * overlay); when showing, no wake is needed, wait for the child's
+             * first frame. */
+            break;
+        }
+        break;
+    case REMOTE_GDI_OP_BLIT: /* the child's shared surface has a new frame.  Do not dequeue and
+              * composite here -- the producer-side buffer we would get is a dirty
+              * free buffer, and queueing it directly would overwrite the host's
+              * current frame (white flash).  The host's own GDI flush
+              * (queue_buffer_locked) already blends every overlay of the page.
+              * In the steady state the host does not repaint on its own, so wake
+              * it for one extra flush to blend the new frame in. */
         wake_page = parent_widget_id;
-        TRACE( "overlay blit id %d page %d deferred to host flush\n", id, parent_widget_id );
+        break;
+    default:
         break;
     }
     gdi_unlock();
 
-    /* 本回调运行在 IPC ListenLoop 线程（无 wine TEB），不能直接调用
-     * NtUserPostMessage 等 win32u 接口——经 send_event 转交桌面线程，
-     * 由 process_events 在合法 wine 线程上唤醒 owner 补刷合成 */
+    /* This callback runs on the IPC ListenLoop thread (no wine TEB) and must
+     * not call NtUserPostMessage or other win32u entry points directly -- hand
+     * the event to the desktop thread via send_event; process_events then wakes
+     * the owner for the composite refresh on a proper wine thread. */
     if (wake_page > 0)
     {
         union event_data event;
@@ -1234,7 +1285,8 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
     }
 }
 
-/* dllmain 侧 init 调用（unix 侧 ohos_init）：注册 overlay 回调并初始化锁 */
+/* Called from the PE-side init (unix ohos_init): registers the overlay
+ * callback and initializes the lock */
 void wineohos_register_gdi_overlay(void)
 {
     static BOOL done;

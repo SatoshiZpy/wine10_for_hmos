@@ -24,10 +24,11 @@
 
 namespace ohos::adapter::new_ipc {
 
-/* 每个 wine 进程共享的 socket 目录（hap 级 files，WINEPREFIX 同级）：
- * 隔离子进程的 app 级 el2 视图与主进程不同，不能硬编码 app 目录，
- * 由 WineLoaderAdapter 经 WINE_IPC_DIR 传入，所有进程据此 + pid 推导
- * 任意对端的 socket path */
+/* Socket directory shared by every wine process (hap-level files, next
+ * to WINEPREFIX): sandboxed children see a different app-level el2 view
+ * than the main process, so the app directory must not be hardcoded.
+ * WineLoaderAdapter passes it through WINE_IPC_DIR; every process derives
+ * any peer's socket path from it plus the pid. */
 static const char* ipc_socket_dir(void)
 {
     static const char* dir = nullptr;
@@ -49,6 +50,25 @@ IpcServer& IpcServer::Instance()
 {
     static IpcServer instance;
     return instance;
+}
+
+/* Channel request handler: read the request code from shm, dispatch to
+ * the stub and reply.  The requesting proxy resets the cursor before
+ * writing, so read it directly here; resetting would void the request
+ * (read==write yields code=0). */
+static IpcChannelCallback MakeStubHandler(IpcChannel* channel,
+                                          ProcessManagerStub* stub)
+{
+    return [channel, stub](const IpcMessage& msg) {
+        if (msg.type != IpcMessageType::SYNC_REQUEST || !msg.shm) return;
+        IpcParcel data(*msg.shm);
+        int32_t code = 0;
+        data.ReadInt32(code);
+        IpcParcel reply(*msg.shm);
+        stub->OnRemoteRequest(static_cast<uint32_t>(code), data, reply,
+                              msg.fds);
+        channel->SendReply();
+    };
 }
 
 IpcServer::IpcServer() = default;
@@ -80,8 +100,14 @@ void IpcServer::Stop()
 {
     if (!server_started_) return;
     accepting_ = false;
-    server_socket_.Close();
+    /* Shutdown() before join(): wake the accept thread blocked in
+     * accept() first -- 1) close() does not wake an accept() already
+     * blocked in the kernel (Linux semantics), and 2) Accept() holds
+     * send_mutex_ across the blocking call, so a direct Close() would
+     * deadlock on that mutex.  Close() must run after the join. */
+    server_socket_.Shutdown();
     if (accept_thread_.joinable()) accept_thread_.join();
+    server_socket_.Close();
     {
         MutexLock lock(mutex_);
         for (auto& [id, channel] : channels_) {
@@ -107,8 +133,9 @@ void IpcServer::AcceptLoop()
             continue;
         }
 
-        /* 通道创建与 shm 交换在锁外：accept 只会由本线程串行触发，
-         * 通道表仅 insert 时短暂持锁 */
+        /* Channel creation and shm exchange happen outside the lock:
+         * accepts are serialized on this thread only, and the channel
+         * table takes the lock briefly for insertion */
         auto channel = std::make_unique<IpcChannel>();
         if (!channel->ConnectWithFd(client_fd)) {
             LOGE("IpcServer::AcceptLoop ConnectWithFd failed");
@@ -122,19 +149,7 @@ void IpcServer::AcceptLoop()
         }
 
         ProcessManagerStub* stub = &stub_;
-        IpcChannel* ch_ptr = channel.get();
-        channel->SetRequestHandler([ch_ptr, stub](const IpcMessage& msg) {
-            if (msg.type != IpcMessageType::SYNC_REQUEST || !msg.shm) return;
-            /* 请求方 proxy 写请求前已归位游标，此处直接读；重置会作废
-             * 请求（read==write 时读到 code=0） */
-            IpcParcel data(*msg.shm);
-            int32_t code = 0;
-            data.ReadInt32(code);
-            IpcParcel reply(*msg.shm);
-            stub->OnRemoteRequest(static_cast<uint32_t>(code), data, reply,
-                                  msg.fds);
-            ch_ptr->SendReply();
-        });
+        channel->SetRequestHandler(MakeStubHandler(channel.get(), stub));
         channel->StartListening();
 
         {
@@ -165,8 +180,9 @@ IpcChannel* PeerManager::GetPeerChannel(int32_t pid)
              pid);
         return nullptr;
     }
-    /* client 侧：先收 owner 发来的 shm fd，再开监听（顺序不可反，
-     * 否则 listen 线程会抢走 SHM_FD 消息） */
+    /* Client side: receive the owner's shm fd first, then start
+     * listening (the order matters, otherwise the listen thread would
+     * steal the SHM_FD message) */
     if (!channel->ExchangeShmFd()) {
         LOGE("PeerManager::GetPeerChannel ExchangeShmFd failed, "
              "pid=%{public}d", pid);
@@ -174,18 +190,7 @@ IpcChannel* PeerManager::GetPeerChannel(int32_t pid)
         return nullptr;
     }
 
-    ProcessManagerStub* stub = &stub_;
-    IpcChannel* ch_ptr = channel.get();
-    channel->SetRequestHandler([ch_ptr, stub](const IpcMessage& msg) {
-        if (msg.type != IpcMessageType::SYNC_REQUEST || !msg.shm) return;
-        IpcParcel data(*msg.shm);
-        int32_t code = 0;
-        data.ReadInt32(code);
-        IpcParcel reply(*msg.shm);
-        stub->OnRemoteRequest(static_cast<uint32_t>(code), data, reply,
-                              msg.fds);
-        ch_ptr->SendReply();
-    });
+    channel->SetRequestHandler(MakeStubHandler(channel.get(), &stub_));
     channel->StartListening();
 
     IpcChannel* raw = channel.get();
@@ -249,17 +254,9 @@ int PeerManager::SetClientSurfaceBounds(int32_t client_widget_id,
                                         int32_t off_x, int32_t off_y,
                                         int32_t width, int32_t height)
 {
-    int32_t owner_pid = 0;
-    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
-
-    IpcChannel* channel = GetPeerChannel(owner_pid);
-    if (!channel) return -1;
-
-    ProcessManagerProxy proxy(*channel);
-    int ret = proxy.SetClientSurfaceBounds(client_widget_id, off_x, off_y,
-                                           width, height);
-    if (ret != 0) DropPeer(owner_pid);
-    return ret;
+    return CallSurfaceOwner(
+        client_widget_id, &ProcessManagerProxy::SetClientSurfaceBounds,
+        client_widget_id, off_x, off_y, width, height);
 }
 
 int PeerManager::DestroyClientSurface(int32_t client_widget_id)
@@ -313,16 +310,9 @@ int PeerManager::AttachRemoteGdi(RemoteGdiParam& param, int fd)
 int PeerManager::RemoteGdiFlush(int32_t client_widget_id, int32_t x,
                                 int32_t y, int32_t w, int32_t h)
 {
-    int32_t owner_pid = 0;
-    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
-
-    IpcChannel* channel = GetPeerChannel(owner_pid);
-    if (!channel) return -1;
-
-    ProcessManagerProxy proxy(*channel);
-    int ret = proxy.RemoteGdiFlush(client_widget_id, x, y, w, h);
-    if (ret != 0) DropPeer(owner_pid);
-    return ret;
+    return CallSurfaceOwner(client_widget_id,
+                            &ProcessManagerProxy::RemoteGdiFlush,
+                            client_widget_id, x, y, w, h);
 }
 
 int PeerManager::DestroyRemoteGdi(int32_t client_widget_id)
@@ -347,16 +337,16 @@ int PeerManager::DestroyRemoteGdi(int32_t client_widget_id)
 int PeerManager::UpdateRemoteGdiBounds(int32_t client_widget_id,
                                        int32_t off_x, int32_t off_y)
 {
-    int32_t owner_pid = 0;
-    if (!GetSurfaceOwner(client_widget_id, owner_pid)) return -1;
+    return CallSurfaceOwner(client_widget_id,
+                            &ProcessManagerProxy::UpdateRemoteGdiBounds,
+                            client_widget_id, off_x, off_y);
+}
 
-    IpcChannel* channel = GetPeerChannel(owner_pid);
-    if (!channel) return -1;
-
-    ProcessManagerProxy proxy(*channel);
-    int ret = proxy.UpdateRemoteGdiBounds(client_widget_id, off_x, off_y);
-    if (ret != 0) DropPeer(owner_pid);
-    return ret;
+int PeerManager::SetRemoteGdiVisible(int32_t client_widget_id, int32_t visible)
+{
+    return CallSurfaceOwner(client_widget_id,
+                            &ProcessManagerProxy::SetRemoteGdiVisible,
+                            client_widget_id, visible);
 }
 
 int IpcHelper::GetDisplay(DisplayParam& param)
@@ -428,7 +418,7 @@ int IpcHelper::DestroyClientSurface(int32_t client_widget_id)
     return 0;
 }
 
-/* ── owner 侧 GDI 共享 ─────────────────────────────────────────────── */
+/* ---- owner-side GDI sharing ---- */
 
 static RemoteGdiOverlayCallback g_overlay_callback = nullptr;
 
@@ -437,19 +427,25 @@ void SetRemoteGdiOverlayCallback(RemoteGdiOverlayCallback fn)
     g_overlay_callback = fn;
 }
 
-/* overlay 注册表：id -> {param, mmap}。adapter 持有映射生命周期，
- * 合成 blit 经回调进 wine（wine 侧自己的线程与锁模型） */
+/* Overlay registry: id -> {param, mmap}.  The adapter owns the mapping
+ * lifetime; compositing blits go back into wine through the callback
+ * (wine's own threading and locking model) */
 struct RemoteGdiOverlay {
     RemoteGdiParam param;
     void* pixels = nullptr;
     size_t map_size = 0;
+    bool visible = true;
 };
-/* 跨进程窗口重建共享面时的过渡 overlay（僵尸态）：销毁请求不立即
- * REMOVE/unmap，保留至多 ZOMBIE_GRACE_MS 等待替换 attach——
- * 1) 规避销毁→重建间隙（~30ms）内宿主合成丢 overlay 的白闪；
- * 2) 新 attach 到达时直接从僵尸映射把末帧拉伸预填进新 buffer，
- *    消除重建到子进程首帧之间的空白。窗口真实关闭时表现为末帧
- *    短暂残留（类关闭动画），到期由清扫线程回收 */
+/* Transitional overlay (zombie) while a cross-process window rebuilds
+ * its shared surface: a destroy request does not REMOVE/unmap
+ * immediately, it is kept for at most ZOMBIE_GRACE_MS waiting for the
+ * replacing attach:
+ * 1) avoids the white flash of the host compositing without the overlay
+ *    during the destroy->rebuild gap (~30ms);
+ * 2) when the new attach arrives, the last frame is stretched from the
+ *    zombie mapping to prefill the new buffer, closing the gap until
+ *    the child's first frame.  A real window close shows the last frame
+ *    lingering briefly (close-animation-like), reclaimed by the sweeper. */
 struct RemoteGdiZombie {
     RemoteGdiParam param;
     void* pixels = nullptr;
@@ -462,7 +458,8 @@ static Mutex g_overlay_mutex;
 static std::unordered_map<int32_t, RemoteGdiOverlay> g_overlays;
 static std::unordered_map<int32_t, RemoteGdiZombie> g_overlay_zombies;
 
-/* 最近邻拉伸预填（32bpp 行对齐缓冲；尺寸一致时退化为原样拷贝） */
+/* Nearest-neighbour stretch prefill (32bpp row-aligned buffers;
+ * degenerates to a plain copy when sizes match) */
 static void PrefillRemoteGdi(const RemoteGdiParam& src_param,
                              const void* src_bits,
                              const RemoteGdiParam& dst_param, void* dst_bits)
@@ -485,7 +482,8 @@ static void PrefillRemoteGdi(const RemoteGdiParam& src_param,
     }
 }
 
-/* 僵尸到期回收：先 REMOVE（wine 侧表项失效）再 unmap，顺序不可颠倒 */
+/* Expired zombie reclaim: REMOVE first (invalidate the wine-side entry),
+ * then unmap; the order must not be reversed */
 static void SweepOverlayZombies()
 {
     std::this_thread::sleep_for(ZOMBIE_GRACE_MS);
@@ -522,7 +520,8 @@ int IpcHelper::AttachRemoteGdi(RemoteGdiParam& param, int fd)
         return -1;
     }
     size_t size = static_cast<size_t>(param.stride) * param.height;
-    /* PROT_WRITE 仅为预填旧帧；子进程 attach 返回后才开始绘制，无竞争 */
+    /* PROT_WRITE is only for prefilling the previous frame; the child
+     * starts drawing after its attach returns, no race */
     void* pixels = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (pixels == MAP_FAILED) {
         LOGE("IpcHelper::AttachRemoteGdi mmap failed, errno=%{public}d",
@@ -531,15 +530,18 @@ int IpcHelper::AttachRemoteGdi(RemoteGdiParam& param, int fd)
     }
     close(fd);
 
-    /* 共享面 id 由 owner 分配（跨进程唯一：发起方各自带 pid，但 overlay
-     * 表在本进程键控，自增即可） */
+    /* The shared surface id is assigned by the owner (unique enough:
+     * callers carry their own pid, and the overlay table is keyed in
+     * this process, so a simple increment works) */
     static std::atomic<int32_t> next_overlay_id{1};
     if (param.client_widget_id <= 0) {
         param.client_widget_id = next_overlay_id++;
     }
 
-    /* 同 parent 下最新僵尸的末帧预填 + 替换回收（多子窗口同 parent 时
-     * 取最新，误配最多一帧，子进程首帧即覆盖） */
+    /* Prefill from the newest zombie under the same parent, then reclaim
+     * it (with several children on one parent take the newest: a
+     * mismatch costs at most one frame, overwritten by the child's first
+     * frame) */
     RemoteGdiZombie zombie{};
     bool replace = false;
     {
@@ -570,7 +572,7 @@ int IpcHelper::AttachRemoteGdi(RemoteGdiParam& param, int fd)
                            pixels);
     }
     if (replace) {
-        /* ADD 之后 REMOVE：wine 侧表项无缝替换 */
+        /* REMOVE after ADD: seamless replacement of the wine-side entry */
         if (g_overlay_callback) {
             g_overlay_callback(RemoteGdiOp::REMOVE, zombie.param.client_widget_id,
                                nullptr, nullptr);
@@ -599,7 +601,7 @@ int IpcHelper::RemoteGdiFlush(int32_t client_widget_id, int32_t x, int32_t y,
     }
 
     if (g_overlay_callback) {
-        /* dirty rect 经 param 的几何字段传递 */
+        /* The dirty rect rides in the param geometry fields */
         param.off_x = x;
         param.off_y = y;
         param.width = w;
@@ -623,7 +625,8 @@ int IpcHelper::DestroyRemoteGdi(int32_t client_widget_id)
                                                now + ZOMBIE_GRACE_MS};
         g_overlays.erase(it);
     }
-    /* 不立即 REMOVE/unmap：等待替换 attach 预填回收，或到期清扫 */
+    /* No immediate REMOVE/unmap: wait for a replacing attach to prefill
+     * and reclaim, or for the sweeper to expire */
     std::thread(SweepOverlayZombies).detach();
     LOGI("IpcHelper::DestroyRemoteGdi id=%{public}d (zombie)", client_widget_id);
     return 0;
@@ -641,13 +644,36 @@ int IpcHelper::UpdateRemoteGdiBounds(int32_t client_widget_id,
         it->second.param.off_y = off_y;
         param = it->second.param;
     }
-    /* 同步 wineohos 侧 overlay 表（op=UPDATE，仅 off 生效） */
+    /* Sync the wineohos-side overlay table (op=UPDATE, offset only) */
     if (g_overlay_callback) {
         g_overlay_callback(RemoteGdiOp::UPDATE, client_widget_id, &param,
                            nullptr);
     }
     LOGI("IpcHelper::UpdateRemoteGdiBounds id=%{public}d off=(%{public}d,"
          "%{public}d)", client_widget_id, off_x, off_y);
+    return 0;
+}
+
+int IpcHelper::SetRemoteGdiVisible(int32_t client_widget_id, int32_t visible)
+{
+    RemoteGdiParam param;
+    {
+        MutexLock lock(g_overlay_mutex);
+        auto it = g_overlays.find(client_widget_id);
+        if (it == g_overlays.end()) return -1;
+        it->second.visible = visible != 0;
+        /* Zombies have no visibility: the destroy/rebuild paths do not
+         * go through this entry */
+        param = it->second.param;
+    }
+    /* visible rides in param.off_x (callback signature reuse, op=4 only) */
+    param.off_x = visible;
+    if (g_overlay_callback) {
+        g_overlay_callback(RemoteGdiOp::VISIBLE, client_widget_id, &param,
+                           nullptr);
+    }
+    LOGI("IpcHelper::SetRemoteGdiVisible id=%{public}d visible=%{public}d",
+         client_widget_id, visible);
     return 0;
 }
 

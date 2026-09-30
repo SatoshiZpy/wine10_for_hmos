@@ -58,7 +58,7 @@ bool IpcProxy::SendRequest(uint32_t code, IpcParcel& data, IpcParcel& reply)
         return false;
     }
 
-    /* 应答在 sync_request_end_ 之后，读游标已由 WaitForReply 拨到位 */
+    /* the reply sits after sync_request_end_; WaitForReply already moved the read cursor there */
     IpcParcel recv_parcel(*shm);
     int32_t ret = -1;
     recv_parcel.ReadInt32(ret);
@@ -269,6 +269,26 @@ int ProcessManagerProxy::UpdateRemoteGdiBounds(int32_t client_widget_id,
     return ret;
 }
 
+int ProcessManagerProxy::SetRemoteGdiVisible(int32_t client_widget_id,
+                                             int32_t visible)
+{
+    SharedMemory* shm = channel_.GetShm();
+    if (!shm) return -1;
+    shm->ResetReadWrite();
+    IpcParcel parcel(*shm);
+    parcel.WriteInt32(static_cast<int32_t>(COMMAND_SET_REMOTE_GDI_VISIBLE));
+    parcel.WriteInt32(client_widget_id);
+    parcel.WriteInt32(visible);
+
+    if (!channel_.SendRequest()) return -1;
+    if (!channel_.WaitForReply()) return -1;
+
+    IpcParcel reply(*shm);
+    int32_t ret = -1;
+    reply.ReadInt32(ret);
+    return ret;
+}
+
 ProcessManagerStub::ProcessManagerStub() {}
 
 int ProcessManagerStub::OnRemoteRequest(uint32_t code, IpcParcel& data,
@@ -346,6 +366,14 @@ int ProcessManagerStub::OnRemoteRequest(uint32_t code, IpcParcel& data,
             data.ReadInt32(off_x);
             data.ReadInt32(off_y);
             ret = IpcHelper::UpdateRemoteGdiBounds(client_widget_id, off_x, off_y);
+            reply.WriteInt32(ret);
+            break;
+        }
+        case COMMAND_SET_REMOTE_GDI_VISIBLE: {
+            int32_t client_widget_id = 0, visible = 0;
+            data.ReadInt32(client_widget_id);
+            data.ReadInt32(visible);
+            ret = IpcHelper::SetRemoteGdiVisible(client_widget_id, visible);
             reply.WriteInt32(ret);
             break;
         }

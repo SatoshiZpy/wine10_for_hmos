@@ -184,10 +184,12 @@ static BOOL scaled_surface_flush( struct window_surface *window_surface, const R
 
     /* FIXME: implement HALFTONE with alpha for layered surfaces */
 #ifdef __OHOS__
-    /* HALFTONE 走无 SIMD 的 halftone_888 软件路径（约 2Mpx/s）：DPI 缩放
-     * 层（96 -> raw）每帧全屏拉伸，最大化/还原/拖拽期间连续多次拉伸表现
-     * 为数秒黑屏卡顿。DELETESCANS（即 COLORONCOLOR）对整数倍放大等效
-     * 最近邻，瞬时完成，画质可接受。 */
+    /* HALFTONE takes the non-SIMD halftone_888 software path (~2Mpx/s): the
+     * DPI scaling layer (96 -> raw) stretches the full screen every frame,
+     * and repeated stretches during maximize/restore/drag show up as seconds
+     * of black-screen stutter.  DELETESCANS (i.e. COLORONCOLOR) is equivalent
+     * to nearest-neighbour for integer upscaling, completes instantly, and
+     * the quality is acceptable. */
     if (!window_surface->alpha_mask) set_stretch_blt_mode( hdc_dst, STRETCH_DELETESCANS );
 #else
     if (!window_surface->alpha_mask) set_stretch_blt_mode( hdc_dst, STRETCH_HALFTONE );
@@ -556,9 +558,11 @@ W32KAPI struct window_surface *window_surface_create( UINT size, const struct wi
     pthread_mutex_init( &surface->mutex, NULL );
 
 #ifdef __OHOS__
-    /* 新建 surface 的位图未初始化（全 0 = 黑）：resize 重建后未被应用绘制
-     * 的区域（如被 child 窗口覆盖处）会以黑色上屏，表现为子窗口区域闪黑。
-     * 初始化为白色（与 COLOR_WINDOW 一致）以消除黑闪。 */
+    /* A freshly created surface bitmap is uninitialized (all zero = black):
+     * after a resize rebuild, regions the application has not painted yet
+     * (e.g. areas previously covered by a child window) would go to screen
+     * as black, seen as the child area flashing black.  Initialize to white
+     * (matching COLOR_WINDOW) to remove the black flash. */
     memset( window_surface_get_color( surface, info ), 0xff, info->bmiHeader.biSizeImage );
 #endif
 

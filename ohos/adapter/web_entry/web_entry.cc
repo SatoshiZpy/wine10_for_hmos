@@ -177,8 +177,10 @@ void RunWine(int process_type,
        * socket directory from WINE_IPC_DIR */
       SetEnv(env);
 
-      /* 每个进程（主进程与被 spawn 的子进程）都持有 IPC server：
-       * 以 pid 命名常驻监听，等待其他进程在嵌入本进程窗口时按需连接 */
+      /* Every process (the main process and spawned children) holds an
+       * IPC server: a persistent listener named after the pid, waiting
+       * for other processes to connect on demand when they embed a window
+       * of this process */
       if (StartIpcServerEntry() != 0) {
         LOGW("RunWine: ipc server start failed (continue)");
       }
@@ -210,7 +212,8 @@ int RunWineProcess(const std::vector<std::string>& env_args,
         return -1;
     }
 
-    /* spawn 链路：ipc_lite 一次性握手取 argv 与 fd remap（与宿主一致） */
+    /* spawn chain: one-shot ipc_lite handshake fetching argv and the fd
+     * remap (same as the host) */
     int fd = common::UnixSocketUtils::CreateClientSocket(ipc_socket_path);
     if (fd < 0) {
         LOGE("RunWineProcess: connect failed");

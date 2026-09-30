@@ -1029,7 +1029,7 @@ case $host_os in
     LDEXECFLAGS="-Wl,-pie"
     enable_wineohos_drv=${enable_wineohos_drv:-yes}
     dnl declare needed libs
-    AC_SUBST(OHOS_LIBS,"-lhilog_ndk.z -lnative_window -ludmf -lpasteboard -lpixelmap -lace_ndk.z -lohaudio")
+    AC_SUBST(OHOS_LIBS,"-lhilog_ndk.z -lnative_window -lnative_image -lnative_buffer -ludmf -lpasteboard -lpixelmap -lace_ndk.z -lohaudio")
     AC_SUBST(ADAPTER_LIBS,"-ladapter")
     AC_SUBST(OHOS_NETCONN_LIBS,"-lnet_connection")
     WINE_TRY_CFLAGS([-Wl,-z,defs],[UNIXLDFLAGS="$UNIXLDFLAGS -Wl,-z,defs"])

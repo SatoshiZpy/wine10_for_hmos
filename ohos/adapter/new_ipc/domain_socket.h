@@ -56,8 +56,14 @@ public:
     bool RecvControlMessage(IpcMessageType& type, void* data = nullptr, uint32_t* length = nullptr);
 
     void Close();
+    /* Interrupt a thread blocked in accept()/recvmsg(): shutdown(2) acts
+     * on the open file description itself (thread-safe); close() does not
+     * wake calls already blocked in the kernel.  Does not take the
+     * send/recv mutexes -- the caller may be blocked holding them. */
+    void Shutdown();
 
     int GetFd() const { return fd_; }
+    int GetListenFd() const { return listen_fd_; }
     bool IsConnected() const { return connected_; }
 
 private:
@@ -68,10 +74,11 @@ private:
     bool connected_ = false;
     bool is_server_ = false;
     std::string socket_path_;
-    /* 发送与接收分锁：ListenLoop 的 recvmsg 会持锁阻塞等待对端数据，
-     * 若与 sendmsg 共用一把锁，任何同步 SendRequest 都会死锁
-     * （unix socket 全双工，两方向互不干扰）。锁获取顺序恒为
-     * send -> recv（仅 Close 同持两把）。 */
+    /* Separate send/recv locks: ListenLoop's recvmsg holds its lock while
+     * blocking for peer data, so sharing one lock with sendmsg would
+     * deadlock every synchronous SendRequest (unix sockets are full
+     * duplex, the two directions do not interfere).  Lock order is always
+     * send -> recv (only Close holds both). */
     Mutex send_mutex_;
     Mutex recv_mutex_;
 };

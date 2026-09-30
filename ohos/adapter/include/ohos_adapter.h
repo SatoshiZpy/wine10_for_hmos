@@ -87,9 +87,11 @@ ADAPTER_API int RemoteGdiFlush(int client_widget_id, int x, int y,
 ADAPTER_API void DestroyRemoteGdiSharedSurface(int client_widget_id);
 ADAPTER_API void UpdateRemoteGdiBounds(int client_widget_id, int off_x,
                                        int off_y);
+ADAPTER_API void SetRemoteGdiSharedSurfaceVisible(int client_widget_id,
+                                                  int visible);
 
 /* op: 0=add, 1=blit(dirty rect in off/width/height), 2=remove,
- *     3=update(off_x/off_y only) */
+ *     3=update(off_x/off_y only), 4=visible(off_x: 0/1) */
 typedef void (*remote_gdi_overlay_fn)(int op, int id, int parent_widget_id,
                                       int off_x, int off_y, int width,
                                       int height, int stride,

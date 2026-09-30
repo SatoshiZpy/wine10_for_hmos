@@ -544,8 +544,9 @@ int CreateRemoteClientSurface(struct client_surface_param* param,
         return -1;
     }
 
-    /* 进程与窗口的嵌入关系是任意的（与 spawn 链路无关）：foreign
-     * toplevel 属于哪个进程，就点对点连到那个进程请求建面 */
+    /* Process/window embedding is arbitrary (independent of the spawn
+     * chain): connect point-to-point to whichever process owns the
+     * foreign toplevel to request the surface */
     if (param->owner_pid > 0 && param->owner_pid != getpid()) {
         new_ipc::ClientSurfaceParam p;
         p.parent_widget_id = param->parent_widget_id;
@@ -597,7 +598,7 @@ void DestroyRemoteClientSurface(int client_widget_id)
     DestroyClientSurface(client_widget_id);
 }
 
-/* C 侧共享像素映射登记表：Destroy 时释放 */
+/* C-side shared pixel mapping registry: released on destroy */
 static std::unordered_map<int, std::pair<void*, size_t>> g_gdi_maps;
 static std::mutex g_gdi_maps_mutex;
 
@@ -629,7 +630,8 @@ int CreateRemoteGdiSharedSurface(struct remote_gdi_param* param, void** pixels)
         close(fd);
         return -1;
     }
-    /* 刷成中性灰，避免首帧合成出现垃圾像素 */
+    /* Fill with neutral grey to avoid garbage pixels in the first
+     * composite */
     memset(map, 0xc0, size);
 
     new_ipc::RemoteGdiParam p;
@@ -645,14 +647,15 @@ int CreateRemoteGdiSharedSurface(struct remote_gdi_param* param, void** pixels)
     p.client_widget_id = -1; /* assigned by the owner */
 
     if (new_ipc::PeerManager::Instance().AttachRemoteGdi(p, fd) != 0) {
-        /* 发送失败：fd 由内核复制，本地仍持有，需清理 */
+        /* Send failed: the fd was duplicated by the kernel but is still
+         * held locally, clean it up */
         munmap(map, size);
         close(fd);
         LOGE("CreateRemoteGdiSharedSurface: relay failed, owner_pid=%{public}d",
              param->owner_pid);
         return -1;
     }
-    close(fd); /* mmap 保活，fd 即可关闭 */
+    close(fd); /* the mmap keeps it alive, the fd can be closed */
     param->client_widget_id = p.client_widget_id;
     *pixels = map;
     {
@@ -693,7 +696,13 @@ void UpdateRemoteGdiBounds(int client_widget_id, int off_x, int off_y)
                                                            off_x, off_y);
 }
 
-/* C 回调桥接到 new_ipc 内部的 overlay 通知 */
+void SetRemoteGdiSharedSurfaceVisible(int client_widget_id, int visible)
+{
+    new_ipc::PeerManager::Instance().SetRemoteGdiVisible(client_widget_id,
+                                                         visible);
+}
+
+/* Bridge the C callback to the new_ipc-internal overlay notification */
 static remote_gdi_overlay_fn g_remote_gdi_fn = nullptr;
 
 static void remote_gdi_overlay_bridge(new_ipc::RemoteGdiOp op, int32_t id,
@@ -753,10 +762,28 @@ int GetGlobalDescriptor(int key)
     return -1;
 }
 
+/* Unlink this process's wine_ipc_<pid>.sock.  Deliberately does NOT call
+ * IpcServer::Stop(): the accept thread sits blocked in accept() while
+ * holding the socket send mutex, so Stop()'s Close() deadlocks on that
+ * mutex, and the thread joins would hang anyway (a closed fd does not
+ * wake a blocked accept/recvmsg).  Threads and fds are torn down by
+ * process death itself; unlink(2) only clears the stale name and is
+ * async-signal-safe. */
+static void CleanupIpcServer()
+{
+    LOGI("CleanupIpcServer pid=%{public}d", static_cast<int>(getpid()));
+    unlink(new_ipc::IpcServer::SocketPathForPid(getpid()).c_str());
+}
+
 void KillNativeProcess(int exitcode)
 {
     int pid = getpid();
     LOGI("KillNativeProcess pid %{public}d, exitcode %{public}#x", pid, exitcode);
+    /* Both normal exit (process_exit_wrapper) and fatal/signal crash
+     * paths converge here: this environment never calls exit(), static
+     * destructors do not run, so wine_ipc_<pid>.sock must be cleaned up
+     * explicitly before handing over to the JS-side kill */
+    CleanupIpcServer();
     ipc_lite::IpcLiteHelper::KillProcess();
 }
 

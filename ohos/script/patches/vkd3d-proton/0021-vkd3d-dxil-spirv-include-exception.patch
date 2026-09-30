@@ -1,0 +1,28 @@
+From: OHOS Wine build fix
+Subject: [PATCH] dxil-spirv: explicitly include <exception> for std::terminate
+
+scratch_pool.hpp uses std::terminate() but relied on transitive includes
+for <exception>. With llvm-mingw clang 23 / libc++ headers the transitive
+include is gone and the arm64ec cross build fails with:
+
+  scratch_pool.hpp:52:9: error: no member named 'terminate' in namespace 'std'
+
+Add the missing direct include.
+---
+ subprojects/dxil-spirv/scratch_pool.hpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/subprojects/dxil-spirv/scratch_pool.hpp b/subprojects/dxil-spirv/scratch_pool.hpp
+index 1111111..2222222 100644
+--- a/subprojects/dxil-spirv/scratch_pool.hpp
++++ b/subprojects/dxil-spirv/scratch_pool.hpp
+@@ -19,6 +19,7 @@
+
+ #pragma once
+
++#include <exception>
+ #include "thread_local_allocator.hpp"
+
+ namespace dxil_spv
+--
+2.34.1

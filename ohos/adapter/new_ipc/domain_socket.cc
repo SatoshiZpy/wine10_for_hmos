@@ -207,6 +207,21 @@ bool DomainSocket::RecvControlMessage(IpcMessageType& type, void* data, uint32_t
     return true;
 }
 
+void DomainSocket::Shutdown()
+{
+    /* Deliberately lock-free: Accept() blocks in accept() holding
+     * send_mutex_ and RecvControlMessage() blocks in recvmsg() holding
+     * recv_mutex_, so any shutdown path taking those locks would
+     * deadlock.  shutdown(2) is thread-safe and interrupts the blocked
+     * calls immediately (close() cannot).  The fds are not concurrently
+     * closed after the snapshot: Close() only runs once the listener
+     * thread has been joined. */
+    int lfd = listen_fd_;
+    int cfd = fd_;
+    if (lfd >= 0) shutdown(lfd, SHUT_RDWR);
+    if (cfd >= 0) shutdown(cfd, SHUT_RDWR);
+}
+
 void DomainSocket::Close()
 {
     MutexLock send_lock(send_mutex_);

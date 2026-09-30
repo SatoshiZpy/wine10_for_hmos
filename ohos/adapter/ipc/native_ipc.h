@@ -303,35 +303,29 @@ public:
     };
     StubHolder(OHIPCRemoteStub* remote) : remote_(remote) {}
     
-    // 禁用复制构造函数
     StubHolder(const StubHolder&) = delete;
-    
-    // 禁用复制赋值操作符
+
     StubHolder& operator=(const StubHolder&) = delete;
-    
-    // 移动构造函数
-    StubHolder(StubHolder&& other) noexcept 
+
+    StubHolder(StubHolder&& other) noexcept
         : remote_(other.remote_)
         , descriptor(std::move(other.descriptor))
     {
-        // 将源对象的 remote_ 设置为 nullptr，防止析构时重复释放
+        /* null out the source's remote_ so its destructor does not free twice */
         other.remote_ = nullptr;
     }
-    
-    // 移动赋值操作符
+
     StubHolder& operator=(StubHolder&& other) noexcept
     {
         if (this != &other) {
-            // 释放当前对象的资源
             if (remote_) {
                 OH_IPCRemoteStub_Destroy(remote_);
             }
-            
-            // 转移资源
+
             remote_ = other.remote_;
             descriptor = std::move(other.descriptor);
-            
-            // 将源对象的 remote_ 设置为 nullptr，防止析构时重复释放
+
+            /* null out the source's remote_ so its destructor does not free twice */
             other.remote_ = nullptr;
         }
         return *this;

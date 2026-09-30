@@ -252,6 +252,11 @@ void IpcChannel::StopListening()
         reply_ready_ = true;
     }
     reply_cv_.notify_one();
+    /* Wake the listener thread blocked in recvmsg(): while the peer is
+     * still alive recv does not return on its own (the peer does not
+     * disconnect after this process exits), so join would wait forever.
+     * After shutdown() recvmsg returns 0 immediately. */
+    socket_.Shutdown();
     if (listen_thread_.joinable()) {
         listen_thread_.join();
     }

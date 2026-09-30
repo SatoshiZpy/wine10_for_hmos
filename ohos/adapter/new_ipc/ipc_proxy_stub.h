@@ -46,8 +46,8 @@ private:
     IpcRequestHandler handler_;
 };
 
-/* 点对点 proxy：嵌入方进程向窗口 owner 进程发起的请求（client
- * surface 三件套 + 诊断）。 */
+/* Point-to-point proxy: requests from the embedding process to the window
+ * owner process (the client surface trio plus diagnostics). */
 class ProcessManagerProxy {
 public:
     explicit ProcessManagerProxy(IpcChannel& channel);
@@ -58,20 +58,21 @@ public:
                                int32_t off_y, int32_t width, int32_t height);
     int DestroyClientSurface(int32_t client_widget_id);
     int GetPid(int32_t& pid);
-    /* GDI 共享：fd 随请求附带传给 owner 进程 */
+    /* GDI sharing: the fd is passed to the owner process with the request */
     int AttachRemoteGdi(RemoteGdiParam& param, int fd);
     int RemoteGdiFlush(int32_t client_widget_id, int32_t x, int32_t y,
                        int32_t w, int32_t h);
     int DestroyRemoteGdi(int32_t client_widget_id);
     int UpdateRemoteGdiBounds(int32_t client_widget_id, int32_t off_x,
                               int32_t off_y);
+    int SetRemoteGdiVisible(int32_t client_widget_id, int32_t visible);
 
 private:
     IpcChannel& channel_;
 };
 
-/* 每个 wine 进程通用 stub：在本进程页面里创建/调整/销毁 client
- * surface（XComponent），回传 surface id。 */
+/* Stub shared by every wine process: creates/adjusts/destroys client
+ * surfaces (XComponents) in its own pages and returns the surface id. */
 class ProcessManagerStub {
 public:
     ProcessManagerStub();

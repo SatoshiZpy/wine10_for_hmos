@@ -17,8 +17,9 @@
 #include <linux/ashmem.h>
 #else
 #define ASHMEM_SET_SIZE     _IOW(0x77, 3, size_t)
-/* 内核 ashmem 驱动的 GET_SIZE 不带参数：大小经 ioctl 返回值带出；
- * 不能定义成 _IOR（编号不同会 ENOTTY） */
+/* The kernel ashmem driver's GET_SIZE takes no parameter: the size is
+ * returned through the ioctl return value; defining it as _IOR uses a
+ * different ioctl number and fails with ENOTTY */
 #define ASHMEM_GET_SIZE     _IO(0x77, 4)
 #endif
 

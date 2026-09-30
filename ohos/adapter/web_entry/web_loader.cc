@@ -34,8 +34,7 @@ int BasicLoader::StartMainProcess(int process_type, const std::vector<std::strin
     for (const auto& arg : args) {
       argv_cstr.push_back(const_cast<char*>(arg.c_str()));
     }
-    // ntdll 侧 prepend_argv/build_wargv 依赖 C 约定 argv[argc]==NULL,
-    // 必须补 NULL 终止符, 否则 08-09 heap-buffer-overflow (prepend_argv 越界写) 复现
+    /* argv must be NULL-terminated: ntdll's prepend_argv reads argv[argc] */
     const int argc = static_cast<int>(argv_cstr.size());
     argv_cstr.push_back(nullptr);
     return fn(argc, argv_cstr.data());

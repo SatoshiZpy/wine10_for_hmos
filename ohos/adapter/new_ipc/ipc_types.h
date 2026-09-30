@@ -193,7 +193,7 @@ struct ClientSurfaceParam {
     int32_t height = 0;
     int32_t src_hwnd = 0;
     int32_t src_pid = -1;
-    /* foreign toplevel 所属进程：请求按此路由到 owner 进程 */
+    /* process owning the foreign toplevel: requests are routed to it */
     int32_t owner_pid = -1;
     int32_t client_widget_id = -1;
 
@@ -223,9 +223,10 @@ struct ClientSurfaceParam {
     }
 };
 
-/* 跨进程 GDI 共享面：像素在 memfd 里（C 侧分配 mmap 直写），A 侧
- * mmap 后在自己的 GDI surface 上合成 blit（A 不为 C 建 XComponent，
- * A 充当合成方）。fd 随请求附带传递。 */
+/* Cross-process GDI shared surface: pixels live in a memfd (allocated and
+ * directly written by the C side); the owner mmaps it and composites the
+ * blit into its own GDI surface (no XComponent is created for the child,
+ * the owner acts as the compositor).  The fd travels with the request. */
 struct RemoteGdiParam {
     int32_t parent_widget_id = -1;
     int32_t off_x = 0;
@@ -320,12 +321,14 @@ enum IProcessManagerIpcCode : uint32_t {
     COMMAND_CREATE_CLIENT_SURFACE = 13,
     COMMAND_SET_CLIENT_SURFACE_BOUNDS = 14,
     COMMAND_DESTROY_CLIENT_SURFACE = 15,
-    /* 跨进程 GDI 共享：C 侧以 memfd 共享像素，A 侧合成 blit */
+    /* cross-process GDI sharing: pixels shared via memfd, composited by the owner */
     COMMAND_CREATE_REMOTE_GDI = 16,
     COMMAND_REMOTE_GDI_FLUSH  = 17,
     COMMAND_DESTROY_REMOTE_GDI = 18,
-    /* 位置-only 变化：轻量更新 owner 侧 overlay 偏移（不重建共享面） */
+    /* position-only change: lightweight update of the owner-side overlay offset (no rebuild) */
     COMMAND_UPDATE_REMOTE_GDI_BOUNDS = 19,
+    /* visibility change (tab switching etc.): the shared surface is kept, the owner skips/restores it */
+    COMMAND_SET_REMOTE_GDI_VISIBLE = 20,
 };
 
 enum IChildProcessIpcCode : uint32_t {
