@@ -30,16 +30,7 @@
               "entity.system.home"
             ],
             "actions": [
-              "action.system.home",
-              "ohos.want.action.viewData"
-            ],
-            "uris": [
-              {
-                "utd": "com.huawei.ohos_wine.sap",
-                "scheme": "file",
-                "linkFeature": "FileOpen",
-                "maxFileSupported": 1
-              },
+              "action.system.home"
             ]
           }
         ],
