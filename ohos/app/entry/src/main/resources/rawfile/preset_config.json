@@ -1,10 +1,4 @@
 {
-  "version": ".preset_sap_deployed_v1",
-  "mappings": [
-    { "rawDir": "preset/regs", "destAbsDir": "{prefixDir}" },
-    { "rawDir": "preset/sap", "destAbsDir": "{prefixDir}/dosdevices/c:/sap" },
-    { "rawDir": "preset/add", "destAbsDir": "{prefixDir}/dosdevices/c:/windows/system32" },
-    { "rawDir": "preset/modify", "destAbsDir": "{prefixDir}/dosdevices/c:/windows/system32" },
-    { "rawDir": "preset/root", "destAbsDir": "{prefixDir}/dosdevices/c:/users/100" }
-  ]
+  "version": ".preset_deployed_v1",
+  "mappings": []
 }
