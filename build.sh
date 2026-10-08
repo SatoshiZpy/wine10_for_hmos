@@ -26,6 +26,8 @@ COMPILE_DXVK=1
 COMPILE_HAP=1
 DEBUG_MODE=0
 DXVK_LEGACY=0
+WITH_MONO=0
+WITH_GECKO=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-cache)
@@ -52,6 +54,14 @@ while [[ $# -gt 0 ]]; do
             DXVK_LEGACY=1
             shift
             ;;
+        --with-mono)
+            WITH_MONO=1
+            shift
+            ;;
+        --with-gecko)
+            WITH_GECKO=1
+            shift
+            ;;
         -h|--help)
             echo "用法: $0 [--no-cache] [--debug]"
             echo ""
@@ -62,6 +72,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --compile-hap     编译HAP包 (默认启用)"
             echo "  --debug           启用调试模式"
             echo "  --dxvk-legacy     用 DXVK 1.10.3 (dxvk-legacy) 替代默认 2.6.2"
+            echo "  --with-mono       打包 wine-mono (默认不打包)"
+            echo "  --with-gecko      打包 wine-gecko (默认不打包)"
             echo "  -h, --help        显示此帮助信息"
             exit 0
             ;;
@@ -246,7 +258,25 @@ fi
 # ============================================================
 # 8. 编译 Wine
 # ============================================================
-make -j$(nproc)
+# PE 瘦身：ARM64/ARM64EC PE 默认 64KB 文件对齐（winegcc 将 file_align 默认取
+# section_align=0x10000），通过 make 命令行变量覆盖 <arch>_LDFLAGS 追加
+# -Wl,--file-alignment,0x1000（winegcc 专属解析语法，最终转成 lld-link
+# -filealign:0x1000），可回收 ~314 MiB 文件内 padding。SectionAlignment 保持
+# 0x10000 不变（ARM64X .a64xrm 运行时重定向按 RVA 工作，不受文件对齐影响）。
+# 注意：
+#  - 基值从 configure 刚生成的 Makefile 读取，不硬编码探测结果；
+#  - 不能用环境变量预设 arm64ec_LDFLAGS 实现——configure 的 PE 编译器探测会
+#    把该变量拼进直调 clang 的探测命令，lld-link 不认识 GNU 语法会探测失败
+#    （报 "PE cross-compiler not found"）；make 命令行覆盖不经过 configure。
+#  - make 覆盖会被递归 make 自动继承到所有子 Makefile 的链接规则。
+#  - 用户 -Wl,-filealign:0x1000（lld 语法）无效：winegcc 内置对齐参数在后，
+#    lld-link 取后者。
+ALIGN_FLAG="-Wl,--file-alignment,0x1000"
+EC_LDFLAGS_BASE=$(grep -m1 '^arm64ec_LDFLAGS = ' ${BUILD_DIR}/Makefile | sed 's/^arm64ec_LDFLAGS = *//')
+A64_LDFLAGS_BASE=$(grep -m1 '^aarch64_LDFLAGS = ' ${BUILD_DIR}/Makefile | sed 's/^aarch64_LDFLAGS = *//')
+make -j$(nproc) \
+    arm64ec_LDFLAGS="${EC_LDFLAGS_BASE} ${ALIGN_FLAG}" \
+    aarch64_LDFLAGS="${A64_LDFLAGS_BASE} ${ALIGN_FLAG}"
 
 echo "install wine in: ${INSTALL_DIR}"
 make install-lib
@@ -318,11 +348,34 @@ cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfil
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 cp -r ${INSTALL_DIR}/lib/wine/i386-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 
+# ============================================================
+# 9.5 PE 瘦身：strip-all（DWARF 调试节 + COFF 符号表）
+# 只 strip resfile 副本（入 HAP 的），out/ 与 build/ 保持未 strip 供崩溃符号化。
+# 无参数 llvm-strip = strip-all（同 WineHua 做法）；--strip-debug 不删符号表。
+# ubt_*.dll 为闭源翻译器输入，无标准 DWARF（仅自定义 .dbgsymt），排除不动。
+# strip 不重排节布局——64KB 对齐 padding 的回收由上面的 file-alignment sed + relink 完成。
+# ============================================================
+STRIP="${PE_STRIP:-}"
+[ -x "${STRIP}" ] || STRIP="${OHOS_SDK}/native/llvm/bin/llvm-strip"
+if [ ! -x "${STRIP}" ]; then
+    echo "ERROR: llvm-strip not found (PE_STRIP=${PE_STRIP:-unset}, OHOS_SDK=${OHOS_SDK:-unset})"
+    exit 1
+fi
+RESFILE_PE="${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine"
+find "${RESFILE_PE}" -type f \
+    \( -name '*.dll' -o -name '*.exe' -o -name '*.drv' -o -name '*.sys' \
+       -o -name '*.cpl' -o -name '*.ocx' -o -name '*.acm' \) \
+    ! -name 'ubt_*.dll' \
+    -exec "${STRIP}" {} \;
+echo "PE strip-all done: resfile PE now $(du -sh --apparent-size ${RESFILE_PE} | cut -f1)"
+
 # DXVK + vkd3d-proton DLLs 已在 step 8.5 中覆盖到 INSTALL_DIR，
 # 上面的 cp -r 从 INSTALL_DIR 复制到 resfile 时自动包含 DXVK 版本。
 # 无需再次拷贝。
-if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+if [ "${WITH_GECKO}" -eq 1 ]; then
     cp -r ${ROOT_DIR}/third_party/gecko ${APP_DIR}/wine_engine/src/main/resources/resfile/share/wine/
+fi
+if [ "${WITH_MONO}" -eq 1 ]; then
     cp -r ${ROOT_DIR}/third_party/mono ${APP_DIR}/wine_engine/src/main/resources/resfile/share/wine/
 fi
 
