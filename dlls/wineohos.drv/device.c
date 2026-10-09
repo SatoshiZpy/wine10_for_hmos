@@ -211,19 +211,21 @@ static int get_owner_window_id( HWND hwnd )
     /* fallback to any window that is right below our top left corner */
     if (!owner) owner = NtUserWindowFromPoint(data->rects.window.left - 1, data->rects.window.top - 1);
     if (owner) owner = NtUserGetAncestor(owner, GA_ROOT);
-    if (!(owner_win = get_native_win_data( owner )))
-        goto done;
+    if ((owner_win = get_native_win_data( owner )))
+        widget_id = owner_win->widget_id;
 
-    widget_id = owner_win->widget_id;
+    /* Release the lock before GetFocusWindow(): it is a synchronous
+     * round-trip to the ArkUI main thread (adapter JS invoke); holding
+     * win_data_mutex across it deadlocks if the main thread is stuck in a
+     * wine callback (mouse/refresh events call get_win_data). */
+    release_win_data( data );
 
-done:
     if (widget_id <= 0)
     {
         WARN( "failed to get owner window, using current focus window instead, win %p\n", hwnd );
         widget_id = GetFocusWindow();
     }
     TRACE( "get owner window %d, win %p\n", widget_id, hwnd );
-    release_win_data( data );
     return widget_id;
 }
 
