@@ -61,7 +61,7 @@ static struct gl_drawable *create_gl_drawable( HWND hwnd, HDC hdc, int format )
     if (client->native_window)
         gl->base.surface = funcs->p_eglCreateWindowSurface( egl->display, egl_config_for_format(gl->base.format), client->native_window, NULL );
     else if (gl->widget_id <= 0) gl->base.surface = funcs->p_eglCreatePbufferSurface( egl->display, egl_config_for_format(gl->base.format), attribs );
-    else gl->base.surface = funcs->p_eglCreateWindowSurface( egl->display, egl_config_for_format(gl->base.format), GetNativeWindow(gl->widget_id), NULL );
+    else gl->base.surface = funcs->p_eglCreateWindowSurface( egl->display, egl_config_for_format(gl->base.format), GetNativeWindow(gl->widget_id, TRUE), NULL );
 
     TRACE( "Created drawable %s with client window %d\n", debugstr_opengl_drawable( &gl->base ), gl->widget_id );
     return gl;
@@ -93,7 +93,7 @@ static BOOL ohos_surface_create( HWND hwnd, HDC hdc, int format, struct opengl_d
                 CONTAINING_RECORD( gl->base.client, struct ohos_client_surface, client );
             ohos_native_window native_window =
                 ohos_client->native_window ? ohos_client->native_window
-                                           : GetNativeWindow(gl->widget_id);
+                                           : GetNativeWindow(gl->widget_id, TRUE);
             int ret = OH_NativeWindow_NativeWindowHandleOpt(native_window, SET_FORMAT, pf);
             if (ret != 0) {
                 ERR("set format error: %d", ret);

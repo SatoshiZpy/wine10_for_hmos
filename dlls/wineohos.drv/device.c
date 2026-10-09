@@ -89,7 +89,10 @@ static struct native_win_data *get_native_win_data( HWND hwnd )
 static ohos_native_window get_window_handle( struct native_win_data *data )
 {
     if (data->shared_pixels) return NULL;
-    return GetNativeWindow( data->widget_id );
+    /* GDI flush: never block -- invisible windows (e.g. popups being created
+     * before Show) have no surface yet and waiting would stall every flush
+     * for the adapter's full surface timeout. */
+    return GetNativeWindow( data->widget_id, FALSE );
 }
 
 static int get_win_parent( HWND parent )

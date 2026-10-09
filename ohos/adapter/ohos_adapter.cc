@@ -391,11 +391,11 @@ struct window_bounds GetInitialBounds()
     return bounds;
 }
 
-ohos_native_window GetNativeWindow(int widget_id)
+ohos_native_window GetNativeWindow(int widget_id, int wait)
 {
     auto window = WineWindowManager::GetInstance().GetWindow(widget_id);
     if (window) {
-        return window->GetNativeWindow();
+        return window->GetNativeWindow(wait != 0);
     }
     /* client surface XComponents register their OHNativeWindow directly in
      * WindowAdapter, they have no WineWindow */
@@ -527,7 +527,7 @@ static int create_client_surface_and_get_surface_id(
     int client_widget_id = CreateClientSurface(param);
     if (client_widget_id <= 0) return -1;
 
-    ohos_native_window window = GetNativeWindow(client_widget_id);
+    ohos_native_window window = GetNativeWindow(client_widget_id, 0);
     if (!window || OH_NativeWindow_GetSurfaceId(window, surface_id) != 0) {
         LOGE("get surface id failed, client widget %{public}d",
              client_widget_id);

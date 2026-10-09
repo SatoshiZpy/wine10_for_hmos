@@ -268,10 +268,20 @@ bool WineWindow::InitSurface()
   return true;
 }
 
-OHNativeWindow* WineWindow::GetNativeWindow()
+OHNativeWindow* WineWindow::GetNativeWindow(bool wait)
 {
   if (window_ != nullptr || InitSurface()) {
     return window_;
+  }
+
+  /* Invisible windows get no XComponent surface (it is only set up once the
+   * window is shown); blocking here would stall every GDI flush during popup
+   * creation for the full WaitSurface timeout.  Only the GL/Vulkan surface
+   * creation paths pass wait=true: they may legitimately run between the
+   * XComponent attach and Show(). */
+  if (!wait && !IsVisible()) {
+    LOGW("the window status is invisible, widgetId: %{public}d", GetWidget());
+    return nullptr;
   }
 
   if (!HasSurface()) {
@@ -281,12 +291,7 @@ OHNativeWindow* WineWindow::GetNativeWindow()
     }
   }
 
-  // After waiting for surface, try to initialize regardless of visibility
-  // This handles the case where XComponent callback completes before Show() is called
   if (!InitSurface()) {
-    if (!IsVisible()) {
-      LOGW("the window status is invisible, widgetId: %{public}d", GetWidget());
-    }
     LOGE("init surface failed");
     return nullptr;
   }

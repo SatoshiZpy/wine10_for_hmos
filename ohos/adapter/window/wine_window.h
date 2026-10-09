@@ -71,7 +71,7 @@ class WineWindow {
     void SetSurfaceId(uint64_t surface_id) { surface_id_ = surface_id; }
     uint64_t GetSurfaceId() const { return surface_id_; }
     
-    OHNativeWindow* GetNativeWindow();
+    OHNativeWindow* GetNativeWindow(bool wait);
 
     const NewWindowParam& GetParam() const { return newParam_; }
 

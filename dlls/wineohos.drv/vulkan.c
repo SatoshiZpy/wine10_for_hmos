@@ -89,7 +89,7 @@ static VkResult ohos_vulkan_surface_create(HWND hwnd, const struct vulkan_instan
     /* Get OHNativeWindow: the imported producer for a cross-process child,
      * the local XComponent window otherwise */
     native_window = surface->native_window ? surface->native_window
-                                           : GetNativeWindow(surface->widget_id);
+                                           : GetNativeWindow(surface->widget_id, TRUE);
     if (!native_window)
     {
         ERR("Failed to get native window for widget_id %d\n", surface->widget_id);

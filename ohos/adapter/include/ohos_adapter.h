@@ -54,7 +54,7 @@ ADAPTER_API void SetWindowAlpha(int widget_id, float opacity);
 ADAPTER_API void SetWindowTitle(int widget_id, const char* title);
 ADAPTER_API void SetWindowVisible(int widget_id, int visible);
 ADAPTER_API struct window_bounds GetInitialBounds(void);
-ADAPTER_API ohos_native_window GetNativeWindow(int widget_id);
+ADAPTER_API ohos_native_window GetNativeWindow(int widget_id, int wait);
 ADAPTER_API int GetFocusWindow(void);
 
 /* client surface: an XComponent nested into the parent window page */

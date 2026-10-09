@@ -389,7 +389,7 @@ int IpcHelper::CreateClientSurface(ClientSurfaceParam& param,
     int client_widget_id = ::CreateClientSurface(&p);
     if (client_widget_id <= 0) return -1;
 
-    ohos_native_window window = ::GetNativeWindow(client_widget_id);
+    ohos_native_window window = ::GetNativeWindow(client_widget_id, 0);
     if (!window || OH_NativeWindow_GetSurfaceId(window, &surface_id) != 0) {
         LOGE("IpcHelper::CreateClientSurface: get surface id failed, "
              "widget=%{public}d", client_widget_id);
