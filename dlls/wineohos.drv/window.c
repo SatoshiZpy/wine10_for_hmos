@@ -187,10 +187,18 @@ void ohos_wake_page_composite( int parent_widget_id )
 static int get_window( HWND hwnd )
 {
     struct ohos_win_data *data = get_win_data( hwnd );
+    int ret;
 
-    if (!data || data->widget_id <= 0) return -1;
+    if (!data) return -1;
+    if (data->widget_id > 0) ret = data->widget_id;
+    else
+    {
+        WARN( "win %p has win_data but no native window yet (widget_id %d)\n",
+              hwnd, data->widget_id );
+        ret = -1;
+    }
     release_win_data( data );
-    return data->widget_id;
+    return ret;
 }
 
 static inline BOOL can_window_become_foreground(HWND hwnd)
