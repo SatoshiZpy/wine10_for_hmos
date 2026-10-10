@@ -62,7 +62,15 @@ using namespace ohos::adapter::window;
 using namespace ohos::adapter::event;
 using namespace ohos::adapter::multiprocess;
 
-static Mutex mutex;
+// Serializes native window creation; keep separate from g_process_spawn_mutex
+// so a stalled spawn can never block window creation (and vice versa).
+static Mutex g_window_mutex;
+// Child-process spawning must not share the window mutex: StartNativeProcess
+// blocks until the spawned process connects back, and holding the window mutex
+// during that wait deadlocks CreateNativeWindow (seen as a frozen UI whenever
+// a spawn stalls, e.g. cold start after first install).
+static Mutex g_process_spawn_mutex;
+
 static bool has_loaded_ = false;
 
 static window_features_mask get_features_mask(const struct window_features* features)
@@ -200,7 +208,7 @@ static void UpdateWindow(int widget_id, const NewWindowParam& param)
 
 int CreateNativeWindow(const struct window_param* param)
 {
-    MutexLock lock_protect(mutex);
+    MutexLock lock_protect(g_window_mutex);
     if (!param) {
         LOGE("invalid param");
         return -1;
@@ -231,7 +239,7 @@ void CloseNativeWindow(int widget_id)
 
 int StartNativeProcess(int argc, char** argv, const struct launch_options* options)
 {
-    MutexLock lock_protect(mutex);
+    MutexLock lock_protect(g_process_spawn_mutex);
     if (!options) {
         LOGE("invalid launch_options");
         return -1;

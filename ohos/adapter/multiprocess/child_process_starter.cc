@@ -4,6 +4,8 @@
 
 #include "child_process_starter.h"
 #include <future>
+#include <chrono>
+#include <thread>
 
 #include <IPCKit/ipc_kit.h>
 #include <sys/types.h>
@@ -110,19 +112,34 @@ int ChildProcessStarter::StartGpuProcess(
   return ChildProcessHelper::CreateProcess(commands, fds);
 }
 
-void ChildProcessStarter::CreateProcess(
+bool ChildProcessStarter::CreateProcess(
     const std::string& processKey,
     const std::string& sock_path) {
-  LOGI("ChildProcessStarter::CreateProcess key=%{public}s, "
-       "sock=%{public}s (empty impl)",
+  LOGI("ChildProcessStarter::CreateProcess key=%{public}s, sock=%{public}s",
        processKey.c_str(), sock_path.c_str());
 
-  auto func = ohos::adapter::GetJSFunction("WineChildProcessStarter.CreateProcess");
-  if (!func) {
-    LOGE("WineChildProcessStarter.CreateProcess not defined");
-    return;
+  // On a cold start (e.g. first install) the wine side can reach its first
+  // child-process spawn before the ArkTS side of this process has registered
+  // the JS binding. Wait for the binding to appear instead of giving up.
+  const JSFunction* func = nullptr;
+  constexpr int kMaxAttempts = 300;  // 300 * 100ms = 30s
+  for (int i = 0; i < kMaxAttempts; ++i) {
+    func = ohos::adapter::GetJSFunction("WineChildProcessStarter.CreateProcess");
+    if (func != nullptr) {
+      break;
+    }
+    if (i % 10 == 0) {
+      LOGW("WineChildProcessStarter.CreateProcess not ready yet, waiting (%{public}d s)",
+           i / 10);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (func == nullptr) {
+    LOGE("WineChildProcessStarter.CreateProcess not defined after waiting");
+    return false;
   }
   func->Invoke<void>(processKey, sock_path);
+  return true;
 }
 
 void ChildProcessStarter::KillProcess() {

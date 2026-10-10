@@ -5,6 +5,7 @@
 #include "ohos/adapter/ipc_lite/ipc_lite_adapter.h"
 
 #include <sys/socket.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -111,7 +112,11 @@ int IpcLiteHelper::CreateProcess(
         LOGE("IpcLiteHelper CreateProcess: StartServer failed");
         return -1;
     }
-    ChildProcessStarter::GetInstance().CreateProcess(processKey, socket_path);
+    if (!ChildProcessStarter::GetInstance().CreateProcess(processKey, socket_path)) {
+        LOGE("IpcLiteHelper CreateProcess: starter failed, skip accept");
+        ChildProcessLiteHost::Instance().Close();
+        return -1;
+    }
     int32_t pid = ChildProcessLiteHost::Instance().AcceptAndSetup(commands, fds);
     ChildProcessLiteHost::Instance().Close();
     if (pid <= 0) {
@@ -155,6 +160,16 @@ bool ChildProcessLiteHost::StartServer(const std::string& socket_path)
 int32_t ChildProcessLiteHost::AcceptAndSetup(
     const std::vector<std::string>& commands, const std::vector<std::pair<int, int>>& fds)
 {
+    // The child process is expected to connect back within a few hundred
+    // milliseconds. Bound the wait so a failed/lost spawn can never block the
+    // caller (and the global adapter lock) forever.
+    constexpr int kAcceptTimeoutMs = 15000;
+    struct pollfd pfd = { server_fd_, POLLIN, 0 };
+    int poll_ret = poll(&pfd, 1, kAcceptTimeoutMs);
+    if (poll_ret <= 0) {
+        LOGE("ChildProcessLiteHost accept timed out after %{public}d ms", kAcceptTimeoutMs);
+        return -1;
+    }
     int client_fd = accept(server_fd_, nullptr, nullptr);
     if (client_fd < 0) {
         LOGE("ChildProcessLiteHost accept failed");
@@ -166,6 +181,14 @@ int32_t ChildProcessLiteHost::AcceptAndSetup(
     for (const auto& [fd, remap] : fds) { send_fds.push_back(fd); }
     if (!UnixSocketUtils::SendMsgWithFds(client_fd, send_buf.data(), send_buf.size(), send_fds)) {
         LOGE("ChildProcessLiteHost SendMsgWithFds failed");
+        close(client_fd);
+        return -1;
+    }
+    constexpr int kRecvTimeoutMs = 10000;
+    struct pollfd rfd = { client_fd, POLLIN, 0 };
+    poll_ret = poll(&rfd, 1, kRecvTimeoutMs);
+    if (poll_ret <= 0) {
+        LOGE("ChildProcessLiteHost recv pid timed out after %{public}d ms", kRecvTimeoutMs);
         close(client_fd);
         return -1;
     }
