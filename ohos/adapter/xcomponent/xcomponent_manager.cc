@@ -148,7 +148,10 @@ void XComponentManager::SetActivateWindow(int32_t widget_id) {
 }
 
 int32_t XComponentManager::GetActivateWindow() {
-  std::lock_guard<std::mutex> lock_protect(mutex_);
+  /* Do NOT hold mutex_ here: the JS invoke below is a synchronous round-trip
+   * to the ArkUI main thread, which can concurrently try to take mutex_ in
+   * OnWidgetAvailable/OnActivationChanged. Holding the lock across the
+   * invoke deadlocks both threads. */
   auto jsFunc = ohos::adapter::GetJSFunction("ContextAdapter.GetActiveWindow");
   if (jsFunc) {
     return jsFunc->Invoke<int32_t>();
