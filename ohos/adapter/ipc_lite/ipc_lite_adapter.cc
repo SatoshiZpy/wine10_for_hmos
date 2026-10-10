@@ -6,8 +6,10 @@
 
 #include <sys/socket.h>
 #include <poll.h>
+#include <time.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -29,8 +31,21 @@ static const std::string kIpcSocketPathPrefix = "/data/storage/el2/base/files/wi
 static std::string GenerateRandomName()
 {
     static const char kChars[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    // rand() without srand() is deterministically seeded (1) in every process,
+    // so different processes generate the SAME name sequence. When the name
+    // of a freshly spawned process collides with its parent's instanceKey, the
+    // ability manager just moves the existing instance to the front and never
+    // starts a new process: nothing connects back to the socket and the spawn
+    // times out. Mix pid/time/counter so every call is unique.
+    static std::atomic<unsigned int> call_counter{0};
+    unsigned int seed = static_cast<unsigned int>(getpid())
+        ^ static_cast<unsigned int>(time(nullptr))
+        ^ (call_counter.fetch_add(1) * 2654435761u);
     std::string name;
-    for (int i = 0; i < 8; i++) { name += kChars[rand() % (sizeof(kChars) - 1)]; }
+    for (int i = 0; i < 8; i++) {
+        seed = seed * 1103515245 + 12345;
+        name += kChars[(seed >> 16) % (sizeof(kChars) - 1)];
+    }
     return name;
 }
 
