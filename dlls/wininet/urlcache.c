@@ -636,7 +636,33 @@ static DWORD cache_container_open_index(cache_container *container, DWORD blocks
         if(header && !cache_container_is_valid(header, file_size)) {
             WARN("detected old or broken index.dat file\n");
             UnmapViewOfFile(header);
+#ifdef __OHOS__
+            /* OHOS: recreate a fresh index in place instead of recursing into
+             * FreeUrlCacheSpaceW: it deletes the whole cache directory, which
+             * fails with a sharing violation while any cache file is open,
+             * leaving the broken index in place and re-entering this path
+             * without bound until the thread exhausts its stack. */
+            {
+                DWORD ret;
+
+                CloseHandle(container->mapping);
+                container->mapping = NULL;
+                file = CreateFileW(index_path, GENERIC_READ|GENERIC_WRITE,
+                        FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
+                if(file == INVALID_HANDLE_VALUE) {
+                    ReleaseMutex(container->mutex);
+                    return GetLastError();
+                }
+                ret = cache_container_set_size(container, file, MIN_BLOCK_NO);
+                CloseHandle(file);
+                if(ret != ERROR_SUCCESS) {
+                    ReleaseMutex(container->mutex);
+                    return ret;
+                }
+            }
+#else
             FreeUrlCacheSpaceW(container->path, 100, 0);
+#endif
         }else if(header) {
             UnmapViewOfFile(header);
         }else {

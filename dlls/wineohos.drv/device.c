@@ -1328,6 +1328,18 @@ void create_native_window( struct ohos_win_data *data ){
     style = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
     ex_style = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
 
+    /* WS_EX_LAYERED|WS_EX_TRANSPARENT together mark a pure decoration window.
+     * The OHOS compositor displays the subwindow buffer without per-pixel alpha blending, 
+     * so such a "shadow" would cover the menu it decorates with solid color. 
+     * These windows get no native window at all (widget_id = -1): OHOS_WindowPosChanging
+     * then vetoes the driver surface and wine keeps them on the default surface,
+     * where they stay invisible. Visual loss: the soft shadow only. */
+    if ((ex_style & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) == (WS_EX_LAYERED | WS_EX_TRANSPARENT))
+    {
+        data->widget_id = -1;
+        return;
+    }
+
     if ((style & (WS_POPUP | WS_CHILD)) == WS_CHILD)
         WARN("A top-level window that has the WS_CHILD style (which is usually invalid/inconsistent).\n");
 

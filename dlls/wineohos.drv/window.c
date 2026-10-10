@@ -930,7 +930,18 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
             unmap_native_buffer( &buffer );
 
     } else {
-        TRACE("Unable to lock surface %p window %p buffer %d\n", surface, window_surface->hwnd, surface->widget_id);
+        /* The native window surface is not ready yet (the subwindow was just
+         * created and the surface callback has not fired, GetNativeWindow
+         * returns null).  This is transient.  Return FALSE so wine keeps the
+         * dirty bounds and retries the flush on the next idle pass.  Do NOT
+         * return TRUE here: window_surface_flush() would reset the dirty
+         * bounds and the guest would never paint again, leaving the
+         * compositor showing the buffer's uninitialized content.  Windows
+         * that paint exactly once per show then permanently cover the menu
+         * with solid garbage instead of their per-pixel-alpha content. */
+        TRACE("Unable to lock surface %p window %p buffer %d\n",
+              surface, window_surface->hwnd, surface->widget_id);
+        return FALSE;
     }
 
     return TRUE;

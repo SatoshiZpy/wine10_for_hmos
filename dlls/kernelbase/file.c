@@ -1819,6 +1819,21 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetFinalPathNameByHandleW( HANDLE file, LPWSTR pa
     for (ULONG i = 0; i < info->Name.Length / sizeof(WCHAR); i++)
         if (info->Name.Buffer[i] == '/') info->Name.Buffer[i] = '\\';
 
+#ifdef __OHOS__
+    /* Windows canonicalizes the object name of directory handles: the trailing
+     * separator is only kept for the volume root (e.g. "\??\C:\"). A trailing
+     * backslash here makes apps that append "\name" to the result produce
+     * doubled backslashes inside a \\?\ path, which is rejected by the file
+     * system (STATUS_OBJECT_NAME_INVALID). Seen with DingTalk ark user-folder
+     * creation (status 0xc0000033). */
+    if (info->Name.Length > 3 * sizeof(WCHAR) &&
+        info->Name.Buffer[info->Name.Length / sizeof(WCHAR) - 1] == '\\')
+    {
+        info->Name.Length -= sizeof(WCHAR);
+        info->Name.Buffer[info->Name.Length / sizeof(WCHAR)] = 0;
+    }
+#endif
+
     /* FILE_NAME_OPENED is not supported yet, and would require Wineserver changes */
     if (flags & FILE_NAME_OPENED)
     {

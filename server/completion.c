@@ -392,6 +392,13 @@ DECL_HANDLER(remove_completion)
     }
     if (current->completion_wait)
     {
+#ifdef __OHOS__
+        /* OHOS: the wait may already be detached (completion_close_handle
+         * removes it from the list and clears completion); removing an
+         * unlinked entry again writes through stale neighbours and
+         * corrupts the list, crashing add_completion's wake_up later. */
+        if (current->completion_wait->completion)
+#endif
         list_remove( &current->completion_wait->wait_queue_entry );
     }
     else if (!(current->completion_wait = create_completion_wait( current )))

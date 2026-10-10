@@ -1186,6 +1186,14 @@ static DWORD dns_info_alloc( IP_ADAPTER_ADDRESSES *aa, ULONG family, ULONG flags
         if (!(flags & GAA_FLAG_SKIP_DNS_SERVER))
         {
             servers = (DNS_ADDR_ARRAY *)buf;
+#ifdef __OHOS__
+            /* OHOS: 'size' must be reset to the real stack-buffer capacity
+             * before every adapter iteration.  Upstream leaves it stale (or
+             * uninitialized on the first adapter); DnsQueryConfig() then
+             * trusts it as the buffer capacity and can write more than the
+             * 3 entries 'buf' holds, smashing the stack. */
+            size = sizeof(buf);
+#endif
             for (attempt = 0; attempt < 5; attempt++)
             {
                 err = DnsQueryConfig( query, 0, name, NULL, servers, &size );
