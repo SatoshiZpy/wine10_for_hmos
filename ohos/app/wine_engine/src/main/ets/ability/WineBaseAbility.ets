@@ -22,6 +22,10 @@ const TAG: string = 'WineBaseAbility';
 
 export class WineBaseAbility extends UIAbility implements WineProxy {
   protected widgetId: number = -1;
+  /* True when the want carried an explicit widgetId parameter (an in-app
+   * window launch); false for desktop/system launches, where onCreate
+   * allocates a fresh widget id via kGetWidget. */
+  protected isWindowLaunch: boolean = false;
   protected startUri: string = '';
   protected windowStage: window.WindowStage | undefined = undefined;
   protected nativeContext: NativeContext =
@@ -38,6 +42,7 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
     if (want && want.parameters) {
       if (want.parameters['widgetId'] !== undefined) {
         this.widgetId = want.parameters['widgetId'] as number;
+        this.isWindowLaunch = true;
       }
       if (want.parameters['features'] !== undefined &&
         want.parameters['window_state'] !== undefined) {

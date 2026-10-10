@@ -13,7 +13,7 @@ import Inject from '../common/InjectModule';
 import { CloseResponse, CaptionButtonRect, WindowBound, WindowLimits } from '../interface/CommonInterface';
 import { DisplayAdapter } from  '../adapter/DisplayAdapter';
 import { WineBaseAbility } from './WineBaseAbility';
-import { CommandType, ConfigData } from '../common/Constants';
+import { ConfigData } from '../common/Constants';
 import { PermissionManagerAdapter } from '../adapter/PermissionManagerAdapter';
 import { deviceInfo, emitter, settings } from '@kit.BasicServicesKit';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
@@ -211,12 +211,6 @@ export class WineAbility extends WineBaseAbility {
         ', moduleName: ' + JSON.stringify(want.moduleName) +
         ', LaunchParam: ' + JSON.stringify(launchParam));
     }
-    if (uriNotNull) {
-      let uri = want['uri'] as string;
-      this.openNewWindow(uri.replace("file://docs/", "file:///"));
-    } else if (want.parameters && want.parameters['openInNewWindow'] === true) {
-      this.openNewWindow(want['uri'] as string);
-    }
   }
 
   async onPrepareToTerminateAsync(): Promise<boolean> {
@@ -231,16 +225,19 @@ export class WineAbility extends WineBaseAbility {
   }
 
   private checkSingleInstance(): boolean {
-    if (this.widgetId > 0) {
+    /* In-app window launches carry an explicit widgetId and are always
+     * allowed.  Desktop launches do not: onCreate has already allocated a
+     * fresh widget id for them (kGetWidget always increments), so testing
+     * widgetId here can never detect a repeat -- check whether another
+     * ability already owns a live window instead. */
+    if (this.isWindowLaunch) {
       return false;
     }
-    this.openNewWindow(this.startUri);
-    this.closeWindow();
-    return true;
-  }
-
-  private openNewWindow(open_url: string) {
-    this.nativeContext.ExecuteCommand(CommandType.kNewWindow, { url: open_url });
+    if (this.abilityManager && !this.abilityManager.isEmpty()) {
+      this.closeWindow();
+      return true;
+    }
+    return false;
   }
 
   private onPadWindowStageCreate(windowClass: window.Window, storage: LocalStorage) {
