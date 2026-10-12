@@ -4,7 +4,6 @@
 
 #include "ohos/adapter/web_entry/web_entry.h"
 
-#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -44,15 +43,6 @@ void SetEnv(const std::vector<std::string>& env) {
     auto& value = env[i + 1];
     if (!value.empty()) {
       setenv(key.c_str(), value.c_str(), 1 );
-      if (key == "WINEDEBUGLOG") {
-        int fd = open(value.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
-        if (fd != -1)
-        {
-          dup2(fd, STDOUT_FILENO);
-          dup2(fd, STDERR_FILENO);
-          close(fd);
-        }
-      }
     }
     else {
       unsetenv(key.c_str());

@@ -52,10 +52,8 @@ export class WineLoaderAdapter extends BaseAdapter {
     const loader = `${bundleDir}/libs/arm64/libwine.so`;
 
     const prefixDir = `${dataDir}/prefix`;
-    const logPath = `${dataDir}/log.txt`;
 
     this.ensureDir(prefixDir);
-    this.ensureFile(logPath);
 
     await this.deployPreset(prefixDir);
 
@@ -70,7 +68,6 @@ export class WineLoaderAdapter extends BaseAdapter {
     this.setEnv(environ, 'WINEDLLPATH', dllDir);
     this.setEnv(environ, 'WINEPREFIX', prefixDir);
     this.setEnv(environ, 'WINE_IPC_DIR', dataDir);
-    this.setEnv(environ, 'WINEDEBUGLOG', logPath);
 
     // Force Vulkan renderer for D3D11/D3D12 via WINE_D3D_CONFIG
     // this.setEnv(environ, 'WINE_D3D_CONFIG', 'renderer=vulkan');
@@ -152,19 +149,6 @@ export class WineLoaderAdapter extends BaseAdapter {
       }
     } catch (err) {
       LogUtil.error(TAG, `ensureDir failed: ${path}, err=${JSON.stringify(err)}`);
-    }
-  }
-
-  private ensureFile(path: string): void {
-    try {
-      const exists = fs.accessSync(path);
-      if (!exists) {
-        const file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE);
-        const randomAccessFile = fs.createRandomAccessFileSync(file);
-        randomAccessFile.close();
-      }
-    } catch (err) {
-      LogUtil.error(TAG, `ensureFile failed: ${path}, err=${JSON.stringify(err)}`);
     }
   }
 }
