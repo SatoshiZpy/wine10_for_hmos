@@ -212,10 +212,16 @@ static void init_options(void)
 {
     char *wine_debug = getenv("WINEDEBUG");
     const char *app_name, *p;
+#ifndef __OHOS__
     struct stat st1, st2;
+#endif
 
     nb_debug_options = 0;
 
+#ifndef __OHOS__
+    /* On OHOS debug output is bridged to hilog (see __wine_dbg_output), not
+     * stderr: appspawn points the fds of native processes at /dev/null, so
+     * this check would silence err/fixme and skip WINEDEBUG parsing. */
     /* check for stderr pointing to /dev/null */
     if (!fstat( 2, &st1 ) && S_ISCHR(st1.st_mode) &&
         !stat( "/dev/null", &st2 ) && S_ISCHR(st2.st_mode) &&
@@ -224,6 +230,7 @@ static void init_options(void)
         default_flags = 0;
         return;
     }
+#endif
     if (!wine_debug) return;
     if (!strcmp( wine_debug, "help" )) debug_usage();
 
