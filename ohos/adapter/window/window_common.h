@@ -29,6 +29,7 @@ enum WindowFeatures : int32_t {
     WINDOW_NO_ACTIVATION,
     USE_FLOATING_WINDOW,
     USE_DARK_MODE,
+    WINDOW_MODAL,
 };
 
 enum WindowState : int32_t {

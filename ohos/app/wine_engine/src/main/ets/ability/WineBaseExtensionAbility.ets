@@ -111,18 +111,22 @@ export class WineBaseExtensionAbility extends EmbeddedUIExtensionAbility impleme
 
   setWindowTitle(title:string) {}
 
-  createSubWindow(name: string): Promise<window.Window> {
+  createSubWindow(name: string, isModal?: boolean): Promise<window.Window> {
     return new Promise<window.Window>((resolve, reject) => {
       if (!this.session) {
         reject('Failed to get Session');
         return;
       }
       const windowProxy = this.session.getUIExtensionWindowProxy();
+      // zLevelAboveParentLoosened detaches the sub session from its parent
+      // in PC mode, defeating modality; modal windows also reject button
+      // style updates (1300004), so they are created without decoration.
       const subWindowOpts: window.SubWindowOptions = {
         title: 'This is a subwindow',
-        decorEnabled: true,
+        decorEnabled: !isModal,
         maximizeSupported: true,
-        zLevelAboveParentLoosened: true
+        zLevelAboveParentLoosened: !isModal,
+        isModal: isModal
       };
       windowProxy?.createSubWindowWithOptions(name, subWindowOpts)
         .then((data: window.Window) => {

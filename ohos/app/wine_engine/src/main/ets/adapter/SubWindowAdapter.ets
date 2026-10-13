@@ -51,15 +51,18 @@ export class SubWindowAdapter extends BaseAdapter {
   createWindow(param: NewWindowParam, callback: (id: number) => void) {
     let parentId = this.getParentWindowId(param.parent_id);
     let bounds = param.bounds;
+    let styles = this.windowStyle.buildWindowStyles(param.feature_mask, param.window_state_mask);
     LogUtil.info(TAG, `createWindow widget_id: ${param.widget_id},
       parentId: ${param.parent_id} --> ${parentId},
       bounds: (${bounds.left}, ${bounds.top}, ${bounds.width}, ${bounds.height})`);
 
-    const item = this.findReuseWindow(parentId, bounds);
+    // Modal windows are created with SubWindowOptions.isModal and never
+    // enter the reuse cache.
+    const item = styles.is_modal ? undefined : this.findReuseWindow(parentId, bounds);
     if (item) {
       this.reuseSubWindow(item, param, bounds, parentId, callback);
     } else {
-      this.createSubWindow(param, bounds, parentId, callback);
+      this.createSubWindow(param, bounds, parentId, callback, styles);
     }
   }
 
@@ -165,7 +168,8 @@ export class SubWindowAdapter extends BaseAdapter {
   private createSubWindow(param: NewWindowParam,
     bounds: WindowBound,
     parentId: number,
-    callback: (id: number) => void) {
+    callback: (id: number) => void,
+    styles: WindowStyles) {
     const para: Record<string, IParams> = {
       'subWindowParams': {
         id: param.widget_id,
@@ -176,11 +180,10 @@ export class SubWindowAdapter extends BaseAdapter {
     };
     let instanceKey = `${param.process_key}:${param.widget_id}`;
     let subStorage: LocalStorage = new LocalStorage(para);
-    let styles = this.windowStyle.buildWindowStyles(param.feature_mask, param.window_state_mask);
     let proxy = this.getParentProxy(parentId);
     LogUtil.info(TAG, 'createSubWindow instanceKey:' + instanceKey + ',styles:' + JSON.stringify(styles) +
       ',feature_mask:' + param.feature_mask + ',window_state_mask:' + param.window_state_mask);
-    proxy?.createSubWindow(instanceKey)
+    proxy?.createSubWindow(instanceKey, styles.is_modal)
       .then((data: window.Window) => {
         this.initSubWindow(data, parentId, param.widget_id, bounds, subStorage, callback, styles);
       }).catch((error: BusinessError) => {
@@ -241,7 +244,8 @@ export class SubWindowAdapter extends BaseAdapter {
             id: widget_id,
             parentId: parentId,
             subWindow: data,
-            localStorage: subStorage
+            localStorage: subStorage,
+            isModal: styles.is_modal
           });
           callback(widget_id);
         }).catch((err: BusinessError) => {
@@ -254,38 +258,46 @@ export class SubWindowAdapter extends BaseAdapter {
     }
   }
 
-  private computeWindowStyles(windowClass: window.Window, styles: WindowStyles) {
+  // Style calls may be rejected on modal sub windows (1300004); isolate each.
+  private applyStyle(action: () => void, name: string) {
     try {
-      windowClass.setWindowDecorVisible(false);
-      windowClass.setWindowTitleButtonVisible(false, false, false);
-      if (styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
-        let buttonStyle: window.DecorButtonStyle = {
-          colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
-        };
-        windowClass.setDecorButtonStyle(buttonStyle);
-      }
-      windowClass.setWindowTitleMoveEnabled(!styles.hide_title_bar);
-      if (styles.always_on_top) {
-        windowClass.raiseToAppTop()
-          .catch((err: BusinessError) => {
-            LogUtil.error(TAG, 'Failed to setTopmost. Cause:' + JSON.stringify(err));
-          });
-      }
-      windowClass.setResizeByDragEnabled(styles.resizable)
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
-        });
-      windowClass.setWindowFocusable(styles.focusable)
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to setFocusable. Cause:' + JSON.stringify(err));
-        });
-      windowClass.setWindowTouchable(styles.touchable)
-        .catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to setTouchable. Cause:' + JSON.stringify(err));
-        });
+      action();
     } catch (err) {
-      LogUtil.error(TAG, 'Failed to compute window styles. Cause:' + JSON.stringify(err));
+      LogUtil.error(TAG, `${name} failed: ` + JSON.stringify(err));
     }
+  }
+
+  private computeWindowStyles(windowClass: window.Window, styles: WindowStyles) {
+    this.applyStyle(() => windowClass.setWindowDecorVisible(false), 'setWindowDecorVisible');
+    this.applyStyle(() => windowClass.setWindowTitleButtonVisible(false, false, false),
+      'setWindowTitleButtonVisible');
+    // Modality is set at creation time and cannot be toggled afterwards.
+    if (styles.use_dark_mode && deviceInfo.deviceType === '2in1') {
+      let buttonStyle: window.DecorButtonStyle = {
+        colorMode: ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+      };
+      this.applyStyle(() => windowClass.setDecorButtonStyle(buttonStyle), 'setDecorButtonStyle');
+    }
+    this.applyStyle(() => windowClass.setWindowTitleMoveEnabled(!styles.hide_title_bar),
+      'setWindowTitleMoveEnabled');
+    if (styles.always_on_top) {
+      windowClass.raiseToAppTop()
+        .catch((err: BusinessError) => {
+          LogUtil.error(TAG, 'Failed to setTopmost. Cause:' + JSON.stringify(err));
+        });
+    }
+    windowClass.setResizeByDragEnabled(styles.resizable)
+      .catch((err: BusinessError) => {
+        LogUtil.error(TAG, 'Failed to setResizeable. Cause:' + JSON.stringify(err));
+      });
+    windowClass.setWindowFocusable(styles.focusable)
+      .catch((err: BusinessError) => {
+        LogUtil.error(TAG, 'Failed to setFocusable. Cause:' + JSON.stringify(err));
+      });
+    windowClass.setWindowTouchable(styles.touchable)
+      .catch((err: BusinessError) => {
+        LogUtil.error(TAG, 'Failed to setTouchable. Cause:' + JSON.stringify(err));
+      });
   }
 
   private async resizeSubWindow(windowClass: window.Window, width: number, height: number) {
@@ -324,10 +336,18 @@ export class SubWindowAdapter extends BaseAdapter {
     for (let i = 0; i < this.subWindowList.length; i++) {
       const item = this.subWindowList[i];
       if (item && item.id === id) {
-        item.subWindow.minimize().catch((err: BusinessError) => {
-          LogUtil.error(TAG, 'Failed to close the subWindow. Cause:' + JSON.stringify(err));
-        });
-        this.addReuseWindow(item);
+        if (item.isModal) {
+          // A modal window must release its parent: destroy, don't cache.
+          item.subWindow.destroyWindow()
+            .catch((err: BusinessError) => {
+              LogUtil.error(TAG, 'Failed to destroy the modal subWindow. Cause:' + JSON.stringify(err));
+            });
+        } else {
+          item.subWindow.minimize().catch((err: BusinessError) => {
+            LogUtil.error(TAG, 'Failed to close the subWindow. Cause:' + JSON.stringify(err));
+          });
+          this.addReuseWindow(item);
+        }
         this.subWindowList.splice(i, 1);
         break;
       }

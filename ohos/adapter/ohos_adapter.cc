@@ -118,6 +118,10 @@ static window_features_mask get_features_mask(const struct window_features* feat
         mask |= features_mask_for_type(WindowFeatures::USE_DARK_MODE);
     }
 
+    if (features && features->is_modal) {
+        mask |= features_mask_for_type(WindowFeatures::WINDOW_MODAL);
+    }
+
     LOGD("get_features_mask: %{public}#lx", mask);
     return mask;
 }

@@ -290,6 +290,7 @@ export enum WindowFeatures {
   WINDOW_NO_ACTIVATION,
   USE_FLOATING_WINDOW,
   USE_DARK_MODE,
+  WINDOW_MODAL,
 };
 
 export enum WindowState {
@@ -317,6 +318,7 @@ export class WindowStyles {
   touchable: boolean;
   show_window: boolean;
   has_shadow: boolean;
+  is_modal: boolean;
 }
 
 export interface NewWindowParam {
@@ -343,6 +345,7 @@ export interface ISubWindowInfo {
   parentId: number,
   subWindow: window.Window,
   localStorage: LocalStorage,
+  isModal: boolean,
 }
 
 export interface SelectFileDialogParams {

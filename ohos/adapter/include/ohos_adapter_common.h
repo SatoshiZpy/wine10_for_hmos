@@ -72,6 +72,7 @@ struct window_features {
   int prevents_app_activation;
   int use_floating_window;
   int use_dark_mode;
+  int is_modal;
 };
 
 struct window_state {

@@ -177,17 +177,21 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
       });
   }
 
-  createSubWindow(name: string): Promise<window.Window> {
+  createSubWindow(name: string, isModal?: boolean): Promise<window.Window> {
     return new Promise<window.Window>((resolve, reject) => {
       if (!this.windowStage) {
         reject('Failed to get windowStage');
         return;
       }
+      // zLevelAboveParentLoosened detaches the sub session from its parent
+      // in PC mode, defeating modality; modal windows also reject button
+      // style updates (1300004), so they are created without decoration.
       const subWindowOpts: window.SubWindowOptions = {
         title: 'This is a subwindow',
-        decorEnabled: true,
+        decorEnabled: !isModal,
         maximizeSupported: true,
-        zLevelAboveParentLoosened: true
+        zLevelAboveParentLoosened: !isModal,
+        isModal: isModal
       };
       this.windowStage.createSubWindowWithOptions(name, subWindowOpts)
         .then((data: window.Window) => {

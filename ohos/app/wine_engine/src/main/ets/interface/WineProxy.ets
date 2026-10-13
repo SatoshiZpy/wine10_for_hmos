@@ -13,7 +13,7 @@ export interface WineProxy {
   getWindowId: () => number;
   closeWindow: () => void;
   setWindowTitle: (title:string) => void;
-  createSubWindow: (name: string) => Promise<window.Window>;
+  createSubWindow: (name: string, isModal?: boolean) => Promise<window.Window>;
   getOriginWindowId: () => number;
   updateAvoidAreaStatus: (isFullScreen: boolean) => void;
   isUIAbility: () => boolean;
@@ -34,6 +34,7 @@ export const dwStyles: WindowStyles = {
   touchable: true,
   show_window: false,
   has_shadow: false,
+  is_modal: false,
 };
 
 export class FakeWineProxy implements WineProxy {
@@ -57,7 +58,7 @@ export class FakeWineProxy implements WineProxy {
 
   setWindowTitle(title:string) {}
 
-  createSubWindow(name: string): Promise<window.Window> {
+  createSubWindow(name: string, isModal?: boolean): Promise<window.Window> {
     return new Promise<window.Window>((resolve, reject) => {
       reject('fake window.')
     });

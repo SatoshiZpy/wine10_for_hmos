@@ -31,6 +31,7 @@ WindowStyle WineWindow::BuilderStyle(const NewWindowParam& param)
   styles.maximize_button = has_title_bar && has_feature(WindowFeatures::WINDOW_MAXIMIZE_BUTTON, param.feature_mask);
   styles.use_floating_window = has_feature(WindowFeatures::USE_FLOATING_WINDOW, param.feature_mask);
   styles.use_dark_mode = has_feature(WindowFeatures::USE_DARK_MODE, param.feature_mask);
+  styles.is_modal = has_feature(WindowFeatures::WINDOW_MODAL, param.feature_mask);
   styles.always_on_top = is_state(WindowState::WINDOW_TOP_MOST, param.window_state_mask);
 
   bool is_enable = !is_state(WindowState::WINDOW_DISABLED, param.window_state_mask);

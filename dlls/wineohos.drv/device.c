@@ -188,16 +188,6 @@ static struct native_win_data *create_native_win_data( HWND hwnd )
     return data;
 }
 
-static struct window_features get_window_features( HWND hwnd )
-{
-    DWORD style, ex_style;
-
-    style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
-    ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
-
-    return get_window_features_for_style(style, ex_style);
-}
-
 static int get_owner_window_id( HWND hwnd )
 {
     int widget_id = -1;
@@ -1019,7 +1009,7 @@ static int create_window( HWND hwnd, int window_type, const struct window_bounds
     param.parent_id = (window_type != MAIN_WINDOW) ?
         get_owner_window_id(hwnd) : 0;
 
-    param.features = get_window_features(hwnd);
+    param.features = get_window_features_for_hwnd(hwnd);
     param.state = get_window_state(hwnd);
 
     win_data->widget_id = CreateNativeWindow(&param);
@@ -1361,7 +1351,10 @@ void create_native_window( struct ohos_win_data *data ){
     if (is_tooltips_hwnd(data->hwnd))
         window_type = TOOLTIP;
 
-    TRACE( "hwnd %p style %08x ex_style %08x\n", data->hwnd, style, ex_style );
+    TRACE( "hwnd %p style %08x ex_style %08x window_type %d owner %p modal %d\n",
+           data->hwnd, style, ex_style, window_type,
+           NtUserGetWindowRelative( data->hwnd, GW_OWNER ),
+           is_modal_window( data->hwnd ) );
 
     int cx, cy;
     if (!(cx = data->rects.visible.right - data->rects.visible.left)) cx = 1;

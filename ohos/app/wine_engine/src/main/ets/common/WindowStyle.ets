@@ -56,6 +56,7 @@ export class WindowStyle {
     styles.focusable = is_enable && !this.hasValue(WindowFeatures.WINDOW_NO_ACTIVATION, feature_mask);
     styles.touchable = is_enable && this.hasValue(WindowFeatures.WINDOW_TOUCHABLE, feature_mask);
     styles.has_shadow = this.hasValue(WindowFeatures.WINDOW_HAS_SHADOW, feature_mask);
+    styles.is_modal = this.hasValue(WindowFeatures.WINDOW_MODAL, feature_mask);
     styles.show_window = this.hasValue(WindowState.WINDOW_VISIBLE, window_state_mask);
     return styles;
   }

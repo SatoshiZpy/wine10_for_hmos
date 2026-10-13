@@ -167,6 +167,8 @@ enum ohos_window_messages
 
 extern struct window_state get_window_state(HWND hwnd);
 extern struct window_features get_window_features_for_style(DWORD style, DWORD ex_style);
+extern struct window_features get_window_features_for_hwnd(HWND hwnd);
+extern BOOL is_modal_window(HWND hwnd);
 extern int get_widget_id( HWND hwnd );
 extern HWND get_capture_window(void);
 extern void init_monitors( int width, int height );

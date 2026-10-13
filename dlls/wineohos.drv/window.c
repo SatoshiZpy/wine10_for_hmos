@@ -263,18 +263,46 @@ struct window_features get_window_features_for_style(DWORD style, DWORD ex_style
     return wf;
 }
 
+/***********************************************************************
+ *           is_modal_window
+ *
+ * A window is modal when its owner's root is disabled: wine's modal
+ * dialogs disable the owner before creating the dialog, so the state
+ * is visible at native-window creation time.
+ */
+BOOL is_modal_window( HWND hwnd )
+{
+    HWND owner = NtUserGetWindowRelative( hwnd, GW_OWNER );
+    BOOL modal = FALSE;
+
+    if (owner)
+    {
+        owner = NtUserGetAncestor( owner, GA_ROOT );
+        modal = !NtUserIsWindowEnabled( owner );
+    }
+    TRACE( "hwnd %p owner %p modal %d\n", hwnd, owner, modal );
+    return modal;
+}
+
+struct window_features get_window_features_for_hwnd( HWND hwnd )
+{
+    DWORD style = NtUserGetWindowLongW( hwnd, GWL_STYLE );
+    DWORD ex_style = NtUserGetWindowLongW( hwnd, GWL_EXSTYLE );
+    struct window_features wf = get_window_features_for_style( style, ex_style );
+
+    wf.is_modal = is_modal_window( hwnd );
+    return wf;
+}
+
 static void set_window_properties(struct ohos_win_data *data)
 {
     int widget_id;
-    DWORD style, ex_style;
     HWND owner;
     struct ohos_win_data *owner_data;
     struct window_features wf;
     struct window_state state;
 
     widget_id = get_widget_id(data->hwnd);
-    style = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
-    ex_style = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
 
     owner = NtUserGetWindowRelative(data->hwnd, GW_OWNER);
     if (owner)
@@ -282,7 +310,7 @@ static void set_window_properties(struct ohos_win_data *data)
     owner_data = get_win_data( owner );
     if (owner_data) SetParentWindow(widget_id, get_widget_id(owner_data->hwnd));
 
-    wf = get_window_features_for_style(style, ex_style);
+    wf = get_window_features_for_hwnd(data->hwnd);
     SetWindowFeatures(widget_id, &wf);
 
     state = get_window_state(data->hwnd);
