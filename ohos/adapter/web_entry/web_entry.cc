@@ -20,6 +20,7 @@
 #include "ohos/adapter/multiprocess/command_line/command_line.h"
 #include "ohos/adapter/multiprocess/command_line/command_line_helper.h"
 #include "ohos/adapter/new_ipc/child_process_entry.h"
+#include "ohos/adapter/watchdog/exit_watchdog.h"
 #include "ohos/adapter/web_entry/web_loader.h"
 
 using namespace std::chrono_literals;
@@ -162,7 +163,7 @@ void RunWine(int process_type,
   LOGI("RunWine in g_initialized: %{public}d", g_initialized);
   if (!g_initialized) {
     multiprocess::CommandLineHelper::SetCommandLine(process_type, args, env);
-    std::thread mainthread([args, env, process_type]() {
+    auto wine_main = [args, env, process_type]() {
       /* set the environment variables first: the IPC server derives its
        * socket directory from WINE_IPC_DIR */
       SetEnv(env);
@@ -183,8 +184,18 @@ void RunWine(int process_type,
 
       Destroy();
       g_destroyed.store(true);
-    });
-    mainthread.detach();
+      /* thread body returned under our control: the watchdog monitor
+       * sees the completed flag and stands down */
+    };
+    /* All wine process types (main, server, spawned children) share the
+     * same exit semantics: exit()/main() return ends the session through
+     * KillNativeProcess (which marks the thread orderly-exiting for the
+     * monitor), while an abnormal death (abort_thread with other wine
+     * threads alive) bypasses it and leaves the ArkUI side running as a
+     * white-screen zombie -- the liveness monitor kills only that.  A
+     * process that keeps running after its windows are gone is left
+     * alone as long as its wine thread is alive. */
+    watchdog::WatchWineMainThread(std::move(wine_main));
     g_initialized = true;
   }
 

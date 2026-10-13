@@ -86,7 +86,7 @@ std::shared_ptr<WineWindow> WineWindowManager::GetWindow(int32_t widget_id)
   return windows_[widget_id];
 }
 
-bool WineWindowManager::IsWindowAtLast()
+bool WineWindowManager::HasSingleToplevelWindow()
 {
   int top_window_count = 0;
   for (const auto& pair : windows_) {
@@ -96,6 +96,18 @@ bool WineWindowManager::IsWindowAtLast()
     }
   }
   return top_window_count == 1;
+}
+
+bool WineWindowManager::HasVisibleToplevelWindow()
+{
+  MutexLock lock_protect(windows_mutex_);
+  for (const auto& pair : windows_) {
+    WineWindow* window = pair.second.get();
+    if (window && window->AsToplevelWindow() && window->IsVisible()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace ohos::adapter::window

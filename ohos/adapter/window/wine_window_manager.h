@@ -48,7 +48,8 @@ class WineWindowManager : public WindowStatusListener {
     }
 
     bool IsEmpty();
-    bool IsWindowAtLast();
+    bool HasSingleToplevelWindow();
+    bool HasVisibleToplevelWindow();
 
   private:
     WineWindowManager();

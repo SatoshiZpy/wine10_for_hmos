@@ -35,6 +35,7 @@
 #include "ohos/adapter/common/mutex.h"
 #include "ohos/adapter/cursor/cursor.h"
 #include "ohos/adapter/event/event_manager.h"
+#include "ohos/adapter/watchdog/exit_watchdog.h"
 #include "ohos/adapter/external_protocol/external_protocol_adapter.h"
 #include "ohos/adapter/file_manager/file_manager_adapter.h"
 #include "ohos/adapter/ime_adapter/input_method_adapter.h"
@@ -862,7 +863,10 @@ void KillNativeProcess(int exitcode)
     /* Both normal exit (process_exit_wrapper) and fatal/signal crash
      * paths converge here: this environment never calls exit(), static
      * destructors do not run, so wine_ipc_<pid>.sock must be cleaned up
-     * explicitly before handing over to the JS-side kill */
+     * explicitly before handing over to the JS-side kill.  Mark the wine
+     * thread as orderly-exiting FIRST so the exit watchdog's liveness
+     * monitor does not mistake this controlled death for a crash. */
+    watchdog::MarkWineOrderlyExit();
     CleanupIpcServer();
     ipc_lite::IpcLiteHelper::KillProcess();
 }

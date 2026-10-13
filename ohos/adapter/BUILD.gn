@@ -21,6 +21,7 @@ if (is_ohos) {
       "//ohos/adapter/aki_hook:aki_hook",
       "//ohos/adapter/policy:policy",
       "//ohos/adapter/window:window",
+      "//ohos/adapter/watchdog:watchdog",
       "//ohos/adapter/battery:battery",
       "//ohos/adapter/bluetooth:bluetooth_adapter",
       "//ohos/adapter/browser:browser_adapter",
