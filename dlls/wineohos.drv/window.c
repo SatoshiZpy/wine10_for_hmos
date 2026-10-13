@@ -521,6 +521,8 @@ static void pull_events(void)
  * WM_SYSCOMMAND/SC_RESTORE (what the Windows taskbar posts) makes win32u
  * run the full SW_RESTORE path so the app repaints before the OHOS
  * window is shown; restoring the host window directly leaves it white.
+ * Windows hidden after being shown (tray-style SW_HIDE close) are
+ * restored too; born-hidden helpers (has_shown stays FALSE) are not.
  */
 static void restore_minimized_windows(void)
 {
@@ -540,13 +542,20 @@ static void restore_minimized_windows(void)
     {
         struct ohos_win_data *data = win_data_context[i];
         DWORD style;
+        BOOL restore = FALSE;
 
         if (!data || data->widget_id <= 0) continue;
         if (data->hwnd == desktop) continue;
         style = NtUserGetWindowLongW( data->hwnd, GWL_STYLE );
         if (style & WS_CHILD) continue;
-        /* only windows the user sees as minimized: visible and iconic */
-        if ((style & (WS_VISIBLE | WS_MINIMIZE)) != (WS_VISIBLE | WS_MINIMIZE)) continue;
+        /* windows the user sees as minimized: visible and iconic */
+        if ((style & (WS_VISIBLE | WS_MINIMIZE)) == (WS_VISIBLE | WS_MINIMIZE))
+            restore = TRUE;
+        /* was shown, then hidden (tray-style close); born-hidden helpers
+         * never had on_screen set */
+        else if (data->has_shown && !data->on_screen)
+            restore = TRUE;
+        if (!restore) continue;
         if (count < ARRAY_SIZE(hwnds)) hwnds[count++] = data->hwnd;
         else WARN( "too many minimized windows, hwnd %p skipped\n", data->hwnd );
     }
