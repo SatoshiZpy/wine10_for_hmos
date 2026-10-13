@@ -515,6 +515,54 @@ static void pull_events(void)
 
 
 /***********************************************************************
+ *           restore_minimized_windows
+ *
+ * Tray-icon click: restore this process's minimized toplevel windows.
+ * WM_SYSCOMMAND/SC_RESTORE (what the Windows taskbar posts) makes win32u
+ * run the full SW_RESTORE path so the app repaints before the OHOS
+ * window is shown; restoring the host window directly leaves it white.
+ */
+static void restore_minimized_windows(void)
+{
+    static DWORD last_restore_tick;
+
+    HWND hwnds[128];
+    HWND desktop = NtUserGetDesktopWindow();
+    DWORD now = NtGetTickCount();
+    int i, count = 0;
+
+    /* Debounce: a second queued pass would un-maximize a window that was
+     * maximized before minimizing.  Only armed when something was posted. */
+    if (now - last_restore_tick < 500) return;
+
+    pthread_mutex_lock( &win_data_mutex );
+    for (i = 0; i < ARRAY_SIZE(win_data_context); i++)
+    {
+        struct ohos_win_data *data = win_data_context[i];
+        DWORD style;
+
+        if (!data || data->widget_id <= 0) continue;
+        if (data->hwnd == desktop) continue;
+        style = NtUserGetWindowLongW( data->hwnd, GWL_STYLE );
+        if (style & WS_CHILD) continue;
+        /* only windows the user sees as minimized: visible and iconic */
+        if ((style & (WS_VISIBLE | WS_MINIMIZE)) != (WS_VISIBLE | WS_MINIMIZE)) continue;
+        if (count < ARRAY_SIZE(hwnds)) hwnds[count++] = data->hwnd;
+        else WARN( "too many minimized windows, hwnd %p skipped\n", data->hwnd );
+    }
+    pthread_mutex_unlock( &win_data_mutex );
+
+    if (count) last_restore_tick = now;
+
+    for (i = 0; i < count; i++)
+    {
+        TRACE( "tray click: restoring minimized window %p\n", hwnds[i] );
+        NtUserPostMessage( hwnds[i], WM_SYSCOMMAND, SC_RESTORE, 0 );
+    }
+}
+
+
+/***********************************************************************
  *           process_events
  */
 static int process_events( DWORD mask )
@@ -678,6 +726,10 @@ static int process_events( DWORD mask )
              * calling win32u entry points is legal). */
             TRACE("OVERLAY_DIRTY_EVENT page %d\n", event->data.overlay_dirty.parent_widget_id);
             ohos_wake_page_composite( event->data.overlay_dirty.parent_widget_id );
+            break;
+        case TRAY_ICON_CLICK_EVENT:
+            TRACE("TRAY_ICON_CLICK_EVENT\n");
+            restore_minimized_windows();
             break;
         default:
             FIXME("got event %u\n", event->data.type);

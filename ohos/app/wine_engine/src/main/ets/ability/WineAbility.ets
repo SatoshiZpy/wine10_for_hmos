@@ -32,6 +32,9 @@ export class WineAbility extends WineBaseAbility {
   private callback: StatusBarCallback = {
     iconClick: (data: emitter.EventData) => {
       LogUtil.info(TAG, 'iconClick data: ' + JSON.stringify(data));
+      // Forward to this process's wine instance; it restores minimized
+      // windows through the wine-side path to avoid white-screen restores.
+      this.nativeContext.OnTrayIconClick();
     },
     rightMenuClick: (data: emitter.EventData) => {
       LogUtil.info(TAG, 'rightMenuClick data: ' + JSON.stringify(data));

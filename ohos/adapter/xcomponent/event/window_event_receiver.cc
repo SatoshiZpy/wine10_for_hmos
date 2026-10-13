@@ -156,6 +156,13 @@ void OnDeviceModeChange(int32_t widget_id,
   WindowAdapter::GetInstance().NotifyWindowEvent(widget_id, event);
 }
 
+void OnTrayIconClick() {
+  // Not tied to a window: dispatch to every window of this process.
+  TRACE_EVENT_0("OnTrayIconClick");
+  auto event = std::make_shared<TrayIconClickEvent>();
+  WindowAdapter::GetInstance().NotifyWindowEvent(BROADCAST_WIDGET_ID, event);
+}
+
 JSBIND_GLOBAL() {
   JSBIND_FUNCTION(OnWindowInitSize);
   JSBIND_FUNCTION(OnWindowStatusChange);
@@ -168,6 +175,7 @@ JSBIND_GLOBAL() {
   JSBIND_FUNCTION(OnCaptionButtonRectChange);
   JSBIND_FUNCTION(SetSystemWindowLimits);
   JSBIND_FUNCTION(OnDeviceModeChange);
+  JSBIND_FUNCTION(OnTrayIconClick);
 }
 
 }  // namespace ohos::adapter::xcomponent

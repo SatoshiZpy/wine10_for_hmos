@@ -987,6 +987,14 @@ void distribute_input_event_callback( const input_event* event )
             send_event(&data);
             break;
         }
+        case OHOS_TRAY_ICON_CLICK_EVENT:
+        {
+            /* Broadcast event (no hwnd): queued for the desktop thread. */
+            union event_data data;
+            data.type = TRAY_ICON_CLICK_EVENT;
+            send_event(&data);
+            break;
+        }
         default:
             return;
     }

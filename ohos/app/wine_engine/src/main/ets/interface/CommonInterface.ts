@@ -102,6 +102,8 @@ export interface NativeContext {
   OnNotificationCloseCallback: (id: number) => void;
   OnNotificationButtonClickCallback: (id: number, buttonIndex: number) => void;
 
+  OnTrayIconClick: () => void;
+
   OnDisplayChangeCallback: (even: string, id: number) => void;
   OnFontSizeChangeCallback:(fontSizeZoom :number) => void;
 

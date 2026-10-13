@@ -36,6 +36,7 @@ std::string EventTypeName(EventType type) {
       CASE_TYPE(ET_WINDOW_STATUS_CHANGE);
       CASE_TYPE(ET_WINDOW_CAPTION_BUTTON_RECT_CHANGE);
       CASE_TYPE(ET_DEVICE_MODE_CHANGED);
+      CASE_TYPE(ET_TRAY_ICON_CLICK);
 
 #undef CASE_TYPE
       default:

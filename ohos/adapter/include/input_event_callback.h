@@ -19,6 +19,8 @@ typedef enum {
     OHOS_WINDOW_RECT_CHANGE_EVENT,
     OHOS_WINDOW_FOCUS_EVENT,
     OHOS_WINDOW_BLUR_EVENT,
+    // Tray icon clicked; not tied to a window (hwnd/widget_id unused).
+    OHOS_TRAY_ICON_CLICK_EVENT,
 } input_event_type;
 
 typedef enum {

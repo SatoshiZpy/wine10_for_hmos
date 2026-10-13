@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <unordered_map>
 
 #include "ohos/adapter/common/constants.h"
@@ -123,6 +124,17 @@ void WindowAdapter::UnregistWindowEvent(int32_t widget_id)
 void WindowAdapter::NotifyWindowEvent(int32_t widget_id, std::shared_ptr<Event> event)
 {
     MutexLock lock(windows_mutex_);
+    if (widget_id <= 0) {
+        // Broadcast to every window of this process (no event cache).
+        // Iterate a copy so a handler that (un)registers windows cannot
+        // invalidate the loop; lock discipline matches the unicast path.
+        std::vector<std::pair<int32_t, WindowEventCallBack>> targets(
+            window_event_callbacks_.begin(), window_event_callbacks_.end());
+        for (auto& [id, callback] : targets) {
+            callback(id, event);
+        }
+        return;
+    }
     auto it = window_event_callbacks_.find(widget_id);
     if (it != window_event_callbacks_.end()) {
         auto callback = it->second;

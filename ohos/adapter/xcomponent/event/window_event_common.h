@@ -25,7 +25,8 @@ enum EventType : int32_t {
   ET_WINDOW_STATUS_CHANGE = 6,
   ET_WINDOW_CAPTION_BUTTON_RECT_CHANGE = 7,
   ET_DEVICE_MODE_CHANGED = 8,
-  ET_WINDOW_DISPLAY_ID_CHANGE = 9
+  ET_WINDOW_DISPLAY_ID_CHANGE = 9,
+  ET_TRAY_ICON_CLICK = 10
 };
 
 enum class WindowEventType {
@@ -148,6 +149,13 @@ class ADAPTER_EXPORT_API WindowDisplayIdChangeEvent : public Event {
     : Event(EventType::ET_WINDOW_DISPLAY_ID_CHANGE) {}
   std::string ToString() override;
   int display_id = 0;
+};
+
+// Status-bar tray icon clicked (broadcast to every ability process).
+class ADAPTER_EXPORT_API TrayIconClickEvent : public Event {
+ public:
+  explicit TrayIconClickEvent()
+    : Event(EventType::ET_TRAY_ICON_CLICK) {}
 };
 
 std::string EventTypeName(EventType type);

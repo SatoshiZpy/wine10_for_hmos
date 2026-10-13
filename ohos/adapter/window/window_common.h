@@ -15,6 +15,8 @@ using window_features_mask = int64_t;
 using window_state_mask = int64_t;
 
 static constexpr int32_t USER_DEFAULT_WIDGET_ID = 1;
+// NotifyWindowEvent target meaning "every window of this process".
+static constexpr int32_t BROADCAST_WIDGET_ID = 0;
 
 enum WindowFeatures : int32_t {
     WINDOW_TITLE_BAR,

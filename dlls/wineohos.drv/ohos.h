@@ -196,6 +196,7 @@ enum event_type
     SCREENLOCK_EVENT,
     WINDOW_FOCUS_EVENT,
     OVERLAY_DIRTY_EVENT,   /* new content on a child's shared surface: wake the owner to composite (driver-internal) */
+    TRAY_ICON_CLICK_EVENT, /* tray icon clicked: restore this process's minimized windows */
 };
 
 struct ime_data

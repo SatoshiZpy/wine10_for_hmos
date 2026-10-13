@@ -328,6 +328,10 @@ void WineWindow::HandleEvent(std::shared_ptr<Event> event) {
       OnWindowDisplayIdChangeEvent(event);
       break;
     }
+    case EventType::ET_TRAY_ICON_CLICK: {
+      OnTrayIconClickEvent();
+      break;
+    }
     default:
       LOGE("EventType::ET_UNKNOWN not handle: %{public}d", event->type());
       break;
@@ -429,6 +433,23 @@ void WineWindow::OnWindowRectChangeEvent(std::shared_ptr<Event> event) {
 void WineWindow::OnWindowDisplayIdChangeEvent(std::shared_ptr<Event> event) {
   auto window_event = std::static_pointer_cast<WindowDisplayIdChangeEvent>(event);
   SetCurrentDisplayId(window_event->display_id);
+}
+
+void WineWindow::OnTrayIconClickEvent() {
+  // Visible: nothing to restore, skip the wine round-trip.
+  if (IsVisible()) {
+    LOGI("tray icon click skipped, window already visible, widgetId: %{public}d",
+         GetWidget());
+    return;
+  }
+  // Not visible (minimized/hidden): forward to wine, which restores the
+  // process's minimized windows.
+  LOGI("tray icon click, widgetId: %{public}d", GetWidget());
+  input_event event = {};
+  event.type = OHOS_TRAY_ICON_CLICK_EVENT;
+  event.hwnd = hwnd();
+  event.widget_id = GetWidget();
+  EventManager::GetInstance().WindowDispatcher().ExecuteCallback(event);
 }
 
 void WineWindow::UpdateBoundsChanges(int top, int left,

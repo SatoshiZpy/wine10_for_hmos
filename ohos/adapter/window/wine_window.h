@@ -144,6 +144,7 @@ class WineWindow {
     void OnWindowRectChangeEvent(std::shared_ptr<Event> event);
     void OnWindowCaptionButtonRectChangeEvent(std::shared_ptr<Event> event);
     void OnWindowDisplayIdChangeEvent(std::shared_ptr<Event> event);
+    void OnTrayIconClickEvent();
 
     virtual void OnInitialize() {}
     virtual int32_t OnCreateWindow() { return -1; }
