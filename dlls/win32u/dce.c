@@ -25,6 +25,10 @@
 
 #include <assert.h>
 #include <pthread.h>
+#include <stdint.h>
+#if defined(__OHOS__) && defined(__aarch64__) && defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "ntgdi_private.h"
@@ -398,25 +402,56 @@ static void *window_surface_get_shape( struct window_surface *surface, BITMAPINF
     return gdi_bits.ptr;
 }
 
-static BYTE shape_from_alpha_mask( UINT32 *bits, UINT32 alpha_mask, UINT32 alpha )
-{
-    BYTE i, bit, mask = 0;
-    for (i = 0, bit = 7; i < 8; i++, bit--) mask |= ((bits[i] & alpha_mask) == alpha) << bit;
-    return ~mask;
-}
-
+/* Pack 8 color-key comparisons into one 1bpp shape byte. */
 static BYTE shape_from_color_key_16( UINT16 *bits, UINT16 color_mask, UINT16 color_key )
 {
+#if defined(__OHOS__) && defined(__aarch64__) && defined(__ARM_NEON)
+    static const uint16_t weights[8] = {128, 64, 32, 16, 8, 4, 2, 1};
+    const uint16_t *pixels = (const uint16_t *)bits;
+    uint16x8_t vec = vld1q_u16(pixels);
+    uint16x8_t mask = vceqq_u16(vandq_u16(vec, vdupq_n_u16(color_mask)),
+                                vdupq_n_u16(color_key));
+    mask = vshrq_n_u16(mask, 15);
+    return ~(BYTE)vaddvq_u16(vmulq_u16(mask, vld1q_u16(weights)));
+#else
     BYTE i, bit, mask = 0;
     for (i = 0, bit = 7; i < 8; i++, bit--) mask |= ((bits[i] & color_mask) == color_key) << bit;
     return ~mask;
+#endif
 }
 
-static BYTE shape_from_color_key_32( UINT32 *bits, UINT32 color_mask, UINT32 color_key )
+/* Pack 8 alpha/color-key comparisons into one 1bpp shape byte. */
+static BYTE shape_from_masks_32( UINT32 *bits, UINT32 alpha_mask, UINT32 alpha,
+                                UINT32 color_mask, UINT32 color_key )
 {
+#if defined(__OHOS__) && defined(__aarch64__) && defined(__ARM_NEON)
+    static const uint32_t lo_weights[4] = {128, 64, 32, 16};
+    static const uint32_t hi_weights[4] = {8, 4, 2, 1};
+    const uint32_t *pixels = (const uint32_t *)bits;
+    uint32x4_t lo = vld1q_u32(pixels);
+    uint32x4_t hi = vld1q_u32(pixels + 4);
+    uint32x4_t alpha_vec = vdupq_n_u32(alpha);
+    uint32x4_t alpha_mask_vec = vdupq_n_u32(alpha_mask);
+    uint32x4_t color_vec = vdupq_n_u32(color_key);
+    uint32x4_t color_mask_vec = vdupq_n_u32(color_mask);
+    uint32x4_t alpha_lo = vceqq_u32(vandq_u32(lo, alpha_mask_vec), alpha_vec);
+    uint32x4_t alpha_hi = vceqq_u32(vandq_u32(hi, alpha_mask_vec), alpha_vec);
+    uint32x4_t color_lo = vceqq_u32(vandq_u32(lo, color_mask_vec), color_vec);
+    uint32x4_t color_hi = vceqq_u32(vandq_u32(hi, color_mask_vec), color_vec);
+    uint32x4_t match_lo = vorrq_u32(alpha_lo, color_lo);
+    uint32x4_t match_hi = vorrq_u32(alpha_hi, color_hi);
+    uint32_t mask;
+    match_lo = vshrq_n_u32(match_lo, 31);
+    match_hi = vshrq_n_u32(match_hi, 31);
+    mask = vaddvq_u32(vmulq_u32(match_lo, vld1q_u32(lo_weights)));
+    mask += vaddvq_u32(vmulq_u32(match_hi, vld1q_u32(hi_weights)));
+    return ~(BYTE)mask;
+#else
     BYTE i, bit, mask = 0;
-    for (i = 0, bit = 7; i < 8; i++, bit--) mask |= ((bits[i] & color_mask) == color_key) << bit;
+    for (i = 0, bit = 7; i < 8; i++, bit--)
+        mask |= (((bits[i] & alpha_mask) == alpha) || ((bits[i] & color_mask) == color_key)) << bit;
     return ~mask;
+#endif
 }
 
 static BOOL set_surface_shape( struct window_surface *surface, const RECT *rect, const RECT *dirty,
@@ -501,8 +536,8 @@ static BOOL set_surface_shape( struct window_surface *surface, const RECT *rect,
         {
             for (x = dirty->left; x < dirty->right; x += 8)
             {
-                shape[x / 8] &= shape_from_alpha_mask( (UINT32 *)color + x, alpha_mask, alpha );
-                shape[x / 8] &= shape_from_color_key_32( (UINT32 *)color + x, color_mask, color_key );
+                shape[x / 8] &= shape_from_masks_32( (UINT32 *)color + x, alpha_mask, alpha,
+                                                   color_mask, color_key );
             }
         }
         break;

@@ -202,8 +202,8 @@ if [ "${DEBUG_MODE}" -eq 1 ]; then
     export CFLAGS="-fPIC -D__MUSL__=1 -O0 -fno-ident -fdata-sections -ffunction-sections -fno-omit-frame-pointer -g2 -ggnu-pubnames -funwind-tables -no-canonical-prefixes"
     export CXXFLAGS="-fPIC -D__MUSL__=1 -O0 -fno-ident -fdata-sections -ffunction-sections -fno-omit-frame-pointer -g2 -ggnu-pubnames -funwind-tables -no-canonical-prefixes"
 else
-    export CFLAGS="-fPIC -D__MUSL__=1"
-    export CXXFLAGS="-fPIC -D__MUSL__=1"
+    export CFLAGS="-fPIC -D__MUSL__=1 -O2"
+    export CXXFLAGS="-fPIC -D__MUSL__=1 -O2"
 fi
 
 export PKG_CONFIG_PATH="${GNUTLS_STAGING}/lib/pkgconfig:${PKG_CONFIG_PATH}"
