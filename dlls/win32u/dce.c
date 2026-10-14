@@ -25,8 +25,8 @@
 
 #include <assert.h>
 #include <pthread.h>
-#include <stdint.h>
 #if defined(__OHOS__) && defined(__aarch64__) && defined(__ARM_NEON)
+#include <stdint.h>
 #include <arm_neon.h>
 #endif
 #include "ntstatus.h"
@@ -420,11 +420,11 @@ static BYTE shape_from_color_key_16( UINT16 *bits, UINT16 color_mask, UINT16 col
 #endif
 }
 
+#if defined(__OHOS__) && defined(__aarch64__) && defined(__ARM_NEON)
 /* Pack 8 alpha/color-key comparisons into one 1bpp shape byte. */
 static BYTE shape_from_masks_32( UINT32 *bits, UINT32 alpha_mask, UINT32 alpha,
                                 UINT32 color_mask, UINT32 color_key )
 {
-#if defined(__OHOS__) && defined(__aarch64__) && defined(__ARM_NEON)
     static const uint32_t lo_weights[4] = {128, 64, 32, 16};
     static const uint32_t hi_weights[4] = {8, 4, 2, 1};
     const uint32_t *pixels = (const uint32_t *)bits;
@@ -446,13 +446,22 @@ static BYTE shape_from_masks_32( UINT32 *bits, UINT32 alpha_mask, UINT32 alpha,
     mask = vaddvq_u32(vmulq_u32(match_lo, vld1q_u32(lo_weights)));
     mask += vaddvq_u32(vmulq_u32(match_hi, vld1q_u32(hi_weights)));
     return ~(BYTE)mask;
-#else
-    BYTE i, bit, mask = 0;
-    for (i = 0, bit = 7; i < 8; i++, bit--)
-        mask |= (((bits[i] & alpha_mask) == alpha) || ((bits[i] & color_mask) == color_key)) << bit;
-    return ~mask;
-#endif
 }
+#else
+static BYTE shape_from_alpha_mask( UINT32 *bits, UINT32 alpha_mask, UINT32 alpha )
+{
+    BYTE i, bit, mask = 0;
+    for (i = 0, bit = 7; i < 8; i++, bit--) mask |= ((bits[i] & alpha_mask) == alpha) << bit;
+    return ~mask;
+}
+
+static BYTE shape_from_color_key_32( UINT32 *bits, UINT32 color_mask, UINT32 color_key )
+{
+    BYTE i, bit, mask = 0;
+    for (i = 0, bit = 7; i < 8; i++, bit--) mask |= ((bits[i] & color_mask) == color_key) << bit;
+    return ~mask;
+}
+#endif
 
 static BOOL set_surface_shape( struct window_surface *surface, const RECT *rect, const RECT *dirty,
                                const BITMAPINFO *color_info, void *color_bits )
@@ -536,8 +545,13 @@ static BOOL set_surface_shape( struct window_surface *surface, const RECT *rect,
         {
             for (x = dirty->left; x < dirty->right; x += 8)
             {
+#if defined(__OHOS__) && defined(__aarch64__) && defined(__ARM_NEON)
                 shape[x / 8] &= shape_from_masks_32( (UINT32 *)color + x, alpha_mask, alpha,
                                                    color_mask, color_key );
+#else
+                shape[x / 8] &= shape_from_alpha_mask( (UINT32 *)color + x, alpha_mask, alpha );
+                shape[x / 8] &= shape_from_color_key_32( (UINT32 *)color + x, color_mask, color_key );
+#endif
             }
         }
         break;
