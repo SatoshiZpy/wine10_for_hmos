@@ -694,8 +694,22 @@ W32KAPI void window_surface_flush( struct window_surface *surface )
 
     if (intersect_rect( &dirty, &dirty, &bounds ) && (color_bits = window_surface_get_color( surface, color_info )))
     {
-        BOOL shape_changed = update_surface_shape( surface, &surface->rect, &dirty, color_info, color_bits );
-        void *shape_bits = window_surface_get_shape( surface, shape_info );
+        BOOL shape_changed;
+        void *shape_bits;
+
+#ifdef __OHOS__
+        /* drivers that do not consume the shape bitmap (they apply
+         * alpha/color-key/region themselves in flush) do not need the
+         * per-flush 1bpp shape recomputation -- skip the full dirty-rect
+         * scan and drop any stale shape bitmap */
+        if (!surface->funcs->uses_shape || surface->funcs->uses_shape( surface ))
+            shape_changed = update_surface_shape( surface, &surface->rect, &dirty, color_info, color_bits );
+        else
+            shape_changed = clear_surface_shape( surface );
+#else
+        shape_changed = update_surface_shape( surface, &surface->rect, &dirty, color_info, color_bits );
+#endif
+        shape_bits = window_surface_get_shape( surface, shape_info );
 
         TRACE( "Flushing hwnd %p, surface %p %s, bounds %s, dirty %s\n", surface->hwnd, surface,
                wine_dbgstr_rect( &surface->rect ), wine_dbgstr_rect( &surface->bounds ), wine_dbgstr_rect( &dirty ) );

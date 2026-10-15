@@ -65,9 +65,51 @@ struct native_win_data
     int                     shared_scale_num;   /* logical -> raw scale (num) */
     int                     shared_scale_den;   /* logical -> raw scale (den) */
     struct native_buffer    shared_buffer;      /* virtual buffer handed out by LOCK */
+    /* Dirty-rect tracking to avoid redundant drawing.  The NativeWindow
+     * rotates through several DMA buffers, so a buffer dequeued now is
+     * missing every change painted into the other buffers since it was last
+     * posted.  buffer_valid[i] FALSE means slot i's content is unknown
+     * (never painted, geometry change or cache eviction) and it needs a full
+     * repaint; TRUE means only buffer_dirty[i] (union of missed changes) is
+     * missing.  shared_valid is the equivalent for the single persistent
+     * cross-process ashmem buffer. */
+    RECT                    buffer_dirty[NB_CACHED_BUFFERS];
+    BOOL                    buffer_valid[NB_CACHED_BUFFERS];
+    BOOL                    shared_valid;
 };
 
 static struct native_win_data *data_map[65536];
+
+static inline void empty_rect( RECT *rect )
+{
+    rect->left = rect->top = rect->right = rect->bottom = 0;
+}
+
+static inline void union_rect( RECT *dest, const RECT *src1, const RECT *src2 )
+{
+    if (IsRectEmpty( src1 ))
+    {
+        if (IsRectEmpty( src2 )) empty_rect( dest );
+        else *dest = *src2;
+    }
+    else if (IsRectEmpty( src2 )) *dest = *src1;
+    else
+    {
+        dest->left = min( src1->left, src2->left );
+        dest->top = min( src1->top, src2->top );
+        dest->right = max( src1->right, src2->right );
+        dest->bottom = max( src1->bottom, src2->bottom );
+    }
+}
+
+static inline BOOL intersect_rect( RECT *dest, const RECT *src1, const RECT *src2 )
+{
+    dest->left = max( src1->left, src2->left );
+    dest->top = max( src1->top, src2->top );
+    dest->right = min( src1->right, src2->right );
+    dest->bottom = min( src1->bottom, src2->bottom );
+    return !IsRectEmpty( dest );
+}
 
 static unsigned int data_map_idx( HWND hwnd )
 {
@@ -141,6 +183,98 @@ int map_native_buffer( struct native_buffer *buffer )
     return STATUS_SUCCESS;
 }
 
+static pthread_mutex_t gdi_cs;   /* recursive: no Win32 CS on the unix side */
+
+/* Accumulated overlay damage per host page (widget id), in raw host-window
+ * pixel coordinates.  The IPC notification thread records what changed
+ * (child frame, move, show/hide, removal); the host window thread consumes
+ * it when handling WM_OHOS_REFRESH to expose only the affected region
+ * instead of the whole window.  Protected by gdi_cs. */
+struct page_overlay_damage
+{
+    int                     widget_id;
+    RECT                    rect;
+    struct page_overlay_damage *next;
+};
+
+static struct page_overlay_damage *page_damage_list;
+
+static void add_page_overlay_damage( int widget_id, const RECT *rect )
+{
+    struct page_overlay_damage *pd;
+
+    if (!rect || IsRectEmpty( rect )) return;
+    for (pd = page_damage_list; pd; pd = pd->next)
+    {
+        if (pd->widget_id != widget_id) continue;
+        union_rect( &pd->rect, &pd->rect, rect );
+        return;
+    }
+    if ((pd = malloc( sizeof(*pd) )))
+    {
+        pd->widget_id = widget_id;
+        pd->rect = *rect;
+        pd->next = page_damage_list;
+        page_damage_list = pd;
+    }
+}
+
+/* drop pending damage of a destroyed page */
+static void free_page_overlay_damage( int widget_id )
+{
+    struct page_overlay_damage **link = &page_damage_list;
+
+    while (*link)
+    {
+        struct page_overlay_damage *pd = *link;
+        if (pd->widget_id == widget_id)
+        {
+            *link = pd->next;
+            free( pd );
+        }
+        else
+            link = &pd->next;
+    }
+}
+
+/* consume the accumulated overlay damage of a page (host window thread) */
+BOOL take_page_overlay_damage( int widget_id, RECT *rect )
+{
+    struct page_overlay_damage **link = &page_damage_list;
+    BOOL found = FALSE;
+
+    pthread_mutex_lock( &gdi_cs );
+    while (*link)
+    {
+        struct page_overlay_damage *pd = *link;
+        if (pd->widget_id == widget_id)
+        {
+            if (rect) *rect = pd->rect;
+            found = TRUE;
+            *link = pd->next;
+            free( pd );
+            break;
+        }
+        link = &pd->next;
+    }
+    pthread_mutex_unlock( &gdi_cs );
+    return found;
+}
+
+/* require a full repaint of every cached buffer (geometry change, native
+ * window recreation, or a frame painted outside the DIB flush path) */
+static void invalidate_buffer_state( struct native_win_data *data )
+{
+    unsigned int i;
+
+    for (i = 0; i < NB_CACHED_BUFFERS; i++)
+    {
+        data->buffer_valid[i] = FALSE;
+        empty_rect( &data->buffer_dirty[i] );
+    }
+    data->shared_valid = FALSE;
+}
+
 static void release_native_window( struct native_win_data *data )
 {
     unsigned int i;
@@ -155,8 +289,12 @@ static void release_native_window( struct native_win_data *data )
             data->buffers[i] = NULL;
         }
         data->buffer_lru[i] = -1;
+        data->buffer_valid[i] = FALSE;
+        empty_rect( &data->buffer_dirty[i] );
     }
     memset( data->buffers, 0, sizeof(data->buffers) );
+    data->shared_valid = FALSE;
+    free_page_overlay_damage( data->widget_id );
 }
 
 static void free_native_win_data( struct native_win_data *data )
@@ -281,6 +419,10 @@ static int register_buffer( struct native_win_data *win, struct native_buffer *b
 
     win->buffers[i] = buffer;
     win->fence_id[i] = buffer->fence_id;
+    /* a newly cached buffer (first use or LRU replacement) has unknown
+     * content: require a full repaint before partial updates can apply */
+    win->buffer_valid[i] = FALSE;
+    empty_rect( &win->buffer_dirty[i] );
     OH_NativeWindow_NativeObjectReference(buffer->win_buffer);
     TRACE( "hwnd %p %d %p -> %d\n", win->hwnd, win->widget_id, buffer, i );
 
@@ -304,7 +446,8 @@ static int dequeue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
                                   struct native_buffer **buffer );
 static int queue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
                                 struct native_buffer *locked_buffer,
-                                const RECT *dirty_rect );
+                                const RECT *damage_rect, const RECT *copied_rect,
+                                const RECT *flush_dirty );
 static void blit_overlays_into( struct native_win_data *win, struct native_buffer *buf );
 static void gdi_lock(void);
 static void gdi_unlock(void);
@@ -484,14 +627,16 @@ int cancelBuffer( HWND hwnd, int buffer_id )
     return STATUS_SUCCESS;
 }
 
-static int queueBuffer( HWND hwnd, struct native_buffer *locked_buffer, const RECT *dirty_rect )
+static int queueBuffer( HWND hwnd, struct native_buffer *locked_buffer,
+                        const RECT *damage_rect, const RECT *copied_rect,
+                        const RECT *flush_dirty )
 {
     struct native_win_data *win_data;
     int ret;
 
     if (!(win_data = get_native_win_data( hwnd ))) return STATUS_INVALID_HANDLE;
     gdi_lock();
-    ret = queue_buffer_locked( hwnd, win_data, locked_buffer, dirty_rect );
+    ret = queue_buffer_locked( hwnd, win_data, locked_buffer, damage_rect, copied_rect, flush_dirty );
     gdi_unlock();
     return ret;
 }
@@ -499,27 +644,36 @@ static int queueBuffer( HWND hwnd, struct native_buffer *locked_buffer, const RE
 /* caller holds gdi_cs */
 static int queue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
                                 struct native_buffer *locked_buffer,
-                                const RECT *dirty_rect )
+                                const RECT *damage_rect, const RECT *copied_rect,
+                                const RECT *flush_dirty )
 {
     ohos_native_window win;
     struct native_buffer *buffer;
     int ret;
 
     /* shared cross-process window: notify the owner that pixels changed;
-     * the RPC is synchronous, i.e. returns after the owner composited */
+     * the RPC is synchronous, i.e. returns after the owner composited.
+     * The shared ashmem buffer is persistent, so once fully painted only
+     * the flush dirty region ever needs to be written again. */
     if (win_data->shared_pixels)
     {
         int x = 0, y = 0, w = win_data->shared_width, h = win_data->shared_height;
-        if (dirty_rect && !IsRectEmpty( dirty_rect ))
+        if (damage_rect && !IsRectEmpty( damage_rect ))
         {
-            x = dirty_rect->left;
-            y = dirty_rect->top;
-            w = dirty_rect->right - dirty_rect->left;
-            h = dirty_rect->bottom - dirty_rect->top;
+            x = damage_rect->left;
+            y = damage_rect->top;
+            w = damage_rect->right - damage_rect->left;
+            h = damage_rect->bottom - damage_rect->top;
         }
         TRACE( "hwnd %p shared flush id %d rect (%d,%d)-(%d,%d)\n",
                hwnd, win_data->shared_id, x, y, x + w, y + h );
-        return RemoteGdiFlush( win_data->shared_id, x, y, w, h );
+        ret = RemoteGdiFlush( win_data->shared_id, x, y, w, h );
+        if (!ret && copied_rect && !IsRectEmpty( copied_rect ) &&
+            copied_rect->left <= 0 && copied_rect->top <= 0 &&
+            copied_rect->right >= win_data->shared_width &&
+            copied_rect->bottom >= win_data->shared_height)
+            win_data->shared_valid = TRUE;
+        return ret;
     }
 
     if (!(win = get_window_handle( win_data ))) return STATUS_DEVICE_NOT_READY;
@@ -531,12 +685,12 @@ static int queue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
            hwnd, buffer, buffer->fence_id, buffer->buffer_id, buffer->width, buffer->height);
     Region region;
     struct Rect rects[1];
-    if (dirty_rect && !IsRectEmpty( dirty_rect ))
+    if (damage_rect && !IsRectEmpty( damage_rect ))
     {
-        rects[0].x = dirty_rect->left;
-        rects[0].y = dirty_rect->top;
-        rects[0].w = dirty_rect->right - dirty_rect->left;
-        rects[0].h = dirty_rect->bottom - dirty_rect->top;
+        rects[0].x = damage_rect->left;
+        rects[0].y = damage_rect->top;
+        rects[0].w = damage_rect->right - damage_rect->left;
+        rects[0].h = damage_rect->bottom - damage_rect->top;
         region.rects = rects;
         region.rectNumber = 1;
     }
@@ -553,6 +707,32 @@ static int queue_buffer_locked( HWND hwnd, struct native_win_data *win_data,
     ret = OH_NativeWindow_NativeWindowFlushBuffer(win, buffer->win_buffer, buffer->fence_id, region);
     if (ret != 0) {
         ERR("Flush buffer error: %d", ret);
+    }
+    else if (copied_rect && !IsRectEmpty( copied_rect ))
+    {
+        /* The dequeued slot received pending∪dirty from the DIB and is now
+         * fully in sync; every OTHER valid slot missed exactly this flush's
+         * DIB change (not the copied rect -- a first-paint full copy is not
+         * new content for buffers that were already in sync). */
+        int idx = locked_buffer->buffer_id;
+        if (idx >= 0 && idx < NB_CACHED_BUFFERS && win_data->buffers[idx] == locked_buffer)
+        {
+            unsigned int j;
+
+            win_data->buffer_valid[idx] = TRUE;
+            empty_rect( &win_data->buffer_dirty[idx] );
+            if (flush_dirty && !IsRectEmpty( flush_dirty ))
+            {
+                for (j = 0; j < NB_CACHED_BUFFERS; j++)
+                {
+                    if (j == (unsigned int)idx || !win_data->buffers[j] || !win_data->buffer_valid[j])
+                        continue;
+                    union_rect( &win_data->buffer_dirty[j], &win_data->buffer_dirty[j], flush_dirty );
+                }
+            }
+            TRACE( "hwnd %p buffer %d painted %s, dirty %s\n", hwnd, idx,
+                   wine_dbgstr_rect( copied_rect ), wine_dbgstr_rect( flush_dirty ) );
+        }
     }
     return STATUS_SUCCESS;
 }
@@ -646,7 +826,12 @@ int perform( HWND hwnd, int operation, ... )
         if (ret != 0) {
             ERR("set buffer format fail, ret=%d\n", ret);
         }
-        if (!ret) win_data->buffer_format = args_list[0];
+        if (!ret)
+        {
+            win_data->buffer_format = args_list[0];
+            /* the buffer queue is reallocated: cached contents are stale */
+            invalidate_buffer_state( win_data );
+        }
         break;
     case SET_SWAP_INTERVAL:
         args_list[0] = va_arg( args, int );
@@ -665,6 +850,11 @@ int perform( HWND hwnd, int operation, ... )
         ret = OH_NativeWindow_NativeWindowHandleOpt(win, operation, args_list[0], args_list[1]);
         if (ret != 0) {
             ERR("set buffer geometry fail, ret=%d\n", ret);
+        }
+        else
+        {
+            /* new geometry: every cached buffer must be fully repainted */
+            invalidate_buffer_state( win_data );
         }
         break;
     }
@@ -695,6 +885,8 @@ int perform( HWND hwnd, int operation, ... )
         struct native_buffer *buffer;
         struct native_buffer *buffer_ret = va_arg( args, struct native_buffer * );
         RECT *bounds = va_arg( args, RECT * );
+        const RECT *dirty = va_arg( args, const RECT * );
+        RECT *copy_rect = va_arg( args, RECT * );
         ret = dequeueBuffer( hwnd, &buffer );
         if (ret != 0) {
             ERR("dequeueBuffer fail, ret=%d\n", ret);
@@ -709,17 +901,55 @@ int perform( HWND hwnd, int operation, ... )
             bounds->bottom = buffer->height;
         }
         *buffer_ret = *buffer;
+        if (copy_rect)
+        {
+            RECT full;
+
+            full.left = 0;
+            full.top = 0;
+            full.right = buffer->width;
+            full.bottom = buffer->height;
+            if (win_data->shared_pixels)
+            {
+                /* single persistent buffer: after the first full frame only
+                 * the flush dirty region is new */
+                if (!win_data->shared_valid || !dirty)
+                    *copy_rect = full;
+                else if (!intersect_rect( copy_rect, dirty, &full ))
+                    empty_rect( copy_rect );
+            }
+            else
+            {
+                int idx = buffer->buffer_id;
+
+                if (idx >= 0 && idx < NB_CACHED_BUFFERS && win_data->buffer_valid[idx] && dirty)
+                {
+                    /* this buffer skipped the flushes painted into the other
+                     * slots: it needs their dirty union plus this flush's */
+                    *copy_rect = win_data->buffer_dirty[idx];
+                    union_rect( copy_rect, copy_rect, dirty );
+                    if (!intersect_rect( copy_rect, copy_rect, &full ))
+                        empty_rect( copy_rect );
+                }
+                else
+                    *copy_rect = full;
+            }
+        }
         TRACE( "hwnd %p %s bounds %s, ret %d\n", hwnd, get_operation(operation), wine_dbgstr_rect(bounds), ret );
         break;
     }
     case NATIVE_WINDOW_UNLOCK_AND_POST:
     {
-        const RECT *dirty_rect = va_arg( args, const RECT * );
-        TRACE( "hwnd %p %s dirty %s\n", hwnd, get_operation(operation), wine_dbgstr_rect(dirty_rect) );
+        const RECT *damage_rect = va_arg( args, const RECT * );
+        const RECT *copied_rect = va_arg( args, const RECT * );
+        const RECT *flush_dirty = va_arg( args, const RECT * );
+        TRACE( "hwnd %p %s damage %s copied %s dirty %s\n", hwnd, get_operation(operation),
+               wine_dbgstr_rect(damage_rect), wine_dbgstr_rect(copied_rect),
+               wine_dbgstr_rect(flush_dirty) );
         ret = STATUS_BUFFER_OVERFLOW;
         if (win_data->locked_buffer)
         {
-            ret = queueBuffer( hwnd, win_data->locked_buffer, dirty_rect );
+            ret = queueBuffer( hwnd, win_data->locked_buffer, damage_rect, copied_rect, flush_dirty );
             win_data->locked_buffer = NULL;
         }
         TRACE( "hwnd %p %s, ret %d\n", hwnd, get_operation(operation), ret );
@@ -1020,6 +1250,7 @@ static int create_window( HWND hwnd, int window_type, const struct window_bounds
     win_data->container = param.container;
     win_data->win_type = param.type;
     win_data->generation++;
+    invalidate_buffer_state( win_data );
 
     /* publish the native identity so foreign-process children can find the
      * host page for their client surfaces (widget and pid carried as a
@@ -1085,6 +1316,7 @@ int attach_remote_gdi_producer( HWND hwnd, void *pixels, int width,
         win_data->shared_scale_num = win_data->shared_scale_den = 1;
     }
     win_data->widget_id = 0;
+    win_data->shared_valid = FALSE;
     memset( &win_data->shared_buffer, 0, sizeof(win_data->shared_buffer) );
     TRACE( "hwnd %p attached shared GDI surface id %d %dx%d scale %d/%d\n",
            hwnd, shared_id, width, height, win_data->shared_scale_num,
@@ -1120,6 +1352,19 @@ int get_remote_gdi_scale( HWND hwnd, int *scale_num, int *scale_den )
     return 0;
 }
 
+/* Force a full DIB copy on the next flush of every cached buffer of hwnd.
+ * Used after frames painted outside the surface flush path (e.g. the
+ * pre-show white frame), which leave a buffer out of sync with the DIB. */
+void wineohos_invalidate_window_buffers( HWND hwnd )
+{
+    struct native_win_data *win_data = get_native_win_data( hwnd );
+
+    if (!win_data) return;
+    gdi_lock();
+    invalidate_buffer_state( win_data );
+    gdi_unlock();
+}
+
 BOOL detach_remote_gdi_producer( HWND hwnd, int *shared_id )
 {
     struct native_win_data *win_data = get_native_win_data( hwnd );
@@ -1152,7 +1397,6 @@ struct remote_gdi_overlay
 };
 
 static struct remote_gdi_overlay *overlay_list;
-static pthread_mutex_t gdi_cs;   /* recursive: no Win32 CS on the unix side */
 
 static void gdi_lock(void)
 {
@@ -1214,6 +1458,10 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
         ov->pixels = pixels;
         ov->next = overlay_list;
         overlay_list = ov;
+        {
+            RECT r = { off_x, off_y, off_x + width, off_y + height };
+            add_page_overlay_damage( parent_widget_id, &r );
+        }
         /* This function runs on the adapter's IPC ListenLoop thread, which has
          * no wine TEB.  Wine's TRACE/WARN logging fetches the thread context
          * through NtCurrentTeb; on a non-wine thread that dereferences a
@@ -1228,7 +1476,14 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
         {
             if ((*link)->id == id)
             {
+                RECT r;
                 ov = *link;
+                r.left = ov->off_x;
+                r.top = ov->off_y;
+                r.right = ov->off_x + ov->w;
+                r.bottom = ov->off_y + ov->h;
+                /* the host DIB must repaint the area the overlay covered */
+                add_page_overlay_damage( ov->parent_widget_id, &r );
                 *link = ov->next;
                 free( ov );
                 break;
@@ -1239,7 +1494,14 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
     case REMOTE_GDI_OP_UPDATE: /* position-only change, move the overlay offset (hot while dragging) */
         for (ov = overlay_list; ov; ov = ov->next)
         {
+            RECT r;
             if (ov->id != id) continue;
+            /* both the old area (DIB restore) and the new area must repaint */
+            r.left = min( ov->off_x, off_x );
+            r.top = min( ov->off_y, off_y );
+            r.right = max( ov->off_x + ov->w, off_x + ov->w );
+            r.bottom = max( ov->off_y + ov->h, off_y + ov->h );
+            add_page_overlay_damage( ov->parent_widget_id, &r );
             ov->off_x = off_x;
             ov->off_y = off_y;
             wake_page = parent_widget_id;
@@ -1251,12 +1513,18 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
               * first BLIT once shown wakes the host again. */
         for (ov = overlay_list; ov; ov = ov->next)
         {
+            RECT r;
             if (ov->id != id) continue;
+            r.left = ov->off_x;
+            r.top = ov->off_y;
+            r.right = ov->off_x + ov->w;
+            r.bottom = ov->off_y + ov->h;
+            add_page_overlay_damage( ov->parent_widget_id, &r );
             ov->visible = off_x != 0;
-            /* When hiding, the host area is refreshed by wine's own repaint flow
-             * (parent invalidation -> the flush simply stops blending this
-             * overlay); when showing, no wake is needed, wait for the child's
+            /* When hiding, wake the host so the exposed area is restored from
+             * its DIB; when showing, no wake is needed, wait for the child's
              * first frame. */
+            if (!ov->visible) wake_page = parent_widget_id;
             break;
         }
         break;
@@ -1267,6 +1535,20 @@ static void remote_gdi_overlay_notify( int op, int id, int parent_widget_id,
               * (queue_buffer_locked) already blends every overlay of the page.
               * In the steady state the host does not repaint on its own, so wake
               * it for one extra flush to blend the new frame in. */
+        /* off_x/off_y/width/height carry the child's dirty rect in its shared
+         * buffer coordinates; map it onto the page through the overlay's
+         * current position so the host exposes only that region. */
+        for (ov = overlay_list; ov; ov = ov->next)
+        {
+            RECT r;
+            if (ov->id != id) continue;
+            r.left = ov->off_x + max( off_x, 0 );
+            r.top = ov->off_y + max( off_y, 0 );
+            r.right = min( r.left + width, ov->off_x + ov->w );
+            r.bottom = min( r.top + height, ov->off_y + ov->h );
+            add_page_overlay_damage( ov->parent_widget_id, &r );
+            break;
+        }
         wake_page = parent_widget_id;
         break;
     default:

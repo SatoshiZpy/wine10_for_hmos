@@ -162,6 +162,8 @@ HWND ohos_find_toplevel_by_widget_id( int widget_id )
  * inside its own GDI flush (queue_buffer_locked -> blit_overlays_into), and in
  * the steady state the host window does not repaint on its own, so post
  * WM_OHOS_REFRESH to trigger an expose and blend the latest overlays in.
+ * The notification thread has already accumulated the child's damage, so the
+ * handler exposes just that region unless a resize reflush is pending.
  */
 void ohos_wake_page_composite( int parent_widget_id )
 {
@@ -171,6 +173,12 @@ void ohos_wake_page_composite( int parent_widget_id )
     if (!host) return;
     if ((data = get_win_data( host )))
     {
+        /* Overlay-driven refresh: WM_OHOS_REFRESH exposes only the overlay
+         * damage accumulated by the notification thread.  Marking this even
+         * when a refresh is already pending is harmless: a resize reflush
+         * (refresh_from_resize) takes precedence at consumption, and the
+         * resize paths clear overlay_refresh when they arm their message. */
+        data->overlay_refresh = TRUE;
         if (!data->refresh_pending)
         {
             data->refresh_pending = TRUE;
@@ -867,7 +875,7 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
 {
     struct ohos_window_surface *surface = get_ohos_surface(window_surface);
     struct native_buffer buffer;
-    RECT rc;
+    RECT rc, copy, damage;
 
     /* Hold frames while a live resize is in progress (the window size changed
      * very recently).  Each resize step reallocates the surface and the newly
@@ -892,6 +900,7 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
                 if (!data->refresh_pending)
                 {
                     data->refresh_pending = TRUE;
+                    data->refresh_from_resize = TRUE;
                     NtUserPostMessage( window_surface->hwnd, WM_OHOS_REFRESH, 0, 0 );
                 }
                 TRACE("hwnd %p: resize in progress, hold last frame\n", window_surface->hwnd);
@@ -916,7 +925,12 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
      * regions would show up as white flashes around/behind the client
      * surface, most visibly during resize or maximize transitions. */
 
-    if (!perform(window_surface->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc))
+    /* dirty is surface-relative (the surface rect is 0-based), so it maps
+     * directly onto the native buffer coordinate space; the driver returns in
+     * copy the region this particular dequeued buffer is missing (the dirty
+     * unions of the flushes it skipped), instead of making every flush copy
+     * the whole window */
+    if (!perform(window_surface->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc, dirty, &copy))
     {
         const RECT *rgn_rect = surface->clip_rects, *end = surface->clip_rects + surface->clip_count;
         UINT alpha_mask = window_surface->alpha_mask, alpha_bits = window_surface->alpha_bits;
@@ -926,19 +940,26 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
         int x, y, width;
         RECT locked;
 
-        locked.left = rc.left;
-        locked.top = rc.top;
-        locked.right = rc.right;
-        locked.bottom = rc.bottom;
+        /* compositor damage: the whole window, as before */
+        damage.left = rc.left;
+        damage.top = rc.top;
+        damage.right = rc.right;
+        damage.bottom = rc.bottom;
+        intersect_rect(&damage, &damage, rect);
+
+        /* copy region, clipped to the surface rect */
+        locked = copy;
         intersect_rect(&locked, &locked, rect);
 
-        TRACE("hwnd %p, surface_rect %s, dirty %s, locked %s, surface %p\n", window_surface->hwnd,
-              wine_dbgstr_rect(&rc), wine_dbgstr_rect(dirty), wine_dbgstr_rect(&locked), surface);
+        TRACE("hwnd %p, surface_rect %s, dirty %s, copy %s, damage %s, surface %p\n", window_surface->hwnd,
+              wine_dbgstr_rect(&rc), wine_dbgstr_rect(dirty), wine_dbgstr_rect(&locked),
+              wine_dbgstr_rect(&damage), surface);
 
         if (IsRectEmpty(&locked))
         {
-            /* no dirty area, skip copy and just submit empty buffer */
-            perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, NULL);
+            /* no dirty area inside the native buffer, skip copy and just
+             * submit an empty-damage buffer */
+            perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, NULL, NULL, NULL);
             return TRUE;
         }
 
@@ -1007,13 +1028,15 @@ static BOOL ohos_surface_flush( struct window_surface *window_surface, const REC
             dst += buffer.stride;
         }
 
-        /* Always pass the full locked rect as damage to the compositor.
+        /* Always pass the full window rect as damage to the compositor.
          * OHOS NativeWindowFlushBuffer's region parameter is a constraint,
          * not a hint, the compositor only composites the specified region
          * and ignores the rest of the buffer.  Passing only the dirty rect
          * causes uninitialized (yellow/green) pixels outside the dirty area
-         * and breaks edit controls that update small regions. */
-        perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &locked);
+         * and breaks edit controls that update small regions.  (The buffer
+         * content itself is complete outside the copy region thanks to the
+         * per-buffer dirty tracking, but keep the known-good full damage.) */
+        perform(window_surface->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &damage, &locked, dirty);
 
         if (needs_unmap)
             unmap_native_buffer( &buffer );
@@ -1048,11 +1071,22 @@ static void ohos_surface_destroy( struct window_surface *window_surface )
     free( surface->clip_rects );
 }
 
+/* The OHOS compositor has no server-side shape extension: this driver
+ * applies per-pixel alpha, the layered color-key and the window region
+ * (via the clip rects) itself inside ohos_surface_flush.  The 1bpp shape
+ * bitmap that win32u would rebuild over the whole dirty rect on every
+ * flush is never read here, so tell win32u to skip that computation. */
+static BOOL ohos_surface_uses_shape( struct window_surface *window_surface )
+{
+    return FALSE;
+}
+
 static const struct window_surface_funcs ohos_surface_funcs =
 {
     ohos_surface_set_clip,
     ohos_surface_flush,
-    ohos_surface_destroy
+    ohos_surface_destroy,
+    ohos_surface_uses_shape
 };
 
 
@@ -1542,7 +1576,7 @@ static void show_window(struct ohos_win_data *data)
              * so there is no risk of stretching anymore. */
             data->pending_configure = FALSE;
             data->pending_configure_time = 0;
-            if (!perform(data->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc))
+            if (!perform(data->hwnd, NATIVE_WINDOW_LOCK, &buffer, &rc, NULL, NULL))
             {
                 BOOL needs_unmap = !buffer.mapped_addr;
 
@@ -1560,7 +1594,10 @@ static void show_window(struct ohos_win_data *data)
                 }
                 if (needs_unmap)
                     unmap_native_buffer( &buffer );
-                perform(data->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &rc);
+                perform(data->hwnd, NATIVE_WINDOW_UNLOCK_AND_POST, &rc, NULL, NULL);
+                /* the white frame was painted outside the DIB flush path:
+                 * every cached buffer must resync with the DIB */
+                wineohos_invalidate_window_buffers( data->hwnd );
             }
         }
 
@@ -2145,7 +2182,10 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             /* Reflush the final frame after settle (the non-client area was
              * painted into the DIB during the drag but discarded by the hold;
              * the host app does not repaint in the steady state, so push one
-             * frame explicitly). */
+             * frame explicitly).  Full-window expose, and it takes precedence
+             * over a pending overlay-driven refresh. */
+            data->overlay_refresh = FALSE;
+            data->refresh_from_resize = TRUE;
             if (!data->refresh_pending)
             {
                 data->refresh_pending = TRUE;
@@ -2170,6 +2210,9 @@ void OHOS_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT 
             data->buffer_width = new_width;
             data->buffer_height = new_height;
             data->last_resize_time = NtGetTickCount();
+            /* a pending resize settle needs a full-window reflush */
+            data->overlay_refresh = FALSE;
+            data->refresh_from_resize = TRUE;
 
             data->pending_configure = TRUE;
             data->pending_configure_time = NtGetTickCount();
@@ -2460,6 +2503,9 @@ LRESULT OHOS_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     case WM_OHOS_REFRESH:
     {
         struct ohos_win_data *data = get_win_data( hwnd );
+        BOOL overlay_refresh = FALSE;
+        int widget_id = 0;
+
         if (data)
         {
             if (data->last_resize_time &&
@@ -2482,8 +2528,41 @@ LRESULT OHOS_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
                 else
                     ohos_create_remote_gdi_surface( data, NULL );
             }
+            overlay_refresh = data->overlay_refresh && !data->refresh_from_resize;
+            data->overlay_refresh = FALSE;
+            data->refresh_from_resize = FALSE;
             data->refresh_pending = FALSE;
+            widget_id = data->widget_id;
             release_win_data( data );
+        }
+        if (overlay_refresh)
+        {
+            RECT rect;
+            /* Overlay-driven refresh: the host DIB itself did not change,
+             * only the overlay area of the page needs to be recomposited.
+             * Expose just the accumulated overlay damage (raw host window
+             * pixels) instead of the whole window. */
+            if (take_page_overlay_damage( widget_id, &rect ))
+            {
+                struct ohos_win_data *d;
+
+                if ((d = get_win_data( hwnd )))
+                {
+                    RECT client_rect = rect;
+
+                    /* convert raw window pixels -> client coords (the expose
+                     * rect contract, cf. the X11 driver) */
+                    OffsetRect( &client_rect, d->rects.visible.left - d->rects.client.left,
+                                d->rects.visible.top - d->rects.client.top );
+                    release_win_data( d );
+                    TRACE( "hwnd %p overlay refresh rect %s\n", hwnd, wine_dbgstr_rect( &rect ) );
+                    NtUserExposeWindowSurface( hwnd, 0, &client_rect,
+                                               NtUserGetWinMonitorDpi( hwnd, MDT_RAW_DPI ) );
+                    return 0;
+                }
+                /* window data gone: fall through to a full expose */
+            }
+            /* no damage recorded: fall through to a full expose */
         }
         NtUserExposeWindowSurface( hwnd, 0, NULL, 0 );
         return 0;

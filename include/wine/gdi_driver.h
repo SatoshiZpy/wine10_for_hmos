@@ -291,6 +291,11 @@ struct window_surface_funcs
                     const BITMAPINFO *color_info, const void *color_bits, BOOL shape_changed,
                     const BITMAPINFO *shape_info, const void *shape_bits );
     void  (*destroy)( struct window_surface *surface );
+    /* whether the driver consumes the 1bpp shape bitmap passed to flush;
+     * NULL means it does (historical behavior).  Drivers that apply
+     * alpha/color-key/region themselves return FALSE and win32u skips the
+     * per-flush shape computation entirely. */
+    BOOL  (*uses_shape)( struct window_surface *surface );
 };
 
 struct window_surface

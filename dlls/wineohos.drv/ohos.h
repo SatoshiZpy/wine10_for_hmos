@@ -42,6 +42,10 @@ struct ohos_win_data
     unsigned int        has_shown;          /* is window has already called show(), Only shown windows can request surface */
     DWORD               last_resize_time;   /* tick of last window size change, used to hold frames during live resize */
     unsigned int        refresh_pending;    /* WM_OHOS_REFRESH reflush armed during a resize hold */
+    unsigned int        overlay_refresh;      /* pending refresh is overlay-driven: expose only the accumulated
+                                                 overlay damage; ignored while refresh_from_resize is set */
+    unsigned int        refresh_from_resize;  /* pending refresh must reflush the whole window (resize settle);
+                                                 takes precedence over overlay_refresh */
     unsigned int        remote_gdi_recreate_pending; /* shared-surface rebuild deferred across a resize burst */
     RECT                remote_gdi_pending_rect;     /* surface rect to rebuild the shared surface with on settle */
     BOOL                remote_gdi_visible;          /* current overlay visibility (tab switching etc.) */
@@ -129,6 +133,10 @@ extern void set_window_title( HWND hwnd, const WCHAR *text);
 extern BOOL is_tooltips_hwnd(HWND hwnd);
 extern int perform( HWND hwnd, int operation, ... );
 extern int cancelBuffer( HWND hwnd, int buffer_id );
+/* require a full DIB copy on the next flush of every cached buffer */
+extern void wineohos_invalidate_window_buffers( HWND hwnd );
+/* consume accumulated overlay damage of a page (raw host window pixels) */
+extern BOOL take_page_overlay_damage( int widget_id, RECT *rect );
 
 extern pthread_mutex_t win_data_mutex;
 extern void OHOS_SetCursor( HWND hwnd, HCURSOR handle );
