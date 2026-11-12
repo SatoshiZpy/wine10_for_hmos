@@ -1,0 +1,12 @@
+{
+  "oozRepository": "https://github.com/powzix/ooz",
+  "oozCommit": "05038060aa68f9187ae9923b2388ca8db40e58d1",
+  "sse2neonRepository": "https://github.com/DLTcollab/sse2neon",
+  "sse2neonTag": "v1.8.0",
+  "files": {
+    "kraken.cpp": "20c48a30db54efa7681f8c9c674f2a16f081373872d033885a6fdf244b9cff01",
+    "lzna.cpp": "8fc3fa71d814918f4a286d076c38a155ae8d93375281d796e2feba8ab866c712",
+    "bitknit.cpp": "6e448d52fe485032e8b7aaf3efff2f0efd6394c776d0c6b14f91d2e1d286ed73",
+    "sse2neon.h": "07723c9f9457dd4316f1fde3dd4eb6f31dd67d9955f6c21f4e609ac1698be48a"
+  }
+}

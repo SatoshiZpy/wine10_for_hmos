@@ -1,0 +1,4 @@
+ooZ: Copyright (C) 2016 Powzix, GPL-3.0-or-later. Original decoder sources retained unchanged; the build omits the command-line utility.
+SSE2NEON: MIT license, authors and full license in sse2neon.h.
+ARM64EC ABI bridge and build adaptations: entry/src/main/cpp/hmos_codec and scripts/build_hmos_oodle.py.
+No proprietary Oodle DLL is bundled. Forwarded functions use the user's existing game DLL, verified and copied into the private prefix under a distinct name.

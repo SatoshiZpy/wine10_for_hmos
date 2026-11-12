@@ -20,6 +20,7 @@
 
 import { common, contextConstant, Want, StartOptions } from '@kit.AbilityKit';
 import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
+import fileHash from '@ohos.file.hash';
 
 @Entry
 @Component
@@ -99,7 +100,7 @@ struct Launcher {
     }
   }
 
-  private async launch(notepad: boolean): Promise<void> {
+  private async launch(notepad: boolean, smcProbe: boolean = false): Promise<void> {
     if (this.busy || (!notepad && !this.exePath)) return;
     this.busy = true;
     this.failed = false;
@@ -112,17 +113,55 @@ struct Launcher {
       if (!notepad && (args.split('"').length % 2 === 0 || /[\r\n\x00]/.test(args))) {
         throw new Error('启动参数的双引号需要成对，且不能包含换行');
       }
+      // Temporary local crash diagnosis. Preserve the original game files.
+      if (!notepad) {
+        const gameDir = this.exePath.substring(0, this.exePath.lastIndexOf('/'));
+        const library = gameDir + '/System/RGSS300.dll';
+        const diagnostic = this.context().filesDir + '/rgss300-diagnostic.dll';
+        try {
+          if (await fs.access(library)) {
+            await fs.copyFile(library, diagnostic);
+          }
+        } catch (_) {
+          // Diagnostics must not prevent the game from starting.
+        }
+      }
+      if (smcProbe) {
+        await fs.copyFile(this.context().resourceDir + '/lib/wine/i386-windows/wine-smc-probe.exe',
+          this.context().filesDir + '/prefix/dosdevices/c:/wine-smc-probe.exe');
+      }
+      // A marker scopes the experimental builtin override to this launcher session.
+      // Remove it for every other launch; the game directory is never modified.
+      const marker = this.context().filesDir + '/sekiro-codec-active';
+      if (await fs.access(marker)) await fs.unlink(marker);
+      if (!notepad && this.exePath.toLowerCase().endsWith('/sekiro.exe')) {
+        const source = this.exePath.substring(0, this.exePath.lastIndexOf('/')) + '/oo2core_6_win64.dll';
+        const expected = '988e8226d129b03011a96f51b476e86d38c0c3e817266375a78a7cf3b85d93c4';
+        try {
+          if ((await fileHash.hash(source, 'sha256')).toLowerCase() === expected) {
+            const target = this.context().filesDir + '/prefix/dosdevices/c:/windows/system32/hmos_oodle_x64.dll';
+            await fs.copyFile(source, target);
+            if ((await fileHash.hash(target, 'sha256')).toLowerCase() === expected) {
+              const active = await fs.open(marker, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY);
+              await fs.close(active);
+            }
+          }
+        } catch (_) {
+          // A missing or incompatible original keeps the normal game path.
+        }
+      }
       const key = `launcher-${Date.now()}`;
       // start /unix resolves the Unix path and sets the game's working directory
       // to its parent folder. Pass arguments through Wine, never through a shell.
       const want: Want = {
         bundleName: this.context().abilityInfo.bundleName,
         moduleName: 'entry',
-        abilityName: 'EntryAbility',
+        abilityName: 'ProgramRunnerAbility',
         parameters: {
           instanceKey: key + ':1',
           processKey: key,
-          wineExePath: notepad ? 'C:\\windows\\system32\\notepad.exe' :
+          wineExePath: notepad ? (smcProbe ? 'C:\\wine-smc-probe.exe' :
+            'C:\\windows\\system32\\notepad.exe') :
             'C:\\windows\\system32\\start.exe',
           wineArgs: notepad ? '' : `/wait /unix "${this.exePath}"${args ? ' ' + args : ''}`
         }
@@ -175,6 +214,10 @@ struct Launcher {
           .width('100%')
           .enabled(!this.busy)
           .onClick(() => { this.launch(true); })
+        Button('运行自修改代码自检（诊断）')
+          .width('100%')
+          .enabled(!this.busy)
+          .onClick(() => { this.launch(true, true); })
         if (this.status) {
           Text(this.status)
             .fontSize(14)
@@ -196,4 +239,3 @@ struct Launcher {
     .backgroundColor('#F5F7FA')
   }
 }
-
