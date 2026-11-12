@@ -203,6 +203,9 @@ static void *working_set_limit   = (void *)0x7fff0000;
 static void *host_addr_space_limit;  /* top of the host virtual address space */
 
 static struct file_view *arm64ec_view;
+#if defined(__OHOS__) && defined(__aarch64__)
+static BOOL ubt_host_protect;
+#endif
 
 ULONG_PTR user_space_wow_limit = 0;
 struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
@@ -2035,6 +2038,42 @@ static NTSTATUS set_protection( struct file_view *view, void *base, SIZE_T size,
     return STATUS_SUCCESS;
 }
 
+#if defined(__OHOS__) && defined(__aarch64__)
+/* UBT uses NtProtectVirtualMemory to write-protect translated guest code and
+ * catch self-modification. These host-only changes must not replace the guest's
+ * executable/read-write protection reported by VirtualQuery and VirtualProtect.
+ *
+ * The installed UBT marks internal calls with EmulatorData[1] == 1. This is an
+ * emulator-private ABI, so it is only used with the explicit UBT launcher opt-in.
+ * Native processes, other emulators, and ordinary guest protection requests retain
+ * the normal path. The virtual mutex must be held by the caller. */
+static BOOL protect_ubt_host_pages( struct file_view *view, void *base, SIZE_T size,
+                                    ULONG protect, unsigned int *status )
+{
+    CHPE_V2_CPU_AREA_INFO *cpu;
+    char *addr, *end = (char *)base + size;
+    int unix_prot = PROT_READ;
+
+    if (!size || !ubt_host_protect || !is_arm64ec() || host_page_size != page_size) return FALSE;
+    cpu = NtCurrentTeb()->ChpeV2CpuAreaInfo;
+    if (!cpu || cpu->EmulatorData[1] != (void *)1) return FALSE;
+    if (protect != PAGE_READONLY && protect != PAGE_READWRITE) return FALSE;
+    if (view->protect & (VPROT_WRITEWATCH | VPROT_SYSTEM)) return FALSE;
+
+    for (addr = base; addr < end; addr += page_size)
+    {
+        BYTE vprot = get_page_vprot( addr );
+        if (!is_vprot_exec_write( vprot ) || (vprot & VPROT_GUARD)) return FALSE;
+    }
+
+    if (protect == PAGE_READWRITE) unix_prot |= PROT_WRITE;
+    *status = mprotect( base, size, unix_prot ) ? STATUS_ACCESS_DENIED : STATUS_SUCCESS;
+    TRACE( "UBT host protection %p-%p %x status %08x, keeping guest protection\n",
+           base, end, protect, *status );
+    return TRUE;
+}
+#endif
+
 
 /***********************************************************************
  *           commit_arm64ec_map
@@ -3730,6 +3769,13 @@ void virtual_init(void)
     pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_RECURSIVE );
     pthread_mutex_init( &virtual_mutex, &attr );
     pthread_mutexattr_destroy( &attr );
+
+#if defined(__OHOS__) && defined(__aarch64__)
+    {
+        const char *opt = getenv( "WINE_UBT_HOST_PROTECT" );
+        ubt_host_protect = opt && !strcmp( opt, "1" );
+    }
+#endif
 
 #ifdef __aarch64__
     host_page_size = sysconf( _SC_PAGESIZE );
@@ -5485,6 +5531,9 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T 
         if (get_committed_size( view, base, size, &vprot, VPROT_COMMITTED ) >= size && (vprot & VPROT_COMMITTED))
         {
             old = get_win32_prot( vprot, view->protect );
+#if defined(__OHOS__) && defined(__aarch64__)
+            if (!protect_ubt_host_pages( view, base, size, new_prot, &status ))
+#endif
             status = set_protection( view, base, size, new_prot );
         }
         else status = STATUS_NOT_COMMITTED;

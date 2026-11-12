@@ -23,6 +23,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -265,11 +266,40 @@ static inline mem_size_t round_size( mem_size_t size, mem_size_t mask )
     return (size + mask) & ~mask;
 }
 
+#if defined(__OHOS__) && defined(__aarch64__)
+static void free_available_high_map_addr( client_ptr_t base, mem_size_t size )
+{
+    /* The host may have fewer address bits than the Windows client.  If the
+     * server assigns unreachable image addresses, clients fall back to packing
+     * DLLs at the top of their address space, losing the gaps between images.
+     * Probe with a hint, never MAP_FIXED, so existing host mappings are safe. */
+    while (base >> 32)
+    {
+        void *ret = mmap( (void *)(uintptr_t)base, host_page_mask + 1, PROT_NONE,
+                          MAP_PRIVATE | MAP_ANON, -1, 0 );
+        int available = ret != MAP_FAILED && (uintptr_t)ret >= base;
+
+        if (ret != MAP_FAILED) munmap( ret, host_page_mask + 1 );
+        if (available)
+        {
+            free_map_addr( base, size );
+            return;
+        }
+        base >>= 1;
+        size >>= 1;
+    }
+}
+#endif
+
 void init_memory(void)
 {
     host_page_mask = sysconf( _SC_PAGESIZE ) - 1;
     free_map_addr( 0x60000000, 0x1c000000 );
+#if defined(__OHOS__) && defined(__aarch64__)
+    free_available_high_map_addr( 0x600000000000, 0x100000000000 );
+#else
     free_map_addr( 0x600000000000, 0x100000000000 );
+#endif
 }
 
 static void ranges_dump( struct object *obj, int verbose )

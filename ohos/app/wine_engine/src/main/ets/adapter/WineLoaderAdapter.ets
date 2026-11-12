@@ -76,6 +76,8 @@ export class WineLoaderAdapter extends BaseAdapter {
     this.setEnv(environ, 'WINEDLLPATH', dllDir);
     this.setEnv(environ, 'WINEPREFIX', prefixDir);
     this.setEnv(environ, 'WINE_IPC_DIR', dataDir);
+    // Keep guest page permissions separate from UBT's internal SMC protection.
+    this.setEnv(environ, 'WINE_UBT_HOST_PROTECT', '1');
 
     // Force Vulkan renderer for D3D11/D3D12 via WINE_D3D_CONFIG
     // this.setEnv(environ, 'WINE_D3D_CONFIG', 'renderer=vulkan');
