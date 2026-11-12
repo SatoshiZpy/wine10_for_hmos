@@ -21,21 +21,6 @@
             {
                 "name": "release"
             }
-        ],
-        "signingConfigs": [
-            {
-                "name": "default",
-                "type": "HarmonyOS",
-                "material": {
-                    "certpath": "/Users/zhangpeiyu/.ohos/config/default_app_dXzweak6APfJ-rLVn3hPDiDUJPmAISOGdlc8wByxYjU=.cer",
-                    "keyAlias": "debugKey",
-                    "keyPassword": "0000001AB6C791CF216E6D1FAA60E515281C9EA284D24A28C1D32F7277BAB84C8068114F9DA3663B818D",
-                    "profile": "/Users/zhangpeiyu/.ohos/config/default_app_dXzweak6APfJ-rLVn3hPDiDUJPmAISOGdlc8wByxYjU=.p7b",
-                    "signAlg": "SHA256withECDSA",
-                    "storeFile": "/Users/zhangpeiyu/.ohos/config/default_app_dXzweak6APfJ-rLVn3hPDiDUJPmAISOGdlc8wByxYjU=.p12",
-                    "storePassword": "0000001A9EACD104C5E0508913B98DE1AAC37FAA44943C7DF700A10A5CC179ACAC9A09979D6D41A35981"
-                }
-            }
         ]
     },
     "modules": [
