@@ -4,7 +4,7 @@
     "type": "entry",
     "srcEntry": "./ets/Application/AbilityStage.ets",
     "description": "$string:module_desc",
-    "mainElement": "EntryAbility",
+    "mainElement": "LauncherAbility",
     "deviceTypes": [
       "2in1",
       "tablet"
@@ -14,15 +14,14 @@
     "pages": "$profile:main_pages",
     "abilities": [
       {
-        "name": "EntryAbility",
-        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "name": "LauncherAbility",
+        "srcEntry": "./ets/entryability/LauncherAbility.ets",
         "description": "$string:EntryAbility_desc",
         "icon": "$media:app_icon",
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:app_icon",
         "startWindowBackground": "$color:start_window_background",
-        "launchType": "specified",
-        "removeMissionAfterTerminate": true,
+        "launchType": "singleton",
         "exported": true,
         "skills": [
           {
@@ -33,7 +32,19 @@
               "action.system.home"
             ]
           }
-        ],
+        ]
+      },
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:app_icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "launchType": "specified",
+        "removeMissionAfterTerminate": true,
+        "exported": true
       },
       {
         "name": "StatelessAbility",
