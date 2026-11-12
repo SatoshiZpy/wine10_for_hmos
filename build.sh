@@ -357,6 +357,21 @@ cp -d ${GNUTLS_STAGING}/lib/libhogweed.so.6* ${APP_DIR}/wine_engine/libs/arm64-v
 cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 cp -r ${INSTALL_DIR}/lib/wine/i386-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
+if [ "${COMPILE_DXVK}" -eq 1 ] && [ "${BUILD_ARM64EC}" -eq 1 ] && [ "${DXVK_LEGACY}" -eq 0 ]; then
+    # Keep the standalone ARM64EC DLLs separate from the merged ARM64X DLLs.
+    # The launcher deploys these only for x86-64 games where they are needed.
+    DXVK_GAME_DIR="${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/dxvk-arm64ec"
+    mkdir -p "${DXVK_GAME_DIR}"
+    for dll in dxgi d3d11 d3d9; do
+        src="${DXVK_BUILD_DIR}/buildec/src/${dll}/${dll}.dll"
+        [ -f "${src}" ] || { echo "Missing standalone ARM64EC DLL: ${src}"; exit 1; }
+        "${PE_READOBJ}" --file-headers "${src}" | grep -q 'IMAGE_FILE_MACHINE_AMD64' || exit 1
+        "${PE_READOBJ}" --coff-load-config "${src}" | grep -Eq 'CHPEMetadataPointer: 0x[0-9A-Fa-f]*[1-9A-Fa-f][0-9A-Fa-f]*' || {
+            echo "Missing ARM64EC metadata: ${src}"; exit 1;
+        }
+        cp "${src}" "${DXVK_GAME_DIR}/${dll}.dll"
+    done
+fi
 if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     cp -r "${INSTALL_DIR}/lib/wine/x86_64-windows" \
         "${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/"
@@ -382,6 +397,13 @@ find "${RESFILE_PE}" -type f \
     ! -name 'ubt_*.dll' \
     -exec "${STRIP}" {} \;
 echo "PE strip-all done: resfile PE now $(du -sh --apparent-size ${RESFILE_PE} | cut -f1)"
+if [ -n "${DXVK_GAME_DIR:-}" ]; then
+    for dll in dxgi d3d11 d3d9; do
+        "${PE_READOBJ}" --coff-load-config "${DXVK_GAME_DIR}/${dll}.dll" | grep -Eq 'CHPEMetadataPointer: 0x[0-9A-Fa-f]*[1-9A-Fa-f][0-9A-Fa-f]*' || {
+            echo "ARM64EC metadata lost after strip: ${dll}.dll"; exit 1;
+        }
+    done
+fi
 
 # DXVK + vkd3d-proton DLLs 已在 step 8.5 中覆盖到 INSTALL_DIR，
 # 上面的 cp -r 从 INSTALL_DIR 复制到 resfile 时自动包含 DXVK 版本。

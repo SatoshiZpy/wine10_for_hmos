@@ -607,3 +607,13 @@ CPU采样前段与trace传输重叠，仅用作热点定位；帧率和调度采
   顶层 popup 激活；保留 owned popup 现有策略。测试包位于
   `.build-cache/sekiro-focus/app/entry/build/default/outputs/default/entry-default-signed.hap`，
   已编译并核对包内仅 wineohos.so 和 source map 变化，尚未安装/验证。
+
+## 独立 ARM64EC DXVK 自动同步
+
+构建启用 DXVK 2.x 与 ARM64EC 时，将独立的 `dxgi.dll`、`d3d11.dll`、
+`d3d9.dll` 打包到 `resfile/lib/wine/dxvk-arm64ec/`，不替换公共 ARM64X 版本。
+启动器仅对 PE x86-64 EXE 在游戏目录同步该文件集；包内文件哈希校验后以临时文件
+重命名，已替换文件按哈希备份，并使用 `.wine-managed-sha256` 标记追踪后续更新。
+已知只狼诊断版本可迁移。若任一已存在 DLL 不是已知版本或受管理版本，保留整套
+现有文件并在启动页提示；32 位和非 PE 程序不部署。目录必须可写。更新文件期间
+应确保没有其他游戏实例使用同目录；设备兼容性和实际运行仍需验证。

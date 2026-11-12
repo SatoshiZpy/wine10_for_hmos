@@ -20,6 +20,7 @@
 
 import { common, contextConstant, Want, StartOptions } from '@kit.AbilityKit';
 import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
+import fileHash from '@ohos.file.hash';
 
 @Entry
 @Component
@@ -99,12 +100,105 @@ struct Launcher {
     }
   }
 
+  private async isX64Exe(path: string): Promise<boolean> {
+    const file = await fs.open(path, fs.OpenMode.READ_ONLY);
+    try {
+      const header = new ArrayBuffer(64);
+      if (await fs.read(file.fd, header) !== 64) return false;
+      const view = new DataView(header);
+      if (view.getUint16(0, true) !== 0x5a4d) return false;
+      const offset = view.getUint32(60, true);
+      if (offset < 64 || offset > 16 * 1024 * 1024) return false;
+      const pe = new ArrayBuffer(6);
+      fs.lseek(file.fd, offset);
+      if (await fs.read(file.fd, pe) !== 6) return false;
+      const signature = new DataView(pe);
+      return signature.getUint32(0, true) === 0x4550 && signature.getUint16(4, true) === 0x8664;
+    } finally {
+      await fs.close(file);
+    }
+  }
+
+  private async syncGameDxvk(): Promise<string> {
+    if (!await this.isX64Exe(this.exePath)) return '';
+    const gameDir = this.exePath.substring(0, this.exePath.lastIndexOf('/'));
+    const sourceDir = this.context().resourceDir + '/lib/wine/dxvk-arm64ec';
+    const names: string[] = ['dxgi.dll', 'd3d11.dll', 'd3d9.dll'];
+    // Known copies installed during the earlier Sekiro test, before ownership markers existed.
+    const known: string[][] = [
+      ['f48293bba690b4c03e6243c3fb6507326fe6a7cd6b3cef1b823eadf06a636fa6',
+        'fa4d4ac15b5085c9ede9a9b6e9aca3c8349063d6788d202a218fd30af71aeb5d'],
+      ['fa6df8edd51ea25ab4d510cf4b6b2e15120b4165792bdc4429c584ae55656e52',
+        '7d861af0923d9aa77098f37035eaf2a769c9d20625c34cdd85f43a89746d8d28'],
+      ['d6c353ac54c03583fe9d3e6ac8c98d604683d23f3d390d4edaae231158e1a962']
+    ];
+    let skipped: string[] = [];
+    let sourceHashes: string[] = [];
+    let existingHashes: string[] = [];
+    // Check the entire set before changing any file, so a custom override does
+    // not leave a mixture of unrelated DXVK versions.
+    for (let i = 0; i < names.length; i++) {
+      const source = `${sourceDir}/${names[i]}`;
+      if (!await fs.access(source)) throw new Error(`安装包缺少图形库 ${names[i]}`);
+      const dest = `${gameDir}/${names[i]}`;
+      const marker = `${dest}.wine-managed-sha256`;
+      const sourceHash = (await fileHash.hash(source, 'sha256')).toLowerCase();
+      sourceHashes.push(sourceHash);
+      if (await fs.access(dest)) {
+        const current = (await fileHash.hash(dest, 'sha256')).toLowerCase();
+        existingHashes.push(current);
+        let managed = '';
+        if (await fs.access(marker)) managed = (await fs.readText(marker)).trim().toLowerCase();
+        if (current !== sourceHash && current !== managed && !known[i].includes(current)) {
+          skipped.push(names[i]);
+        }
+      } else {
+        existingHashes.push('');
+      }
+    }
+    if (skipped.length) return `保留了已有的 ${skipped.join('、')}，本次未自动更新图形库。`;
+
+    for (let i = 0; i < names.length; i++) {
+      const source = `${sourceDir}/${names[i]}`;
+      const dest = `${gameDir}/${names[i]}`;
+      const marker = `${dest}.wine-managed-sha256`;
+      const sourceHash = sourceHashes[i];
+      const temp = `${dest}.wine-update-${Date.now()}`;
+      try {
+        const exists = await fs.access(dest);
+        const current = exists ? (await fileHash.hash(dest, 'sha256')).toLowerCase() : '';
+        if (current !== existingHashes[i]) throw new Error(`${names[i]} 已被其他操作修改，请重试`);
+        if (current !== sourceHash) {
+          if (exists) {
+            const backup = `${dest}.wine-backup-${current.substring(0, 12)}`;
+            if (!await fs.access(backup)) await fs.copyFile(dest, backup);
+          }
+          await fs.copyFile(source, temp);
+          if ((await fileHash.hash(temp, 'sha256')).toLowerCase() !== sourceHash) {
+            throw new Error(`${names[i]} 校验失败`);
+          }
+          await fs.rename(temp, dest);
+        }
+        const markerFile = await fs.open(marker, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+        try {
+          await fs.write(markerFile.fd, sourceHash);
+        } finally {
+          await fs.close(markerFile);
+        }
+      } finally {
+        if (await fs.access(temp)) await fs.unlink(temp);
+      }
+    }
+    return '';
+  }
+
   private async launch(notepad: boolean, smcProbe: boolean = false): Promise<void> {
     if (this.busy || (!notepad && !this.exePath)) return;
     this.busy = true;
     this.failed = false;
     this.status = '正在请求启动…';
     try {
+      let syncNotice = '';
       if (!notepad && !await fs.access(this.exePath)) {
         throw new Error('EXE 已移动或授权已失效，请重新选择游戏文件夹和 EXE');
       }
@@ -112,6 +206,7 @@ struct Launcher {
       if (!notepad && (args.split('"').length % 2 === 0 || /[\r\n\x00]/.test(args))) {
         throw new Error('启动参数的双引号需要成对，且不能包含换行');
       }
+      if (!notepad) syncNotice = await this.syncGameDxvk();
       // Temporary local crash diagnosis. Preserve the original game files.
       if (!notepad) {
         const gameDir = this.exePath.substring(0, this.exePath.lastIndexOf('/'));
@@ -150,7 +245,7 @@ struct Launcher {
         startupVisibility: contextConstant.StartupVisibility.STARTUP_SHOW
       };
       await this.context().startAbility(want, options);
-      this.status = '已提交启动请求。程序会在独立窗口打开；此提示不代表游戏已成功运行。';
+      this.status = `已提交启动请求。程序会在独立窗口打开；此提示不代表游戏已成功运行。${syncNotice}`;
     } catch (error) {
       this.showError('启动失败', error as Error);
     } finally {
