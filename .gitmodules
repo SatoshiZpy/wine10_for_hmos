@@ -12,12 +12,12 @@
 	url = https://gitlab.com/gnutls/gnutls.git
 [submodule "third_party/dxvk-legacy"]
 	path = third_party/dxvk-legacy
-	url = https://gitcode.com/OpenHarmonyPCDeveloper/ohos_dxvk.git
+	url = https://github.com/SatoshiZpy/ohos_dxvk.git
 	branch = ohos-dxvk-1.10.3
 [submodule "third_party/vkd3d-proton"]
 	path = third_party/vkd3d-proton
 	url = https://gitcode.com/OpenHarmonyPCDeveloper/ohos_vkd3d-proton
 [submodule "third_party/dxvk"]
 	path = third_party/dxvk
-	url = https://gitcode.com/OpenHarmonyPCDeveloper/ohos_dxvk.git
+	url = https://github.com/SatoshiZpy/ohos_dxvk.git
 	branch = ohos-dxvk-2.6.2

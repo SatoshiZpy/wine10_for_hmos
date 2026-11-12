@@ -17,13 +17,15 @@
 from pathlib import Path
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
 
 root = Path(__file__).resolve().parents[2]
-parent = Path('/Users/zhangpeiyu/.codex/worktrees/wine-quickstart-build/wine10_for_hmos')
+# Configured build tree whose objects are reused; defaults to this checkout.
+parent = Path(os.environ.get('WINE_PARENT_TREE', root))
 output = root / '.build-cache/thunk-fix'
 output.mkdir(parents=True, exist_ok=True)
 container = 'wine-quickstart-20261111'
