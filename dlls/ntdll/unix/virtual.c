@@ -1943,26 +1943,18 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
     {
         TRACE( "forcing exec permission on %p-%p\n", base, (char *)base + size - 1 );
         if (!mprotect( base, size, unix_prot | PROT_EXEC )) return 0;
-#ifdef __OHOS__
-        /* HarmonyOS W^X policy restricts PROT_EXEC changes */
-        if (errno == EACCES || errno == EPERM) return 0;
-#endif
         /* exec + write may legitimately fail, in that case fall back to write only */
+#ifdef __OHOS__
+        /* Executability added for DEP-disabled guests is optional for a
+         * file mapping on OHOS. Apply the requested data protection rather
+         * than claiming success or leaving the old protection in place. */
+        if (!(unix_prot & PROT_WRITE) && errno != EACCES && errno != EPERM) return -1;
+#else
         if (!(unix_prot & PROT_WRITE)) return -1;
+#endif
     }
 
-#ifdef __OHOS__
-    /* HarmonyOS W^X policy may block PROT_EXEC changes */
-    if (mprotect( base, size, unix_prot ) < 0)
-    {
-        if ((errno == EACCES || errno == EPERM) && (unix_prot & PROT_EXEC))
-            return 0;
-        return -1;
-    }
-    return 0;
-#else
     return mprotect( base, size, unix_prot );
-#endif
 }
 
 
@@ -2245,20 +2237,9 @@ failed:
     }
     else if (errno == EEXIST)
     {
-        /* Fixed-base (non-relocatable) images must be mapped at their ImageBase.
-         * If the requested base is currently covered by a reserved area that
-         * carries some real mapping (e.g. leftover from the parent address space
-         * after fork), try to release that reserved area and retry once.
-         * This lets non-ASLR executables load at their preferred base instead of
-         * failing with STATUS_CONFLICTING_ADDRESSES.  Normal (dynamic-base)
-         * images are unaffected because they never end up here. */
-        remove_reserved_area( base, end - (char *)base );
-        if (!find_view_range( base, size ) &&
-            !mmap_is_in_reserved_area( base, end - (char *)base ))
-        {
-            if (anon_mmap_tryfixed( base, end - (char *)base, unix_prot, 0 ) != MAP_FAILED)
-                return STATUS_SUCCESS;
-        }
+        /* The conflicting mapping may belong to the host runtime rather than
+         * a Wine view. Never unmap memory we do not own to satisfy a guest's
+         * fixed-address allocation. */
         status = STATUS_CONFLICTING_ADDRESSES;
     }
     else
@@ -2424,7 +2405,7 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
     if ((!removable || (flags & MAP_SHARED)) && host_addr == map_addr && host_size == map_size)
     {
 #ifdef __OHOS__
-        if (prot & PROT_EXEC)
+        if (vprot & VPROT_EXEC)
         {
             /* HarmonyOS W^X policy: use anonymous mmap when EXEC is needed */
             if (mmap( map_addr, map_size, prot, MAP_FIXED | MAP_ANON | MAP_PRIVATE,
@@ -2440,6 +2421,18 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
             /* try file-backed mmap for mappings without PROT_EXEC */
             if (mmap( host_addr, host_size, prot, flags, fd, offset ) != MAP_FAILED)
                 return STATUS_SUCCESS;
+
+#ifdef __OHOS__
+            /* Do not snapshot shared data into anonymous memory just because
+             * a DEP-disabled guest requests implicit execute access. In
+             * particular, the user handle table must observe server writes. */
+            if ((prot & PROT_EXEC) && (errno == EACCES || errno == EPERM))
+            {
+                prot &= ~PROT_EXEC;
+                if (mmap( host_addr, host_size, prot, flags, fd, offset ) != MAP_FAILED)
+                    return STATUS_SUCCESS;
+            }
+#endif
 
             switch (errno)
             {

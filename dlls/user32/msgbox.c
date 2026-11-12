@@ -523,6 +523,9 @@ INT WINAPI MessageBoxIndirectW( LPMSGBOXPARAMSW msgbox )
     UINT i;
     struct ThreadWindows threadWindows;
 
+    TRACE( "text %s title %s style %#lx\n", debugstr_w(msgbox->lpszText),
+           debugstr_w(msgbox->lpszCaption), msgbox->dwStyle );
+
     if (!(hRes = FindResourceExW(user32_module, (LPWSTR)RT_DIALOG, L"MSGBOX", msgbox->dwLanguageId)))
     {
         if (!msgbox->dwLanguageId ||

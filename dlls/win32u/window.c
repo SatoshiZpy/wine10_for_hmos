@@ -5415,6 +5415,8 @@ static WND *create_window_handle( HWND parent, HWND owner, UNICODE_STRING *name,
             full_owner  = wine_server_ptr_handle( reply->owner );
             extra_bytes = reply->extra;
             class       = wine_server_get_ptr( reply->class_ptr );
+            TRACE( "server window %p parent %p class %p extra %d\n",
+                   handle, full_parent, class, extra_bytes );
         }
     }
     SERVER_END_REQ;
@@ -5427,6 +5429,7 @@ static WND *create_window_handle( HWND parent, HWND owner, UNICODE_STRING *name,
 
     if (!(win = calloc( 1, FIELD_OFFSET(WND, wExtra) + extra_bytes )))
     {
+        ERR( "window allocation failed, extra_bytes %d\n", extra_bytes );
         SERVER_START_REQ( destroy_window )
         {
             req->handle = wine_server_user_handle( handle );
@@ -5668,6 +5671,8 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
         return 0;
     hwnd = win->handle;
 
+    TRACE( "allocated window %p for %s\n", hwnd, debugstr_us(class_name) );
+
     /* Fill the window structure */
 
     win->text        = NULL;
@@ -5698,10 +5703,15 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     cbtc.lpcs = &cs;
     if (call_hooks( WH_CBT, HCBT_CREATEWND, (WPARAM)hwnd, (LPARAM)&cbtc, sizeof(cbtc) ))
     {
+        WARN( "window %p creation rejected by CBT hook\n", hwnd );
         free_window_handle( hwnd );
         return 0;
     }
-    if (!(win = get_win_ptr( hwnd ))) return 0;
+    if (!(win = get_win_ptr( hwnd )))
+    {
+        WARN( "window %p disappeared after CBT hook\n", hwnd );
+        return 0;
+    }
 
     /*
      * Correct the window styles.

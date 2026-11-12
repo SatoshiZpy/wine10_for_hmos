@@ -107,16 +107,15 @@ fi
 cd ${ROOT_DIR}
 autoheader && autoconf
 
-if [ ! -d "${TOOLS_DIR}" ]; then
-    echo "build x86 wine in ${TOOLS_DIR}"
-    mkdir -p ${TOOLS_DIR}
-    cd ${TOOLS_DIR}
-
-    ../configure --without-x
-    make -j$(nproc)
-
-    echo "build x86 wine done"
+mkdir -p "${TOOLS_DIR}"
+cd "${TOOLS_DIR}"
+if [ ! -f Makefile ]; then
+    # Only host tools are needed for the OHOS cross-build. Use the 64-bit
+    # host ABI so this step does not require 32-bit development libraries.
+    ../configure --without-x --enable-win64 --disable-tests
 fi
+# wrc resolves locale and codepage data relative to the host tools directory.
+make -j$(nproc) __tooldeps__ nls/all
 
 # ============================================================
 # 4. 准备 OHOS SDK + PE LLVM 工具链（env.sh 统一发现与校验，不再解压 bundle）
@@ -311,6 +310,17 @@ if [ "${COMPILE_DXVK}" -eq 1 ]; then
     if [ -d "${VKD3D_BUILD_DIR}/install32/bin" ]; then
         cp ${VKD3D_BUILD_DIR}/install32/bin/*.dll ${INSTALL_DIR}/lib/wine/i386-windows/ 2>/dev/null || true
     fi
+
+    # vkd3d-proton dynamically imports the matching llvm-mingw C++ runtime.
+    # ARM64EC uses the runtime sysroot selected by env.sh (ARM64X on newer SDKs).
+    for runtime in libc++.dll libunwind.dll; do
+        cp "${LLVM_MINGW}/i686-w64-mingw32/bin/${runtime}" \
+            "${INSTALL_DIR}/lib/wine/i386-windows/"
+        if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+            cp "${EC_SYSROOT}/bin/${runtime}" \
+                "${INSTALL_DIR}/lib/wine/aarch64-windows/"
+        fi
+    done
 fi
 
 # ============================================================
@@ -347,6 +357,10 @@ cp -d ${GNUTLS_STAGING}/lib/libhogweed.so.6* ${APP_DIR}/wine_engine/libs/arm64-v
 cp -r ${INSTALL_DIR}/share/wine ${APP_DIR}/wine_engine/src/main/resources/resfile/share
 cp -r ${INSTALL_DIR}/lib/wine/aarch64-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
 cp -r ${INSTALL_DIR}/lib/wine/i386-windows ${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/
+if [ "${BUILD_ARM64EC}" -eq 1 ]; then
+    cp -r "${INSTALL_DIR}/lib/wine/x86_64-windows" \
+        "${APP_DIR}/wine_engine/src/main/resources/resfile/lib/wine/"
+fi
 
 # ============================================================
 # 9.5 PE 瘦身：strip-all（DWARF 调试节 + COFF 符号表）
@@ -399,6 +413,12 @@ if [ -d "${KRB5_INSTALL_DIR}" ]; then
     cp -r ${KRB5_INSTALL_DIR}/lib/krb5/plugins ${APP_DIR}/wine_engine/libs/arm64-v8a/krb5/ 2>/dev/null
 fi
 
+# Hvigor resolves symlinks while merging HAR libraries, making SONAME aliases
+# collide with their targets. Preserve each runtime filename as a regular file.
+while IFS= read -r -d '' lib; do
+    cp --remove-destination "$(readlink -f "${lib}")" "${lib}"
+done < <(find "${APP_DIR}/wine_engine/libs/arm64-v8a" -type l -name '*.so*' -print0)
+
 if [ "${COMPILE_HAP}" -eq 1 ]; then
     echo "compile hap"
     # PATH/DEVECO_SDK_HOME/DEVECO_NODE_HOME 由 env.sh 统一 export
@@ -411,7 +431,7 @@ if [ "${COMPILE_HAP}" -eq 1 ]; then
 
     echo "copy hap"
     cd ${ROOT_DIR}/
-    mkdir ${INSTALL_DIR}/wine_hap/
+    mkdir -p ${INSTALL_DIR}/wine_hap/
     cp ${APP_DIR}/entry/build/default/outputs/default/entry-default-signed.hap ${INSTALL_DIR}/wine_hap/ 2>/dev/null || \
     cp ${APP_DIR}/entry/build/default/outputs/default/entry-default-unsigned.hap ${INSTALL_DIR}/wine_hap/
 fi

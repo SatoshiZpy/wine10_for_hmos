@@ -8,7 +8,10 @@ set(ADAPTER_SRC
     ohos_adapter.cc
 )
 add_library(adapter SHARED ${ADAPTER_SRC})
-target_include_directories(adapter PUBLIC ../../ ./include/)
+target_include_directories(adapter PUBLIC ./include/)
+# Keep the repository's VERSION file out of C++ <version> lookup on
+# case-insensitive host filesystems. Project headers use quoted includes.
+target_compile_options(adapter PUBLIC "-iquote${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
 add_subdirectory(../../third_party/aki aki)
 add_subdirectory(accessibility)

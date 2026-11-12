@@ -18,7 +18,7 @@ __do_global_ctors: 从 .rdata 槽读列表头, 倒序调用, 有单次执行保�
   2) 重写 .ctors 页的基址重定位块 (IMAGE_REL_BASED_DIR64 = type 10,
      条目数 N, 偏移 +8..8N); 块不存在则在块列表末尾新建;
   3) 块大小变化时平移 .reloc 后续内容, 同步 DataDirectory[5].Size、
-     LoadConfig.DynamicValueRelocTableOffset、.reloc VirtualSize;
+     两个视图的 LoadConfig.DynamicValueRelocTableOffset、.reloc VirtualSize;
   4) 把 .rdata 中指向 stub [-1] 标记的所有指针槽重指向 .ctors 起点。
 
 已知限制 (后续工作): EC 视图 (x64 进程) 的构造函数不运行 — 完整方案需用
@@ -84,6 +84,57 @@ def load_config_off(pe):
     return pe.rva2off(va), sz
 
 
+def load_config_offsets(pe):
+    """Find both load configs before moving the ARM64X dynamic relocation table."""
+    native, size = load_config_off(pe)
+    if native is None or size < 0xE6:
+        return []
+    offsets = {native}
+    table_offset, section = struct.unpack_from('<IH', pe.d, native + 0xE0)
+    if not section or not table_offset:
+        return offsets
+    table = pe.sections[section - 1]['ra'] + table_offset
+    version, table_size = struct.unpack_from('<II', pe.d, table)
+    if version != 1:
+        raise ValueError(f'unsupported dynamic relocation table version {version}')
+    record = table + 8
+    while record < table + 8 + table_size:
+        symbol, reloc_size = struct.unpack_from('<QI', pe.d, record)
+        block = record + 12
+        end = block + reloc_size
+        if symbol == 6:  # IMAGE_DYNAMIC_RELOCATION_ARM64X
+            while block < end:
+                page, block_size = struct.unpack_from('<II', pe.d, block)
+                if block_size < 8 or block + block_size > end:
+                    raise ValueError('invalid ARM64X relocation block')
+                entry = block + 8
+                while entry < block + block_size:
+                    fixup, = struct.unpack_from('<H', pe.d, entry)
+                    entry += 2
+                    if not fixup:  # alignment padding
+                        continue
+                    kind, arg = (fixup >> 12) & 3, fixup >> 14
+                    rva = page + (fixup & 0xFFF)
+                    if kind == 1:  # VALUE
+                        width = 1 << arg
+                        if rva == pe.opt + 112 + DIR_LOAD_CONFIG * 8:
+                            if width != 4:
+                                raise ValueError('invalid hybrid load config RVA fixup')
+                            hybrid_rva, = struct.unpack_from('<I', pe.d, entry)
+                            hybrid = pe.rva2off(hybrid_rva)
+                            if hybrid is None:
+                                raise ValueError('unmapped hybrid load config')
+                            offsets.add(hybrid)
+                        entry += width
+                    elif kind == 2:  # DELTA
+                        entry += 2
+                    elif kind != 0:
+                        raise ValueError('unknown ARM64X fixup type')
+                block += block_size
+        record = end
+    return offsets
+
+
 def split_native_ec(ptrs):
     """按 RVA 聚类把构造指针分为 (native, ec) 两簇: 找最大间隙。"""
     if not ptrs:
@@ -102,6 +153,7 @@ def patch_dll(path, all_flavors=False, verbose=True):
     with open(path, 'rb') as f:
         pe = PE(f.read())
     d = pe.d
+    load_configs = load_config_offsets(pe)
     ctors = pe.sec_by_name('.ctors')
     text = pe.sec_by_name('.text')
     if not ctors or not text:
@@ -175,7 +227,8 @@ def patch_dll(path, all_flavors=False, verbose=True):
             target = roff
             break
         roff += sz
-    new_sz = 8 + 2 * n
+    # PE base relocation blocks must be DWORD aligned; pad with ABSOLUTE entries.
+    new_sz = (8 + 2 * n + 3) & ~3
     if target is None:
         # 无既有块: 在块区末尾 (dir[5].Size 处) 插入新块
         target = rva_size
@@ -199,8 +252,7 @@ def patch_dll(path, all_flavors=False, verbose=True):
         va5, sz5 = pe.datadir(DIR_RELOC)
         pe.set_datadir(DIR_RELOC, va5, sz5 + delta)
         # 更新 LoadConfig.DynamicValueRelocTableOffset (若存在)
-        lco, _ = load_config_off(pe)
-        if lco is not None:
+        for lco in load_configs:
             dvoff = struct.unpack_from('<I', d, lco + 0xE0)[0]
             if dvoff:
                 struct.pack_into('<I', d, lco + 0xE0, dvoff + delta)
@@ -208,8 +260,9 @@ def patch_dll(path, all_flavors=False, verbose=True):
         struct.pack_into('<I', d, reloc['hdr'] + 8, reloc['vs'] + delta)
     # 写新块: N 个 DIR64 (type 10 = IMAGE_REL_BASED_DIR64)
     struct.pack_into('<II', d, ro + target, page, new_sz)
+    d[ro + target + 8:ro + target + new_sz] = bytes(new_sz - 8)
     for i in range(n):
-        e = (10 << 12) | (8 + i * 8)
+        e = (10 << 12) | ((ctors['va'] & 0xFFF) + 8 + i * 8)
         struct.pack_into('<H', d, ro + target + 8 + i * 2, e)
 
     # 3) 重指 .rdata 中指向 stub 标记的槽 → .ctors 起点

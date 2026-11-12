@@ -1038,6 +1038,44 @@ static void load_gdi_font_replacements(void)
     NtClose( hkey );
 }
 
+#ifdef __OHOS__
+/* Applications may enumerate families before creating a font.  A substitution
+ * alone is therefore insufficient when Windows CJK fonts are not installed.
+ * Expose the system CJK families under their common Windows names, preserving
+ * installed fonts and user-configured replacements. */
+static void load_ohos_font_replacements(void)
+{
+    static const struct
+    {
+        WCHAR name[LF_FACESIZE];
+        const char *preferred;
+        const char *fallback;
+    } replacements[] =
+    {
+        { {'S','i','m','H','e','i',0}, "HeiT-SC", "Noto Sans CJK SC" },
+        { {0x9ed1,0x4f53,0}, "HeiT-SC", "Noto Sans CJK SC" }, /* 黑体 */
+        { {'S','i','m','S','u','n',0}, "Noto Serif CJK SC", NULL },
+        { {0x5b8b,0x4f53,0}, "Noto Serif CJK SC", NULL }, /* 宋体 */
+        { {'N','S','i','m','S','u','n',0}, "Noto Serif CJK SC", NULL },
+        { {0x65b0,0x5b8b,0x4f53,0}, "Noto Serif CJK SC", NULL }, /* 新宋体 */
+    };
+    WCHAR target[LF_FACESIZE];
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(replacements); ++i)
+    {
+        if (find_family_from_any_name( replacements[i].name )) continue;
+        asciiz_to_unicode( target, replacements[i].preferred );
+        if (add_family_replacement( replacements[i].name, target )) continue;
+        if (replacements[i].fallback)
+        {
+            asciiz_to_unicode( target, replacements[i].fallback );
+            add_family_replacement( replacements[i].name, target );
+        }
+    }
+}
+#endif
+
 static void dump_gdi_font_list(void)
 {
     struct gdi_font_family *family;
@@ -6909,6 +6947,9 @@ UINT font_init(void)
     reorder_font_list();
     load_gdi_font_subst();
     load_gdi_font_replacements();
+#ifdef __OHOS__
+    load_ohos_font_replacements();
+#endif
     load_system_links();
     dump_gdi_font_list();
     dump_gdi_font_subst();

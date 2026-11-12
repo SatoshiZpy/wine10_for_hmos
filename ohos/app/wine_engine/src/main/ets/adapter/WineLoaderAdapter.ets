@@ -5,6 +5,7 @@
 import { inject, injectable } from 'inversify';
 import { BaseAdapter } from '../common/BaseAdapter';
 import fs from '@ohos.file.fs';
+import fileHash from '@ohos.file.hash';
 import lazy { ContextAdapter } from './ContextAdapter';
 import lazy { PresetDeployerAdapter } from './PresetDeployerAdapter';
 import LogUtil from '../utils/LogUtil';
@@ -56,9 +57,16 @@ export class WineLoaderAdapter extends BaseAdapter {
     this.ensureDir(prefixDir);
 
     await this.deployPreset(prefixDir);
+    await this.refreshBundledGraphics(prefixDir, resDir);
 
     const environ = new Map<string, string>();
     this.setEnv(environ, 'WINERESPATH', resDir);
+    // Temporary SMC experiment, disabled in Wine unless explicitly requested.
+    this.setEnv(environ, 'WINE_UBT_SMC_SYNC', '1');
+    // Recover supported unaligned accesses before OHOS signal-chain logging.
+    this.setEnv(environ, 'WINE_OHOS_FAST_SIGBUS', '1');
+    this.setEnv(environ, 'WINE_OHOS_BATCH_UNALIGNED_READS', '1');
+    this.setEnv(environ, 'WINEDEBUG', '+loaddll,+process,+module,+profile,+dialog,+seh,+ohos');
 
     this.setEnv(environ, 'XDG_DATA_HOME', dataDir);
     this.setEnv(environ, 'XDG_CACHE_HOME', cacheDir);
@@ -124,6 +132,38 @@ export class WineLoaderAdapter extends BaseAdapter {
     } else {
       LogUtil.info(TAG, `sock_path=${sock_path}`);
       this.nativeContext.runWineProcess(env, sock_path);
+    }
+  }
+
+  private async refreshBundledGraphics(prefixDir: string, resDir: string): Promise<void> {
+    // Migrate only the identified old engine DLLs. Preserve user-installed
+    // overrides and keep a backup; never reset the prefix or its game data.
+    const names: string[] = ['dxgi.dll', 'd3d11.dll'];
+    const oldHashes: string[] = [
+      '55670b18490bd7b5d3889669f65e02f158f549eaad740e46dc66121ccc1760f2',
+      '3f9763fe4d65eec5ea5c727f0272a9b0189ccc9c093c43ebf172fa76f18a748f'
+    ];
+    for (let i = 0; i < names.length; i++) {
+      const dest = `${prefixDir}/dosdevices/c:/windows/system32/${names[i]}`;
+      if (!await fs.access(dest)) continue; // New prefixes are populated by wineboot.
+      const currentHash = (await fileHash.hash(dest, 'sha256')).toLowerCase();
+      if (currentHash !== oldHashes[i]) continue;
+      const source = `${resDir}/lib/wine/aarch64-windows/${names[i]}`;
+      const sourceHash = (await fileHash.hash(source, 'sha256')).toLowerCase();
+      if (sourceHash === currentHash) continue;
+      const backup = `${dest}.pre-engine-update`;
+      if (!await fs.access(backup)) await fs.copyFile(dest, backup);
+      const temp = `${dest}.update-${Date.now()}`;
+      try {
+        await fs.copyFile(source, temp);
+        if ((await fileHash.hash(temp, 'sha256')).toLowerCase() !== sourceHash) {
+          throw new Error(`Engine DLL verification failed: ${names[i]}`);
+        }
+        await fs.rename(temp, dest);
+        LogUtil.info(TAG, `updated bundled ${names[i]}: ${currentHash} -> ${sourceHash}`);
+      } finally {
+        if (await fs.access(temp)) await fs.unlink(temp);
+      }
     }
   }
 

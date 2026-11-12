@@ -166,7 +166,15 @@ static RTL_USER_PROCESS_PARAMETERS *create_process_params( const WCHAR *filename
     if (cur_dir)
     {
         if (RtlDosPathNameToNtPathName_U( cur_dir, &newdirW, NULL, NULL ))
-            cur_dir = newdirW.Buffer + 4;  /* skip \??\ prefix */
+        {
+            if (newdirW.Length > 5 * sizeof(WCHAR) && newdirW.Buffer[5] == ':')
+                cur_dir = newdirW.Buffer + 4;  /* skip \??\ prefix for drive paths */
+            else
+            {
+                newdirW.Buffer[1] = '\\';  /* change \??\ to \\?\ for device paths */
+                cur_dir = newdirW.Buffer;
+            }
+        }
         else
             cur_dir = NULL;
     }

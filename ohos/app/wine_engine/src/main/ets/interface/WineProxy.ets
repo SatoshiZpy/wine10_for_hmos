@@ -6,6 +6,12 @@ import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { WindowStyles } from './CommonInterface';
 
+// Preserve the PC window option when building with SDKs that do not yet
+// declare it on SubWindowOptions.
+export interface WineSubWindowOptions extends window.SubWindowOptions {
+  zLevelAboveParentLoosened?: boolean;
+}
+
 export interface WineProxy {
   getWindowStage: () => window.WindowStage | undefined;
   getWindow: () => window.Window | undefined;

@@ -25,7 +25,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/pe_common.sh"
 
 # DXVK 复用 wine 内置 BC 解码头：源码内写
 # #include "dlls/d3dx9_36/bcdec.h"（标明来源），wine 源码根
-# (OHOS_BUILD_ROOT) 经 crossfile 以 -I 注入，消除相对路径硬编码耦合。
+# (OHOS_BUILD_ROOT) 经 crossfile 以 -iquote 注入，避免 VERSION 遮蔽 C++ <version>。
 
 pe_find_glslang
 
@@ -49,10 +49,10 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
 
     pe_write_mingw_crossfile "${DXVK_BUILD_DIR}/build-arm64ec.txt" arm64ec "${EC_SYSROOT}" \
         "${DXVK_BUILD_DIR}/windres-ec" "${DXVK_BUILD_DIR}/ld.lld" \
-        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" "-include algorithm"
+        "-D__OHOS__=1 -iquote${OHOS_BUILD_ROOT}" "" "-include algorithm"
     pe_write_mingw_crossfile "${DXVK_BUILD_DIR}/build-aarch64.txt" aarch64 "${AARCH64_SYSROOT}" \
         "${DXVK_BUILD_DIR}/windres-a64" "${DXVK_BUILD_DIR}/ld.lld-a64" \
-        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" "-include algorithm"
+        "-D__OHOS__=1 -iquote${OHOS_BUILD_ROOT}" "" "-include algorithm"
 
     echo "--- Building DXVK arm64ec ---"
     pe_meson_build "${DXVK_BUILD_DIR}/buildec" "${DXVK_DIR}" \
@@ -99,7 +99,7 @@ if [ "${BUILD_ARM64EC}" -eq 1 ]; then
     done
 
     echo "--- Verifying DXVK ARM64X artifacts ---"
-    for dll in d3d11.dll dxgi.dll; do
+    for dll in d3d11.dll dxgi.dll d3d9.dll d3d10core.dll d3d8.dll; do
         pe_verify_machine "${DXVK_BUILD_DIR}/installec/bin/${dll}" \
             "IMAGE_FILE_MACHINE_ARM64X (0xA64E)" || exit 1
     done
@@ -112,7 +112,7 @@ fi
 # ============================================================
 pe_require_i386_sysroot
 
-pe_write_i386_crossfile "${DXVK_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" "-include algorithm"
+pe_write_i386_crossfile "${DXVK_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1 -iquote${OHOS_BUILD_ROOT}" "" "-include algorithm"
 
 echo "--- Building DXVK x86 ---"
 pe_meson_build "${DXVK_BUILD_DIR}/build32" "${DXVK_DIR}" \

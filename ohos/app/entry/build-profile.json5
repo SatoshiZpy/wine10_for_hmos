@@ -2,6 +2,9 @@
   "apiType": "stageMode",
   "buildOption": {
     "nativeLib": {
+      "filter": {
+        "excludes": ["**/libc++.so"]
+      },
       "debugSymbol": {
         "strip": false,
         "exclude": []

@@ -80,11 +80,11 @@ EOF
 
     pe_write_mingw_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-arm64ec.txt" arm64ec "${EC_SYSROOT}" \
         "${DXVK_LEGACY_BUILD_DIR}/windres-ec" "${DXVK_LEGACY_BUILD_DIR}/ld.lld" \
-        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" ""
+        "-D__OHOS__=1 -iquote${OHOS_BUILD_ROOT}" "" ""
     pe_write_mingw_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-aarch64.txt" aarch64 \
         "${AARCH64_SYSROOT}" \
         "${DXVK_LEGACY_BUILD_DIR}/windres-a64" "${DXVK_LEGACY_BUILD_DIR}/ld.lld-a64" \
-        "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" ""
+        "-D__OHOS__=1 -iquote${OHOS_BUILD_ROOT}" "" ""
 
     echo "--- Building DXVK legacy arm64ec ---"
     # arm64ec 构建用 EC 版导入库
@@ -102,6 +102,12 @@ EOF
         [ -f "${f}" ] || f="${DXVK_LEGACY_BUILD_DIR}/installec/lib/${dll}"
         pe_verify_machine "${f}" "ARM64EC" || exit 1
     done
+
+    # Keep an independently linked ARM64EC variant for x64 processes and
+    # Vulkan 1.1/1.2 devices, without forcing an ARM64X merge.
+    if [ "${DXVK_EC_ONLY:-0}" -eq 1 ]; then
+        return 0 2>/dev/null || exit 0
+    fi
 
     echo "--- Building DXVK legacy aarch64 (native ARM64 obj for ARM64X) ---"
     # aarch64 构建换用 ARM64 版导入库
@@ -161,7 +167,7 @@ fi
 # ============================================================
 pe_require_i386_sysroot
 
-pe_write_i386_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1 -I${OHOS_BUILD_ROOT}" "" ""
+pe_write_i386_crossfile "${DXVK_LEGACY_BUILD_DIR}/build-ohos32.txt" "-D__OHOS__=1 -iquote${OHOS_BUILD_ROOT}" "" ""
 
 echo "--- Building DXVK legacy x86 ---"
 pe_meson_build "${DXVK_LEGACY_BUILD_DIR}/build32" "${DXVK_LEGACY_DIR}" \

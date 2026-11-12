@@ -298,6 +298,15 @@ struct window_features get_window_features_for_hwnd( HWND hwnd )
     DWORD ex_style = NtUserGetWindowLongW( hwnd, GWL_EXSTYLE );
     struct window_features wf = get_window_features_for_style( style, ex_style );
 
+    /* An unowned borderless popup can be an application's main window
+     * (for example a fullscreen game). Lack of WS_CAPTION must not prevent
+     * it from receiving native focus. Keep owned popups and explicit
+     * WS_EX_NOACTIVATE windows on the existing non-activating path. */
+    if ((style & (WS_POPUP | WS_CHILD)) == WS_POPUP &&
+        !(ex_style & (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)) &&
+        !NtUserGetWindowRelative( hwnd, GW_OWNER ) && !is_tooltips_hwnd( hwnd ))
+        wf.prevents_app_activation = FALSE;
+
     wf.is_modal = is_modal_window( hwnd );
     return wf;
 }
@@ -1948,6 +1957,7 @@ struct ohos_client_surface *ohos_client_surface_create( HWND hwnd, BOOL force )
 
     if (!(surface = client_surface_create( sizeof(*surface), &ohos_client_surface_funcs, hwnd ))) return NULL;
 
+    surface->hwnd = hwnd;
     NtUserGetClientRect( hwnd, &surface->rect, NtUserGetDpiForWindow( hwnd ) );
     if (!force) return surface;
 

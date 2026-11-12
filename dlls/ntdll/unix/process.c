@@ -1054,6 +1054,8 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
     unsigned int ret;
     BOOL self;
 
+    TRACE( "%p exit_code %08x\n", handle, (unsigned int)exit_code );
+
     SERVER_START_REQ( terminate_process )
     {
         req->handle    = wine_server_obj_handle( handle );

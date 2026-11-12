@@ -12,7 +12,7 @@ import ArgvUtil from '../utils/ArgvUtil';
 import Inject from '../common/InjectModule';
 import lazy { NativeContext, WindowStyles } from '../interface/CommonInterface';
 import { CommandType, ContextType } from '../common/Constants';
-import { WineProxy, dwStyles } from '../interface/WineProxy';
+import { WineProxy, WineSubWindowOptions, dwStyles } from '../interface/WineProxy';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { deviceInfo, BusinessError } from '@kit.BasicServicesKit';
 import { WindowStyle } from '../common/WindowStyle';
@@ -186,7 +186,7 @@ export class WineBaseAbility extends UIAbility implements WineProxy {
       // zLevelAboveParentLoosened detaches the sub session from its parent
       // in PC mode, defeating modality; modal windows also reject button
       // style updates (1300004), so they are created without decoration.
-      const subWindowOpts: window.SubWindowOptions = {
+      const subWindowOpts: WineSubWindowOptions = {
         title: 'This is a subwindow',
         decorEnabled: !isModal,
         maximizeSupported: true,

@@ -133,6 +133,15 @@ PE_READOBJ="$LLVM_MINGW/bin/llvm-readobj"
 
 # arm64ec sysroot + compiler-rt builtins（DXVK arm64ec 用；arm64ec-w64-mingw32 不存在则 arm64ec 不可用）
 EC_SYSROOT="$LLVM_MINGW/arm64ec-w64-mingw32"
+if [ ! -d "$EC_SYSROOT" ] && [ -x "$LLVM_MINGW/bin/arm64ec-w64-mingw32-clang" ]; then
+    # Newer llvm-mingw releases share ARM64X runtime libraries between
+    # aarch64 and arm64ec. Ask the target compiler for its runtime location.
+    _EC_CRT="$("$LLVM_MINGW/bin/arm64ec-w64-mingw32-clang" -print-file-name=libmingw32.a)"
+    if [ -f "$_EC_CRT" ]; then
+        EC_SYSROOT="$(dirname "$(dirname "$_EC_CRT")")"
+    fi
+    unset _EC_CRT
+fi
 EC_BUILTINS_LIB="$(find "$LLVM_MINGW/lib/clang" -path '*/lib/windows/libclang_rt.builtins-aarch64.a' 2>/dev/null | head -1)"
 [ -n "$EC_BUILTINS_LIB" ] && EC_RESOURCE_DIR="$(dirname "$(dirname "$(dirname "$EC_BUILTINS_LIB")")")"
 export PE_CLANG PE_CXX PE_LLDLINK PE_AR PE_STRIP PE_READOBJ EC_SYSROOT EC_BUILTINS_LIB EC_RESOURCE_DIR

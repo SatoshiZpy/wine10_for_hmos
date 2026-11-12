@@ -1,6 +1,12 @@
 {
   "apiType": "stageMode",
   "buildOption": {
+    "nativeLib": {
+      "filter": {
+        // This file is a linker script; libc++_shared.so is the runtime library.
+        "excludes": ["**/libc++.so"]
+      }
+    }
   },
   "buildOptionSet": [
     {

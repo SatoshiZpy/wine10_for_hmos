@@ -245,6 +245,30 @@ NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context )
     for (i = 0; i < min( EXCEPTION_MAXIMUM_PARAMETERS, rec->NumberParameters ); i++)
         TRACE( " info[%ld]=%p\n", i, (void *)rec->ExceptionInformation[i] );
     TRACE_CONTEXT( context );
+#ifdef __i386__
+    /* Temporary OHOS game diagnosis: read through NtReadVirtualMemory so a
+     * damaged stack or instruction pointer cannot fault the logger itself. */
+    if (TRACE_ON(seh) && rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+    {
+        DWORD stack[64];
+        BYTE code[64];
+        SIZE_T count = 0;
+        unsigned int j;
+
+        if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)context->Esp,
+                                  stack, sizeof(stack), &count ))
+            for (j = 0; j + 3 < count / sizeof(stack[0]); j += 4)
+                TRACE( "fault-stack %08lx: %08lx %08lx %08lx %08lx\n",
+                       context->Esp + j * sizeof(stack[0]), stack[j], stack[j + 1],
+                       stack[j + 2], stack[j + 3] );
+        if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)context->Eip,
+                                  code, sizeof(code), &count ))
+            for (j = 0; j + 7 < count; j += 8)
+                TRACE( "fault-code %08lx: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                       context->Eip + j, code[j], code[j + 1], code[j + 2], code[j + 3],
+                       code[j + 4], code[j + 5], code[j + 6], code[j + 7] );
+    }
+#endif
 
     if (call_vectored_handlers( rec, context ) == EXCEPTION_CONTINUE_EXECUTION)
         NtContinue( context, FALSE );

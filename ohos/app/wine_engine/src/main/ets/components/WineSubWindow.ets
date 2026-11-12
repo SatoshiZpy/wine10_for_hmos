@@ -10,6 +10,7 @@ import LogUtil from '../utils/LogUtil';
 import { MultiInputAdapter } from '../adapter/MultiInputAdapter';
 import { DragParamManager } from '../common/DragParamManager';
 import { NativeThemeAdapter } from '../adapter/NativeThemeAdapter';
+import lazy { ClientSurfaceManager, ClientSurfaceConfig } from '../adapter/ClientSurfaceManager';
 
 @Component
 export struct WineSubWindow {
@@ -28,20 +29,30 @@ export struct WineSubWindow {
   private dragDropAdapter: DragDropAdapter = Inject.get(DragDropAdapter);
   private multiInputAdapter: MultiInputAdapter = Inject.get(MultiInputAdapter);
   private dragParamManager = Inject.get(DragParamManager);
+  private clientSurfaceManager: ClientSurfaceManager = Inject.get(ClientSurfaceManager);
   @State private bgColor: Color | string = NativeThemeAdapter.LIGHT_BACKGROUND_COLOR;
+  @State private clientSurface: ClientSurfaceConfig | undefined = undefined;
 
   aboutToAppear(): void {
     this.dragParamManager.addDragContextData({
       id: this.widgetId,
       uiContext: this.getUIContext(),
     });
+    this.clientSurfaceManager.register(this.widgetId,
+      (config: ClientSurfaceConfig | undefined) => {
+        this.clientSurface = config;
+      });
   }
 
   aboutToDisappear(): void {
+    this.clientSurfaceManager.unregister(this.widgetId);
     this.dragParamManager.removeDragContextData(this.widgetId);
   }
 
   build() {
+    // Match the surface to its explicit bounds. TOP_LEFT can leave an invalid
+    // frame on the PC compositor after the swapchain changes buffer size.
+    Stack() {
     XComponent({
       id: this.MODULE_NAME,
       type: XComponentType.SURFACE,
@@ -93,5 +104,23 @@ export struct WineSubWindow {
         LogUtil.info(WineSubWindow.TAG, 'onLoad xComponent:' + this.MODULE_NAME);
       })
       .id(this.XCOMPONENT_NAME)
+      .renderFit(RenderFit.RESIZE_FILL)
+      .width('100%')
+      .height('100%')
+
+    if (this.clientSurface) {
+      XComponent({
+        id: this.clientSurface.clientWidgetId + ':clientXcomponent:' + this.ownerPid,
+        type: XComponentType.SURFACE,
+        libraryname: this.LIBRARY_NAME
+      })
+        .position({ x: `${this.clientSurface.offX}px`, y: `${this.clientSurface.offY}px` })
+        .size({ width: `${this.clientSurface.width}px`, height: `${this.clientSurface.height}px` })
+        .renderFit(RenderFit.RESIZE_FILL)
+        .hitTestBehavior(HitTestMode.None)
+        .backgroundColor(Color.Transparent)
+    }
+    }
+    .clip(true)
   }
 }

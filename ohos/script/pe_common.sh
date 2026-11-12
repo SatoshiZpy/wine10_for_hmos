@@ -268,14 +268,18 @@ pe_meson_build() {
 # 用法: pe_verify_machine <文件> <pattern>
 # ------------------------------------------------------------
 pe_verify_machine() {
-    local f="$1" pattern="$2"
+    local f="$1" pattern="$2" headers
     if [ ! -f "${f}" ]; then
         echo "MISSING: ${f}"
         return 1
     fi
-    if ! ${PE_READOBJ} --file-headers "${f}" | grep -q "${pattern}"; then
+    if ! headers="$(${PE_READOBJ} --file-headers "${f}")"; then
+        echo "ERROR: invalid PE structure: ${f}"
+        return 1
+    fi
+    if ! grep -q "${pattern}" <<< "${headers}"; then
         echo "ERROR: ${f} is not ${pattern} machine type"
-        ${PE_READOBJ} --file-headers "${f}" | grep -i "machine"
+        grep -i "machine" <<< "${headers}"
         return 1
     fi
     echo "OK: ${f}"

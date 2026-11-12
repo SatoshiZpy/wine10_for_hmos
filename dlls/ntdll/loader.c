@@ -617,23 +617,41 @@ static WINE_MODREF *find_basename_module( LPCWSTR name )
  * Find a module from its full path name.
  * The loader_section must be locked while calling this function
  */
+static BOOL module_fullname_matches( const UNICODE_STRING *nt_name, const UNICODE_STRING *dos_name )
+{
+    UNICODE_STRING name = *nt_name, full = *dos_name;
+
+    if (name.Length <= 4 * sizeof(WCHAR)) return FALSE;
+    name.Buffer += 4;
+    name.Length -= 4 * sizeof(WCHAR);
+    if (full.Length >= 4 * sizeof(WCHAR) && !wcsncmp( full.Buffer, L"\\\\?\\", 4 ))
+    {
+        full.Buffer += 4;
+        full.Length -= 4 * sizeof(WCHAR);
+    }
+    else if (name.Length >= 4 * sizeof(WCHAR) && !wcsnicmp( name.Buffer, L"UNC\\", 4 ) &&
+             full.Length >= 2 * sizeof(WCHAR) && full.Buffer[0] == '\\' && full.Buffer[1] == '\\')
+    {
+        name.Buffer += 4;
+        name.Length -= 4 * sizeof(WCHAR);
+        full.Buffer += 2;
+        full.Length -= 2 * sizeof(WCHAR);
+    }
+    return RtlEqualUnicodeString( &name, &full, TRUE );
+}
+
 static WINE_MODREF *find_fullname_module( const UNICODE_STRING *nt_name )
 {
     PLIST_ENTRY mark, entry;
-    UNICODE_STRING name = *nt_name;
 
-    if (name.Length <= 4 * sizeof(WCHAR)) return NULL;
-    name.Length -= 4 * sizeof(WCHAR);  /* for \??\ prefix */
-    name.Buffer += 4;
-
-    if (cached_modref && RtlEqualUnicodeString( &name, &cached_modref->ldr.FullDllName, TRUE ))
+    if (cached_modref && module_fullname_matches( nt_name, &cached_modref->ldr.FullDllName ))
         return cached_modref;
 
     mark = &NtCurrentTeb()->Peb->LdrData->InLoadOrderModuleList;
     for (entry = mark->Flink; entry != mark; entry = entry->Flink)
     {
         LDR_DATA_TABLE_ENTRY *mod = CONTAINING_RECORD(entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-        if (RtlEqualUnicodeString( &name, &mod->FullDllName, TRUE ))
+        if (module_fullname_matches( nt_name, &mod->FullDllName ))
         {
             cached_modref = CONTAINING_RECORD(mod, WINE_MODREF, ldr);
             return cached_modref;
@@ -1538,7 +1556,7 @@ static WINE_MODREF *alloc_module( HMODULE hModule, const UNICODE_STRING *nt_name
     wm->CheckSum          = nt->OptionalHeader.CheckSum;
     wm->ldr.TimeDateStamp = nt->FileHeader.TimeDateStamp;
 
-    if (!(buffer = RtlAllocateHeap( GetProcessHeap(), 0, nt_name->Length - 3 * sizeof(WCHAR) )))
+    if (!(buffer = RtlAllocateHeap( GetProcessHeap(), 0, nt_name->Length + sizeof(WCHAR) )))
     {
         RtlFreeHeap( GetProcessHeap(), 0, wm );
         return NULL;
@@ -1559,10 +1577,16 @@ static WINE_MODREF *alloc_module( HMODULE hModule, const UNICODE_STRING *nt_name
         memcpy( buffer + 1, nt_name->Buffer + 7 /* \??\UNC prefix */, nt_name->Length - 7 * sizeof(WCHAR) );
         buffer[nt_name->Length/sizeof(WCHAR) - 6] = 0;
     }
-    else
+    else if (nt_name->Length > 5 * sizeof(WCHAR) && nt_name->Buffer[5] == ':')
     {
         memcpy( buffer, nt_name->Buffer + 4 /* \??\ prefix */, nt_name->Length - 4 * sizeof(WCHAR) );
         buffer[nt_name->Length/sizeof(WCHAR) - 4] = 0;
+    }
+    else
+    {
+        memcpy( buffer, nt_name->Buffer, nt_name->Length );
+        buffer[1] = '\\';  /* change \??\ to \\?\ for device paths */
+        buffer[nt_name->Length/sizeof(WCHAR)] = 0;
     }
     if ((p = wcsrchr( buffer, '\\' ))) p++;
     else p = buffer;

@@ -56,6 +56,9 @@
 #endif
 #ifdef __OHOS__
 #include <errno.h>
+#include <fcntl.h>
+#include <dlfcn.h>
+#include <stdbool.h>
 #endif
 
 #include "ntstatus.h"
@@ -748,6 +751,45 @@ static void setup_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
 {
     CONTEXT context;
 
+#ifdef __OHOS__
+    if (is_inside_signal_stack( (void *)SP_sig(sigcontext) ))
+    {
+        unsigned int i, code[8];
+        unsigned long long stack[32];
+        struct iovec local, remote;
+        ssize_t bytes;
+        int saved_errno = errno;
+
+        ERR( "OHOS nested fault code=%08x pc=%p lr=%p sp=%p esr=%s pstate=%s parameters=%u\n",
+             (unsigned int)rec->ExceptionCode, (void *)PC_sig(sigcontext),
+             (void *)LR_sig(sigcontext), (void *)SP_sig(sigcontext),
+             wine_dbgstr_longlong( get_fault_esr( sigcontext ) ),
+             wine_dbgstr_longlong( PSTATE_sig(sigcontext) ), (unsigned int)rec->NumberParameters );
+        for (i = 0; i < rec->NumberParameters && i < EXCEPTION_MAXIMUM_PARAMETERS; i++)
+            ERR( "OHOS nested info[%u]=%s\n", i, wine_dbgstr_longlong( rec->ExceptionInformation[i] ) );
+        for (i = 0; i < 30; i += 3)
+            ERR( "OHOS nested x%u=%s x%u=%s x%u=%s\n", i,
+                 wine_dbgstr_longlong( REGn_sig(i, sigcontext) ), i + 1,
+                 wine_dbgstr_longlong( REGn_sig(i + 1, sigcontext) ), i + 2,
+                 wine_dbgstr_longlong( REGn_sig(i + 2, sigcontext) ) );
+        /* Read through the kernel so a diagnostic read cannot fault recursively. */
+        local = (struct iovec){ code, sizeof(code) };
+        remote = (struct iovec){ (void *)PC_sig(sigcontext), sizeof(code) };
+        bytes = syscall( __NR_process_vm_readv, getpid(), &local, 1, &remote, 1, 0 );
+        if (bytes == sizeof(code))
+            ERR( "OHOS nested code=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+                 code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7] );
+        local = (struct iovec){ stack, sizeof(stack) };
+        remote = (struct iovec){ (void *)SP_sig(sigcontext), sizeof(stack) };
+        bytes = syscall( __NR_process_vm_readv, getpid(), &local, 1, &remote, 1, 0 );
+        if (bytes == sizeof(stack))
+            for (i = 0; i < ARRAY_SIZE(stack); i += 4)
+                ERR( "OHOS nested stack+%03x=%s %s %s %s\n", i * 8,
+                     wine_dbgstr_longlong( stack[i] ), wine_dbgstr_longlong( stack[i + 1] ),
+                     wine_dbgstr_longlong( stack[i + 2] ), wine_dbgstr_longlong( stack[i + 3] ) );
+        errno = saved_errno;
+    }
+#endif
     rec->ExceptionAddress = (void *)PC_sig(sigcontext);
     save_context( &context, sigcontext );
     setup_raise_exception( sigcontext, rec, &context );
@@ -1092,6 +1134,9 @@ static BOOL handle_syscall_fault( ucontext_t *context, EXCEPTION_RECORD *rec )
 #define EMU_UNSUPPORTED 1  /* instruction not handled */
 #define EMU_FAULT       2  /* target address inaccessible -> access violation */
 
+static int sigbus_probe_fd = -1;
+static volatile sig_atomic_t sigbus_probe_count;
+
 /* try to make the target address accessible (wine demand-paging), then copy
  * without raising signals (returns FALSE on inaccessible memory) */
 static BOOL safe_read( void *dst, unsigned long long addr, unsigned int len, void *stack )
@@ -1105,7 +1150,7 @@ static BOOL safe_read( void *dst, unsigned long long addr, unsigned int len, voi
         rec.NumberParameters = 2;
         rec.ExceptionInformation[0] = EXCEPTION_READ_FAULT;
         rec.ExceptionInformation[1] = addr;
-        if (!virtual_handle_fault( &rec, stack )) return FALSE;
+        if (virtual_handle_fault( &rec, stack )) return FALSE;
         if (syscall( __NR_process_vm_readv, getpid(), &local, 1, &remote, 1, 0 ) != len )
             return FALSE;
     }
@@ -1123,7 +1168,7 @@ static BOOL safe_write( unsigned long long addr, const void *src, unsigned int l
         rec.NumberParameters = 2;
         rec.ExceptionInformation[0] = EXCEPTION_WRITE_FAULT;
         rec.ExceptionInformation[1] = addr;
-        if (!virtual_handle_fault( &rec, stack )) return FALSE;
+        if (virtual_handle_fault( &rec, stack )) return FALSE;
         if (syscall( __NR_process_vm_writev, getpid(), &local, 1, &remote, 1, 0 ) != len )
             return FALSE;
     }
@@ -1213,10 +1258,9 @@ static void ill_handler( int signal, siginfo_t *siginfo, void *sigcontext )
  * target address is reported as EMU_FAULT instead of raising a
  * nested (fatal) signal inside the handler.
  */
-static int emulate_unaligned_access( ucontext_t *context, unsigned long long *fault_addr,
-                                     int *fault_write )
+static int emulate_unaligned_instruction( ucontext_t *context, unsigned int instr,
+                                          unsigned long long *fault_addr, int *fault_write )
 {
-    unsigned int instr = *(unsigned int *)PC_sig( context );
     unsigned int size, v, opc, rn, rt, rt2, l, acc_size, scale;
     unsigned long long addr, addr2, val, base;
 
@@ -1325,6 +1369,7 @@ static int emulate_unaligned_access( ucontext_t *context, unsigned long long *fa
         addr = REGn_sig( rn, context );
         memset( &val, 0, 8 );
         if (!safe_read( &val, addr, acc_size, (void *)SP_sig(context) )) { *fault_write = 0; goto fault; }
+        __atomic_thread_fence( __ATOMIC_ACQUIRE );
         if (rt != 31) REGn_sig( rt, context ) = (acc_size < 8) ? (unsigned int)val : val;
         PC_sig( context ) += 4;
         return EMU_OK;
@@ -1334,7 +1379,8 @@ static int emulate_unaligned_access( ucontext_t *context, unsigned long long *fa
         acc_size = 1 << size;
         rn = (instr >> 5) & 31;
         addr = REGn_sig( rn, context );
-        val = REGn_sig( rt, context );
+        val = rt == 31 ? 0 : REGn_sig( rt, context );
+        __atomic_thread_fence( __ATOMIC_RELEASE );
         if (!safe_write( addr, &val, acc_size, (void *)SP_sig(context) )) { *fault_write = 1; goto fault; }
         PC_sig( context ) += 4;
         return EMU_OK;
@@ -1521,14 +1567,211 @@ static int emulate_unaligned_access( ucontext_t *context, unsigned long long *fa
     return EMU_OK;
 
 fault:
-    /* Inaccessible target: skip the instruction (loads yield 0, stores are
-     * discarded) instead of raising an exception, which translated contexts
-     * may not survive.  wine demand-paged views were already committed by
-     * safe_read/safe_write before getting here. */
+    /* A failed access must remain an access violation, not a successful
+     * zero-valued load or a discarded store. */
     *fault_addr = addr;
-    if (!*fault_write && rt != 31) REGn_sig( rt, context ) = 0;
-    PC_sig( context ) += 4;
-    return EMU_OK;
+    return EMU_FAULT;
+}
+
+
+/* The generic exception path also uses the instruction decoder. */
+static int emulate_unaligned_access( ucontext_t *context, unsigned long long *fault_addr,
+                                     int *fault_write )
+{
+    return emulate_unaligned_instruction( context, *(unsigned int *)PC_sig(context),
+                                          fault_addr, fault_write );
+}
+
+#define OHOS_UNALIGNED_CACHE_SIZE 256
+struct ohos_unaligned_cache_entry
+{
+    ULONG_PTR pc;
+    unsigned int instr;
+};
+static struct ohos_unaligned_cache_entry ohos_unaligned_cache[OHOS_UNALIGNED_CACHE_SIZE];
+static BOOL ohos_batch_unaligned_reads;
+static sig_atomic_t ohos_batch_probe_logged;
+static BOOL ohos_sigbus_samples;
+static unsigned long long ohos_sigbus_sample_count;
+
+/* Fixed-size, low-frequency records: no allocation or stdio in the handler.
+ * Capture the fault context so repeated addresses can be distinguished from
+ * forward progress through packed resources. Enabled only for diagnostics. */
+static void ohos_sample_unaligned_fault( const siginfo_t *info, ucontext_t *context )
+{
+    struct
+    {
+        char magic[8];
+        unsigned long long sequence, tid, pc, address, sp, regs[31];
+    } record;
+    unsigned long long sequence;
+    unsigned int i;
+
+    if (!ohos_sigbus_samples || sigbus_probe_fd == -1) return;
+    sequence = __atomic_fetch_add( &ohos_sigbus_sample_count, 1, __ATOMIC_RELAXED );
+    if (sequence & 0xffff) return;
+    memcpy( record.magic, "BUSSAMP1", sizeof(record.magic) );
+    record.sequence = sequence;
+    record.tid = syscall( __NR_gettid );
+    record.pc = PC_sig(context);
+    record.address = (ULONG_PTR)info->si_addr;
+    record.sp = SP_sig(context);
+    for (i = 0; i < 31; ++i) record.regs[i] = REGn_sig(i, context);
+    write( sigbus_probe_fd, &record, sizeof(record) );
+}
+
+static struct ohos_unaligned_cache_entry *ohos_unaligned_cache_slot( ULONG_PTR pc )
+{
+    return &ohos_unaligned_cache[(pc >> 2) % OHOS_UNALIGNED_CACHE_SIZE];
+}
+
+/* A cached instruction is only a prediction. Read the current instruction and
+ * predicted load's data together, and commit the result only if ALL bytes were
+ * read and the instruction still matches. This avoids a second kernel crossing
+ * on repeated LDAR faults without trusting stale JIT code or memory mappings.
+ * A collision, concurrent cache update, code rewrite or short read falls back
+ * to the ordinary decoder. Never speculate a store or service a page fault
+ * based on a prediction. */
+static BOOL ohos_try_batched_unaligned_read( ucontext_t *context, const siginfo_t *info )
+{
+    ULONG_PTR pc = PC_sig(context);
+    struct ohos_unaligned_cache_entry *entry = ohos_unaligned_cache_slot( pc );
+    unsigned int predicted, current = 0, size, rt, rn;
+    unsigned long long value = 0, addr;
+    struct iovec local[2], remote[2];
+
+    if (__atomic_load_n( &entry->pc, __ATOMIC_RELAXED ) != pc) return FALSE;
+    predicted = __atomic_load_n( &entry->instr, __ATOMIC_RELAXED );
+    if ((predicted & 0x0ffffc00) != 0x08dffc00) return FALSE;
+    size = 1u << (predicted >> 30);
+    rn = (predicted >> 5) & 31;
+    rt = predicted & 31;
+    addr = rn == 31 ? SP_sig(context) : REGn_sig( rn, context );
+    if (addr != (ULONG_PTR)info->si_addr) return FALSE;
+    local[0] = (struct iovec){ &current, sizeof(current) };
+    local[1] = (struct iovec){ &value, size };
+    remote[0] = (struct iovec){ (void *)pc, sizeof(current) };
+    remote[1] = (struct iovec){ (void *)(ULONG_PTR)addr, size };
+    if (syscall( __NR_process_vm_readv, getpid(), local, 2, remote, 2, 0 ) != sizeof(current) + size ||
+        current != predicted)
+        return FALSE;
+    __atomic_thread_fence( __ATOMIC_ACQUIRE );
+    if (rt != 31) REGn_sig( rt, context ) = value;
+    PC_sig(context) += 4;
+    return TRUE;
+}
+
+/* OHOS runs special signal-chain handlers (including its crash reporter)
+ * before the sigaction handler. Resolve translated acquire/release accesses
+ * before they reach the crash reporter; leave other faults to the chain.
+ * This is the ABI of OHOS musl's signal_chain_action in sigchain.h. */
+struct ohos_signal_chain_action
+{
+    bool (*handler)( int, siginfo_t *, void * );
+    sigset_t mask;
+    int flags;
+};
+
+static bool ohos_unaligned_signal_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+{
+    ucontext_t *context = sigcontext;
+    unsigned int instr;
+    unsigned long long addr = 0;
+    int write_access = 0;
+    int saved_errno = errno;
+    bool handled = false, batched = false;
+
+    if (signal != SIGBUS || !NtCurrentTeb() || siginfo->si_code != BUS_ADRALN || (PC_sig(context) & 3)) return false;
+    ohos_sample_unaligned_fault( siginfo, context );
+    if (ohos_batch_unaligned_reads && ohos_try_batched_unaligned_read( context, siginfo ))
+    {
+        batched = true;
+        if (!__atomic_load_n( &ohos_batch_probe_logged, __ATOMIC_RELAXED ) &&
+            !__atomic_exchange_n( &ohos_batch_probe_logged, 1, __ATOMIC_RELAXED ))
+            write( sigbus_probe_fd, "BATCH read verified\n", 20 );
+        goto recovered;
+    }
+    if (!safe_read( &instr, PC_sig(context), sizeof(instr), (void *)SP_sig(context) )) goto done;
+    if ((instr & 0x0ffffc00) != 0x08dffc00 && (instr & 0x0ffffc00) != 0x089ffc00)
+        goto done;
+    if (ohos_batch_unaligned_reads && (instr & 0x0ffffc00) == 0x08dffc00)
+    {
+        struct ohos_unaligned_cache_entry *entry = ohos_unaligned_cache_slot( PC_sig(context) );
+        __atomic_store_n( &entry->instr, instr, __ATOMIC_RELAXED );
+        __atomic_store_n( &entry->pc, PC_sig(context), __ATOMIC_RELAXED );
+    }
+    if (emulate_unaligned_instruction( context, instr, &addr, &write_access ) != EMU_OK) goto done;
+recovered:
+    if (__atomic_load_n( &sigbus_probe_count, __ATOMIC_RELAXED ) < 16 &&
+        __atomic_fetch_add( &sigbus_probe_count, 1, __ATOMIC_RELAXED ) < 16)
+    {
+        if (batched) write( sigbus_probe_fd, "CHAIN batched\n", 14 );
+        else write( sigbus_probe_fd, "CHAIN recovered\n", 16 );
+    }
+    handled = true;
+done:
+    errno = saved_errno;
+    return handled;
+}
+
+static void ohos_init_unaligned_signal_handler(void)
+{
+    void (*add_handler)( int, struct ohos_signal_chain_action * );
+    struct ohos_signal_chain_action action = { ohos_unaligned_signal_handler };
+
+    add_handler = dlsym( RTLD_DEFAULT, "add_special_signal_handler" );
+    if (!add_handler) return;
+    sigemptyset( &action.mask );
+    sigaddset( &action.mask, SIGBUS );
+    add_handler( SIGBUS, &action );
+}
+
+/* Kernel AArch64 rt_sigaction ABI, not the larger libc sigaction structure.
+ * Preserve the installed chain's mask, flags and restorer. Only accesses that
+ * our existing emulation can complete bypass the chain; all other signals go
+ * through its original entry point, including the crash reporter. */
+struct ohos_kernel_sigaction
+{
+    void (*handler)( int, siginfo_t *, void * );
+    unsigned long flags;
+    void (*restorer)(void);
+    unsigned long mask;
+};
+
+static struct ohos_kernel_sigaction ohos_previous_sigbus_action;
+
+static void ohos_fast_sigbus_handler( int signal, siginfo_t *info, void *context )
+{
+    if (!ohos_unaligned_signal_handler( signal, info, context ))
+        ohos_previous_sigbus_action.handler( signal, info, context );
+}
+
+static void ohos_init_fast_sigbus_handler(void)
+{
+    struct ohos_kernel_sigaction action;
+    const char *enabled = getenv( "WINE_OHOS_FAST_SIGBUS" );
+
+    if (!enabled || strcmp( enabled, "1" )) return;
+    if (syscall( __NR_rt_sigaction, SIGBUS, NULL, &action, sizeof(action.mask) ) == -1)
+    {
+        WARN( "OHOS fast SIGBUS query failed: %s\n", strerror(errno) );
+        return;
+    }
+    if (action.handler == ohos_fast_sigbus_handler) return;
+    if (!(action.flags & SA_SIGINFO) || (action.flags & SA_RESETHAND) ||
+        (ULONG_PTR)action.handler <= 1)
+    {
+        WARN( "OHOS fast SIGBUS requires a persistent SA_SIGINFO handler\n" );
+        return;
+    }
+    ohos_previous_sigbus_action = action;
+    action.handler = ohos_fast_sigbus_handler;
+    if (syscall( __NR_rt_sigaction, SIGBUS, &action, NULL, sizeof(action.mask) ) == -1)
+    {
+        WARN( "OHOS fast SIGBUS install failed: %s\n", strerror(errno) );
+        return;
+    }
+    WARN( "OHOS fast SIGBUS enabled; unhandled faults retain original signal chain\n" );
 }
 #endif  /* __OHOS__ */
 
@@ -1542,6 +1785,7 @@ static void bus_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     EXCEPTION_RECORD rec = { EXCEPTION_DATATYPE_MISALIGNMENT };
 
 #ifdef __OHOS__
+    if (sigbus_probe_count < 16) write( sigbus_probe_fd, "BUS entry\n", 10 );
     if (siginfo->si_code == BUS_ADRALN)
     {
         unsigned long long faddr = 0;
@@ -1549,6 +1793,7 @@ static void bus_handler( int signal, siginfo_t *siginfo, void *sigcontext )
         int res;
 
         res = emulate_unaligned_access( sigcontext, &faddr, &fwrite );
+        if (sigbus_probe_count++ < 16) write( sigbus_probe_fd, &res, sizeof(res) );
         if (res == EMU_OK)
             return;
         if (res == EMU_FAULT)
@@ -1890,6 +2135,39 @@ void signal_init_process(void)
     sig_act.sa_flags = SA_SIGINFO | SA_RESTART;
 #endif
     if (sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
+#ifdef __OHOS__
+    {
+        char path[160], text[256];
+        struct sigaction current;
+        stack_t stack;
+        int len, sample = 42, copy = 0;
+        struct iovec local = { &copy, sizeof(copy) }, remote = { &sample, sizeof(sample) };
+        long read_result;
+        snprintf( path, sizeof(path), "/data/storage/el2/base/haps/entry/files/sigbus-probe-%u.log", getpid() );
+        sigbus_probe_fd = open( path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644 );
+        sigaction( SIGBUS, NULL, &current );
+        sigaltstack( NULL, &stack );
+        len = snprintf( text, sizeof(text), "init pid=%u tid=%ld handler=%p expected=%p flags=%x alt=%p size=%zu flags=%x\n",
+                            getpid(), syscall(__NR_gettid), current.sa_sigaction, bus_handler,
+                            current.sa_flags, stack.ss_sp, stack.ss_size, stack.ss_flags );
+        write( sigbus_probe_fd, text, len );
+        read_result = syscall( __NR_process_vm_readv, getpid(), &local, 1, &remote, 1, 0 );
+        len = snprintf( text, sizeof(text), "readv result=%ld errno=%d value=%d\n", read_result, errno, copy );
+        write( sigbus_probe_fd, text, len );
+        snprintf( path, sizeof(path), "/data/storage/el2/base/haps/entry/files/wine-runtime-%u.log", getpid() );
+        int log_fd = open( path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644 );
+        if (log_fd != -1) { dup2( log_fd, 2 ); close( log_fd ); }
+    }
+    {
+        const char *enabled = getenv( "WINE_OHOS_BATCH_UNALIGNED_READS" );
+        const char *samples = getenv( "WINE_OHOS_SIGBUS_SAMPLES" );
+        ohos_sigbus_samples = samples && !strcmp( samples, "1" );
+        ohos_batch_unaligned_reads = enabled && !strcmp( enabled, "1" );
+        if (ohos_batch_unaligned_reads) WARN( "OHOS batched unaligned reads enabled; instructions revalidated on every hit\n" );
+    }
+    ohos_init_unaligned_signal_handler();
+    ohos_init_fast_sigbus_handler();
+#endif
     return;
 
  error:

@@ -32,6 +32,25 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
 
+/* Diagnostic, opt-in synchronization for stale guest translations across
+ * virtual-memory API calls. This intentionally trades performance for a
+ * controlled SMC experiment; it is not enabled by default. */
+static void sync_guest_code_after_memory_change( BOOL is_current, NTSTATUS status )
+{
+    static LONG count;
+    static const WCHAR name[] = L"WINE_UBT_SMC_SYNC";
+    WCHAR value[2];
+    SIZE_T len;
+
+    if (!is_current || status || native_machine != IMAGE_FILE_MACHINE_ARM64 ||
+        current_machine != IMAGE_FILE_MACHINE_I386 || !pBTCpuFlushInstructionCache2) return;
+    if (RtlQueryEnvironmentVariable( NULL, name, ARRAY_SIZE(name) - 1,
+                                     value, ARRAY_SIZE(value), &len ) || len != 1 || value[0] != '1') return;
+    if (InterlockedIncrement( &count ) <= 4)
+        WARN( "diagnostic SMC sync of guest range 0-%Ix\n", highest_user_address + 1 );
+    pBTCpuFlushInstructionCache2( NULL, highest_user_address + 1 );
+}
+
 static BOOL WINAPIV send_cross_process_notification( HANDLE process, UINT id, const void *addr, SIZE_T size,
                                                      int nb_args, ... )
 {
@@ -165,6 +184,8 @@ NTSTATUS WINAPI wow64_NtAllocateVirtualMemory( UINT *args )
                                                       addr, size, 3, type, protect, status );
     else if (pBTCpuNotifyMemoryAlloc) pBTCpuNotifyMemoryAlloc( addr, size, type, protect, TRUE, status );
 
+    sync_guest_code_after_memory_change( is_current, status );
+
     if (!status)
     {
         put_addr( addr32, addr );
@@ -207,6 +228,8 @@ NTSTATUS WINAPI wow64_NtAllocateVirtualMemoryEx( UINT *args )
     if (!is_current) send_cross_process_notification( process, CrossProcessPostVirtualAlloc,
                                                       addr, size, 3, type, protect, status );
     else if (pBTCpuNotifyMemoryAlloc) pBTCpuNotifyMemoryAlloc( addr, size, type, protect, TRUE, status );
+
+    sync_guest_code_after_memory_change( is_current, status );
 
     if (!status)
     {
@@ -327,6 +350,8 @@ NTSTATUS WINAPI wow64_NtFreeVirtualMemory( UINT *args )
     if (!is_current) send_cross_process_notification( process, CrossProcessPostVirtualFree,
                                                       addr, size, 2, type, status );
     else if (pBTCpuNotifyMemoryFree) pBTCpuNotifyMemoryFree( addr, size, type, TRUE, status );
+
+    sync_guest_code_after_memory_change( is_current, status );
 
     if (!status)
     {

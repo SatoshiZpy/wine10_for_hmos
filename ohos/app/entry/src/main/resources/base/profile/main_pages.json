@@ -1,5 +1,6 @@
 {
   "src": [
+    "pages/Launcher",
     "pages/Index",
     "pages/SubWindow",
     "pages/StatusBarPage",

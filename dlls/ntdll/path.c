@@ -1028,8 +1028,13 @@ NTSTATUS WINAPI RtlSetCurrentDirectory_U(const UNICODE_STRING* dir)
     /* append trailing \ if missing */
     size = newdir.Length / sizeof(WCHAR);
     ptr = newdir.Buffer;
-    ptr += 4;  /* skip \??\ prefix */
-    size -= 4;
+    if ((size > 5 && ptr[5] == ':') ||
+        (size >= 8 && !wcsnicmp( ptr + 4, L"UNC\\", 4 )))
+    {
+        ptr += 4;  /* skip \??\ prefix for drive and UNC paths */
+        size -= 4;
+    }
+    else ptr[1] = '\\';  /* preserve device paths as \\?\ paths */
     if (size && ptr[size - 1] != '\\') ptr[size++] = '\\';
 
     /* convert \??\UNC\ path to \\ prefix */
